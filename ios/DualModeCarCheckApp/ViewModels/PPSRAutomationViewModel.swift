@@ -665,6 +665,7 @@ class PPSRAutomationViewModel {
         logger.log("PPSR BATCH START: \(cardsToTest.count) cards, concurrency=\(maxConcurrency), stealth=\(stealthEnabled)", category: .ppsr, level: .info, metadata: ["count": "\(cardsToTest.count)"])
         isRunning = true
         startHeartbeatMonitor()
+        DeviceProxyService.shared.notifyBatchStart()
         backgroundService.beginExtendedBackgroundExecution(reason: "PPSR batch test")
         persistence.saveTestQueue(cardIds: cardsToTest.map(\.id))
 

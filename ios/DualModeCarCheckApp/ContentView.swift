@@ -16,8 +16,11 @@ struct ContentView: View {
         TabView(selection: $selectedTab) {
             Tab("Dashboard", systemImage: "bolt.shield.fill", value: .dashboard) {
                 NavigationStack {
-                    LoginDashboardView(vm: vm)
-                        .withPPSRCardNavigation(cards: vm.cards, vm: vm)
+                    VStack(spacing: 0) {
+                        UnifiedIPBannerView()
+                        LoginDashboardView(vm: vm)
+                            .withPPSRCardNavigation(cards: vm.cards, vm: vm)
+                    }
                 }
                 .withMainMenuButton()
             }

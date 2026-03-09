@@ -18,7 +18,10 @@ struct LoginContentView: View {
         TabView {
             Tab("Dashboard", systemImage: vm.isIgnitionMode ? "flame.fill" : "bolt.shield.fill") {
                 NavigationStack {
-                    LoginDashboardContentView(vm: vm)
+                    VStack(spacing: 0) {
+                        UnifiedIPBannerView()
+                        LoginDashboardContentView(vm: vm)
+                    }
                 }
                 .withMainMenuButton()
             }

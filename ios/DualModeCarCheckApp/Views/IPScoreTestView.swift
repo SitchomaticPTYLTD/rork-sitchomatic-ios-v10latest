@@ -5,7 +5,7 @@ import WebKit
 class IPScoreSession: Identifiable {
     let id: UUID = UUID()
     let index: Int
-    var url: URL = URL(string: "https://ipscore.io")!
+    var url: URL = URL(string: "https://thisismyip.com")!
     var isLoading: Bool = true
     var currentURL: String = ""
     var pageTitle: String = ""
@@ -19,11 +19,26 @@ class IPScoreSession: Identifiable {
     var status: SessionStatus = .loading
     var networkConfig: ActiveNetworkConfig = .direct
     var webView: WKWebView?
+    var currentSiteIndex: Int = 0
+    var usedSite: String = "thisismyip.com"
+
+    nonisolated static let fallbackURLs: [URL] = [
+        URL(string: "https://thisismyip.com")!,
+        URL(string: "https://ipscore.io")!,
+        URL(string: "https://whatismyipaddress.com")!,
+    ]
+
+    nonisolated static let siteLabels: [String] = [
+        "thisismyip.com",
+        "ipscore.io",
+        "whatismyipaddress.com",
+    ]
 
     nonisolated enum SessionStatus: String, Sendable {
         case loading = "Loading"
         case loaded = "Loaded"
         case failed = "Failed"
+        case retrying = "Retrying"
     }
 
     var elapsedSeconds: Int {
@@ -33,22 +48,47 @@ class IPScoreSession: Identifiable {
     init(index: Int) {
         self.index = index
     }
+
+    func tryNextFallback() -> Bool {
+        let nextIndex = currentSiteIndex + 1
+        guard nextIndex < IPScoreSession.fallbackURLs.count else { return false }
+        currentSiteIndex = nextIndex
+        url = IPScoreSession.fallbackURLs[nextIndex]
+        usedSite = IPScoreSession.siteLabels[nextIndex]
+        status = .retrying
+        isLoading = true
+        return true
+    }
 }
 
 class IPScoreWebViewDelegate: NSObject, WKNavigationDelegate {
     let session: IPScoreSession
     private var timeoutTask: Task<Void, Never>?
+    private var fallbackTimeoutTask: Task<Void, Never>?
+    var onNeedRetry: (() -> Void)?
 
     init(session: IPScoreSession) {
         self.session = session
         super.init()
-        startTimeout()
+        startFallbackTimeout()
+        startFinalTimeout()
     }
 
-    private func startTimeout() {
+    private func startFallbackTimeout() {
+        fallbackTimeoutTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(12))
+            guard let self, self.session.status == .loading || self.session.status == .retrying else { return }
+            if self.session.tryNextFallback() {
+                self.onNeedRetry?()
+                self.startFallbackTimeout()
+            }
+        }
+    }
+
+    private func startFinalTimeout() {
         timeoutTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .seconds(30))
-            guard let self, self.session.status == .loading else { return }
+            try? await Task.sleep(for: .seconds(45))
+            guard let self, self.session.status == .loading || self.session.status == .retrying else { return }
             self.session.status = .failed
             self.session.isLoading = false
         }
@@ -58,6 +98,7 @@ class IPScoreWebViewDelegate: NSObject, WKNavigationDelegate {
         Task { @MainActor [weak self] in
             guard let self else { return }
             self.timeoutTask?.cancel()
+            self.fallbackTimeoutTask?.cancel()
             self.session.status = .loaded
             self.session.isLoading = false
             self.session.pageTitle = webView.title ?? ""
@@ -68,18 +109,28 @@ class IPScoreWebViewDelegate: NSObject, WKNavigationDelegate {
     nonisolated func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
         Task { @MainActor [weak self] in
             guard let self else { return }
-            self.timeoutTask?.cancel()
-            self.session.status = .failed
-            self.session.isLoading = false
+            if self.session.tryNextFallback() {
+                self.onNeedRetry?()
+            } else {
+                self.timeoutTask?.cancel()
+                self.fallbackTimeoutTask?.cancel()
+                self.session.status = .failed
+                self.session.isLoading = false
+            }
         }
     }
 
     nonisolated func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
         Task { @MainActor [weak self] in
             guard let self else { return }
-            self.timeoutTask?.cancel()
-            self.session.status = .failed
-            self.session.isLoading = false
+            if self.session.tryNextFallback() {
+                self.onNeedRetry?()
+            } else {
+                self.timeoutTask?.cancel()
+                self.fallbackTimeoutTask?.cancel()
+                self.session.status = .failed
+                self.session.isLoading = false
+            }
         }
     }
 
@@ -89,6 +140,7 @@ class IPScoreWebViewDelegate: NSObject, WKNavigationDelegate {
 
     deinit {
         timeoutTask?.cancel()
+        fallbackTimeoutTask?.cancel()
     }
 }
 
@@ -104,6 +156,7 @@ struct IPScoreTestView: View {
     private let proxyService = ProxyRotationService.shared
     private let nordService = NordVPNService.shared
     private let networkFactory = NetworkSessionFactory.shared
+    private let deviceProxy = DeviceProxyService.shared
     private let logger = DebugLogger.shared
     private let sessionCount = 8
 
@@ -157,7 +210,7 @@ struct IPScoreTestView: View {
             HStack(spacing: 12) {
                 let loadedCount = sessions.filter({ $0.status == .loaded }).count
                 let failedCount = sessions.filter({ $0.status == .failed }).count
-                let loadingCount = sessions.filter({ $0.status == .loading }).count
+                let loadingCount = sessions.filter({ $0.status == .loading || $0.status == .retrying }).count
 
                 HStack(spacing: 6) {
                     Circle().fill(.green).frame(width: 7, height: 7)
@@ -208,6 +261,27 @@ struct IPScoreTestView: View {
             .padding(.vertical, 10)
             .contentTransition(.numericText())
             .animation(.snappy, value: timerTick)
+
+            if deviceProxy.isEnabled {
+                HStack(spacing: 6) {
+                    Image(systemName: "shield.checkered")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(.cyan)
+                    Text("UNIFIED IP")
+                        .font(.system(size: 9, weight: .heavy, design: .monospaced))
+                        .foregroundStyle(.cyan)
+                    if let endpoint = deviceProxy.activeEndpointLabel {
+                        Text(endpoint)
+                            .font(.system(size: 8, weight: .bold, design: .monospaced))
+                            .foregroundStyle(.cyan.opacity(0.7))
+                            .lineLimit(1)
+                    }
+                    Spacer()
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 6)
+                .background(.cyan.opacity(0.08))
+            }
 
             Rectangle().fill(.white.opacity(0.06)).frame(height: 1)
 
@@ -291,7 +365,7 @@ struct IPScoreTestView: View {
             Text("IP Score Test")
                 .font(.title2.bold())
 
-            Text("Launch 8 concurrent sessions to ipscore.io\nto verify each uses a different proxy or VPN address.\nNo automation — pure network isolation test.")
+            Text("Launch 8 concurrent sessions to verify\neach uses a different proxy or VPN address.\nFallback: thisismyip.com → ipscore.io → whatismyipaddress.com")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -301,6 +375,7 @@ struct IPScoreTestView: View {
                 networkInfoRow(icon: "server.rack", label: "Nord Servers", value: "\(nordService.recommendedServers.count) loaded")
                 networkInfoRow(icon: "network", label: "Proxies", value: "\(proxyService.savedProxies.count) configured")
                 networkInfoRow(icon: "lock.shield.fill", label: "WireGuard", value: "\(proxyService.joeWGConfigs.count) configs")
+                networkInfoRow(icon: "shield.checkered", label: "Unified IP", value: deviceProxy.isEnabled ? "ON" : "OFF")
             }
             .padding()
             .background(Color(.secondarySystemGroupedBackground))
@@ -356,6 +431,20 @@ struct IPScoreTestView: View {
                     LabeledContent("Ignition") { Text(proxyService.networkSummary(for: .ignition)) }
                 }
 
+                if deviceProxy.isEnabled {
+                    Section("Unified IP Mode") {
+                        LabeledContent("Status") {
+                            Text(deviceProxy.isActive ? "Active" : "Inactive")
+                                .foregroundStyle(deviceProxy.isActive ? .green : .red)
+                        }
+                        if let label = deviceProxy.activeEndpointLabel {
+                            LabeledContent("Endpoint") { Text(label) }
+                        }
+                        LabeledContent("Rotation") { Text(deviceProxy.rotationInterval.label) }
+                        LabeledContent("Rotations") { Text("\(deviceProxy.rotationLog.count)") }
+                    }
+                }
+
                 Section("NordVPN") {
                     LabeledContent("Profile") { Text(nordService.activeKeyProfile.rawValue) }
                     LabeledContent("Servers Loaded") { Text("\(nordService.recommendedServers.count)") }
@@ -385,6 +474,10 @@ struct IPScoreTestView: View {
                                         .clipShape(.rect(cornerRadius: 4))
                                     Text(session.networkLabel)
                                         .font(.system(.caption, design: .monospaced))
+                                    Spacer()
+                                    Text(session.usedSite)
+                                        .font(.system(.caption2, design: .monospaced))
+                                        .foregroundStyle(.cyan)
                                 }
                                 if let server = session.assignedVPNServer {
                                     Text(server)
@@ -430,13 +523,13 @@ struct IPScoreTestView: View {
             createAndLoadWebView(for: session)
         }
 
-        logger.log("IPScoreTest: launched \(sessionCount) concurrent sessions — mode: \(connectionMode.label)", category: .automation, level: .info)
+        logger.log("IPScoreTest: launched \(sessionCount) concurrent sessions — mode: \(connectionMode.label), unified IP: \(deviceProxy.isEnabled)", category: .automation, level: .info)
 
         elapsedTimer?.invalidate()
         elapsedTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
             Task { @MainActor in
                 timerTick += 1
-                let allDone = sessions.allSatisfy { $0.status != .loading }
+                let allDone = sessions.allSatisfy { $0.status != .loading && $0.status != .retrying }
                 if allDone {
                     elapsedTimer?.invalidate()
                     isRunning = false
@@ -452,12 +545,22 @@ struct IPScoreTestView: View {
         let wkConfig = WKWebViewConfiguration()
         wkConfig.websiteDataStore = .nonPersistent()
 
-        networkFactory.configureWKWebView(config: wkConfig, networkConfig: session.networkConfig)
+        if deviceProxy.isEnabled, let config = deviceProxy.activeConfig {
+            networkFactory.configureWKWebView(config: wkConfig, networkConfig: config)
+        } else {
+            networkFactory.configureWKWebView(config: wkConfig, networkConfig: session.networkConfig)
+        }
 
         let webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 414, height: 896), configuration: wkConfig)
         webView.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"
 
         let delegate = IPScoreWebViewDelegate(session: session)
+        delegate.onNeedRetry = { [weak webView, weak session] in
+            guard let webView, let session else { return }
+            let request = URLRequest(url: session.url, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData, timeoutInterval: 30)
+            webView.load(request)
+            self.logger.log("IPScoreTest: S\(session.index) retrying with \(session.usedSite)", category: .automation, level: .info)
+        }
         webView.navigationDelegate = delegate
         delegates[session.id] = delegate
         session.webView = webView
@@ -465,10 +568,25 @@ struct IPScoreTestView: View {
         let request = URLRequest(url: session.url, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData, timeoutInterval: 30)
         webView.load(request)
 
-        logger.log("IPScoreTest: S\(session.index) loading ipscore.io via \(session.networkConfig.label)", category: .automation, level: .debug)
+        logger.log("IPScoreTest: S\(session.index) loading \(session.usedSite) via \(session.networkConfig.label)", category: .automation, level: .debug)
     }
 
     private func assignNetworkToSession(_ session: IPScoreSession, index: Int, mode: ConnectionMode) {
+        if deviceProxy.isEnabled, let config = deviceProxy.activeConfig {
+            session.networkConfig = config
+            session.networkLabel = "Unified: \(config.label)"
+            if case .wireGuardDNS(let wg) = config {
+                session.assignedVPNServer = wg.fileName
+                session.assignedVPNIP = wg.peerEndpoint
+            } else if case .openVPNProxy(let ovpn) = config {
+                session.assignedVPNServer = ovpn.fileName
+                session.assignedVPNIP = ovpn.remoteHost
+            } else if case .socks5(let proxy) = config {
+                session.assignedProxy = proxy.displayString
+            }
+            return
+        }
+
         switch mode {
         case .proxy:
             if let proxy = proxyService.nextWorkingProxy(for: .joe) {
@@ -530,7 +648,7 @@ struct IPScoreTestView: View {
     private func stopSessions() {
         isRunning = false
         elapsedTimer?.invalidate()
-        for session in sessions where session.status == .loading {
+        for session in sessions where session.status == .loading || session.status == .retrying {
             session.status = .failed
             session.webView?.stopLoading()
         }
@@ -565,7 +683,7 @@ struct IPScoreSessionRow: View {
 
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 6) {
-                        Text("ipscore.io")
+                        Text(session.usedSite)
                             .font(.system(.subheadline, design: .monospaced, weight: .semibold))
                         Text(session.status.rawValue)
                             .font(.system(.caption2, design: .monospaced, weight: .bold))
@@ -621,7 +739,7 @@ struct IPScoreSessionRow: View {
                 Spacer()
 
                 VStack(alignment: .trailing, spacing: 4) {
-                    if session.status == .loading {
+                    if session.status == .loading || session.status == .retrying {
                         ProgressView()
                             .controlSize(.mini)
                             .tint(.indigo)
@@ -637,9 +755,9 @@ struct IPScoreSessionRow: View {
                 }
             }
 
-            if session.status == .loading {
-                ProgressView(value: min(Double(session.elapsedSeconds) / 15.0, 0.95))
-                    .tint(.indigo)
+            if session.status == .loading || session.status == .retrying {
+                ProgressView(value: min(Double(session.elapsedSeconds) / 30.0, 0.95))
+                    .tint(session.status == .retrying ? .orange : .indigo)
             }
         }
         .padding(.vertical, 4)
@@ -650,6 +768,7 @@ struct IPScoreSessionRow: View {
         case .loading: .indigo
         case .loaded: .green
         case .failed: .red
+        case .retrying: .orange
         }
     }
 }
@@ -671,7 +790,7 @@ struct IPScoreSessionTile: View {
 
                 Spacer()
 
-                if session.status == .loading {
+                if session.status == .loading || session.status == .retrying {
                     ProgressView().controlSize(.mini).tint(.indigo)
                 } else {
                     Image(systemName: session.status == .loaded ? "checkmark.circle.fill" : "xmark.circle.fill")
@@ -679,6 +798,10 @@ struct IPScoreSessionTile: View {
                         .font(.system(size: 14))
                 }
             }
+
+            Text(session.usedSite)
+                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .foregroundStyle(.cyan.opacity(0.8))
 
             Text(session.networkLabel)
                 .font(.system(size: 9, weight: .semibold, design: .monospaced))
@@ -724,6 +847,7 @@ struct IPScoreSessionTile: View {
         case .loading: .indigo
         case .loaded: .green
         case .failed: .red
+        case .retrying: .orange
         }
     }
 }

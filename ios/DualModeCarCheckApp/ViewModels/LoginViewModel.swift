@@ -677,6 +677,7 @@ class LoginViewModel {
         batchTotalCount = credsToTest.count
         batchCompletedCount = 0
         startHeartbeatMonitor()
+        DeviceProxyService.shared.notifyBatchStart()
         backgroundService.beginExtendedBackgroundExecution(reason: "Login batch test")
         persistence.saveTestQueue(credentialIds: credsToTest.map(\.id))
         var batchWorking = 0
@@ -742,6 +743,7 @@ class LoginViewModel {
         batchTotalCount = credsToTest.count
         batchCompletedCount = 0
         startHeartbeatMonitor()
+        DeviceProxyService.shared.notifyBatchStart()
         backgroundService.beginExtendedBackgroundExecution(reason: "Login dual-site batch test")
         persistence.saveTestQueue(credentialIds: credsToTest.map(\.id))
         var batchWorking = 0

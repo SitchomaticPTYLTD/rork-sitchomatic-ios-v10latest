@@ -33,6 +33,7 @@ class NetworkSessionFactory {
     static let shared = NetworkSessionFactory()
 
     private let proxyService = ProxyRotationService.shared
+    private let deviceProxy = DeviceProxyService.shared
     private let logger = DebugLogger.shared
 
     private var joeWGIndex: Int = 0
@@ -44,6 +45,11 @@ class NetworkSessionFactory {
     private var ppsrOVPNIndex: Int = 0
 
     func nextConfig(for target: ProxyRotationService.ProxyTarget) -> ActiveNetworkConfig {
+        if deviceProxy.isEnabled, let config = deviceProxy.activeConfig {
+            logger.log("NetworkFactory: using unified IP → \(config.label) for \(target.rawValue)", category: .network, level: .debug)
+            return config
+        }
+
         let mode = proxyService.connectionMode(for: target)
 
         switch mode {

@@ -324,6 +324,11 @@ class FingerprintValidationService {
         if scoreHistory.count > 50 { scoreHistory = Array(scoreHistory.prefix(50)) }
 
         logger.log("Fingerprint: \(passed ? "PASS" : "FAIL") score=\(totalScore)/\(maxSafe) signals=\(signalArray.count) seed=\(profileSeed)", category: .fingerprint, level: passed ? .success : .warning, durationMs: elapsed)
+
+        if !passed {
+            DeviceProxyService.shared.notifyFingerprintDetected()
+        }
+
         return score
     }
 
