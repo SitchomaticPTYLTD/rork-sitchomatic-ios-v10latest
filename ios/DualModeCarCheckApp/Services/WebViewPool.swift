@@ -14,11 +14,13 @@ class WebViewPool {
     var availableCount: Int { available.count }
     var totalCount: Int { inUse.count + available.count }
 
-    func acquire(stealthEnabled: Bool = false, viewportSize: CGSize = CGSize(width: 390, height: 844)) -> WKWebView {
+    func acquire(stealthEnabled: Bool = false, viewportSize: CGSize = CGSize(width: 390, height: 844), networkConfig: ActiveNetworkConfig = .direct) -> WKWebView {
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .nonPersistent()
         config.preferences.javaScriptCanOpenWindowsAutomatically = true
         config.defaultWebpagePreferences.allowsContentJavaScript = true
+
+        NetworkSessionFactory.shared.configureWKWebView(config: config, networkConfig: networkConfig)
 
         if stealthEnabled {
             let stealth = PPSRStealthService.shared
@@ -29,22 +31,14 @@ class WebViewPool {
             let wv = WKWebView(frame: CGRect(origin: .zero, size: CGSize(width: profile.viewport.width, height: profile.viewport.height)), configuration: config)
             wv.customUserAgent = profile.userAgent
             inUse.insert(ObjectIdentifier(wv))
-            logger.log("WebViewPool: acquired stealth WKWebView (active:\(inUse.count) pool:\(available.count))", category: .webView, level: .trace)
-            return wv
-        }
-
-        if let wv = available.popLast() {
-            wv.configuration.websiteDataStore.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), modifiedSince: .distantPast) { }
-            wv.configuration.userContentController.removeAllUserScripts()
-            inUse.insert(ObjectIdentifier(wv))
-            logger.log("WebViewPool: reused WKWebView (active:\(inUse.count) pool:\(available.count))", category: .webView, level: .trace)
+            logger.log("WebViewPool: acquired stealth WKWebView network=\(networkConfig.label) (active:\(inUse.count) pool:\(available.count))", category: .webView, level: .trace)
             return wv
         }
 
         let wv = WKWebView(frame: CGRect(origin: .zero, size: viewportSize), configuration: config)
         wv.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"
         inUse.insert(ObjectIdentifier(wv))
-        logger.log("WebViewPool: created new WKWebView (active:\(inUse.count) pool:\(available.count))", category: .webView, level: .trace)
+        logger.log("WebViewPool: created WKWebView network=\(networkConfig.label) (active:\(inUse.count) pool:\(available.count))", category: .webView, level: .trace)
         return wv
     }
 

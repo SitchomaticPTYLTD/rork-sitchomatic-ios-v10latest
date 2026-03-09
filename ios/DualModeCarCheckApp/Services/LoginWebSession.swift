@@ -12,6 +12,7 @@ class LoginWebSession: NSObject {
     var stealthEnabled: Bool = false
     var lastNavigationError: String?
     var lastHTTPStatusCode: Int?
+    var networkConfig: ActiveNetworkConfig = .direct
     private var stealthProfile: PPSRStealthService.SessionProfile?
     private(set) var lastFingerprintScore: FingerprintValidationService.FingerprintScore?
     var onFingerprintLog: ((String, PPSRLogEntry.Level) -> Void)?
@@ -20,7 +21,7 @@ class LoginWebSession: NSObject {
     static let targetURL = URL(string: "https://transact.ppsr.gov.au/CarCheck/")!
 
     func setUp() {
-        logger.log("LoginWebSession: setUp (stealth=\(stealthEnabled))", category: .webView, level: .debug)
+        logger.log("LoginWebSession: setUp (stealth=\(stealthEnabled), network=\(networkConfig.label))", category: .webView, level: .debug)
         if webView != nil {
             tearDown()
         }
@@ -29,6 +30,8 @@ class LoginWebSession: NSObject {
         config.websiteDataStore = .nonPersistent()
         config.preferences.javaScriptCanOpenWindowsAutomatically = true
         config.defaultWebpagePreferences.allowsContentJavaScript = true
+
+        NetworkSessionFactory.shared.configureWKWebView(config: config, networkConfig: networkConfig)
 
         if stealthEnabled {
             let stealth = PPSRStealthService.shared

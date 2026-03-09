@@ -294,10 +294,17 @@ class DeviceProxyService {
 
     var effectiveProxyConfig: ProxyConfig? {
         guard isEnabled, isActive, localProxyEnabled, localProxy.isRunning else { return nil }
-        if case .socks5 = activeConfig {
+        switch activeConfig {
+        case .socks5:
             return localProxy.localProxyConfig
+        case .wireGuardDNS, .openVPNProxy:
+            if vpnTunnelEnabled && vpnTunnel.isConnected {
+                return nil
+            }
+            return localProxy.localProxyConfig
+        case .direct, .none:
+            return nil
         }
-        return nil
     }
 
     private func resolveNextConfig() -> ActiveNetworkConfig {

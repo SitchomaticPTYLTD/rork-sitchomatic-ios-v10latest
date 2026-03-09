@@ -5,20 +5,18 @@ Currently, WireGuard and OpenVPN configs are assigned to WebViews but **no actua
 
 ---
 
-## Stage 1 — Fix SOCKS5 Proxy Routing (Immediate Impact)
+## Stage 1 — Fix SOCKS5 Proxy Routing (Immediate Impact) ✅ COMPLETE
 
-**What changes:**
-- Replace the broken PAC/JavaScript proxy injection with the proper iOS `ProxyConfiguration` API
-- Every WKWebView will use `WKWebsiteDataStore.proxyConfigurations` with SOCKS5 proxy settings
-- This is the official Apple API (iOS 17+) that **actually routes** all WebView network traffic through the proxy
-- When a SOCKS5 proxy is assigned, the WebView will show the **proxy IP** — not your real IP
-
-**Features:**
-- All WebView sessions (login tests, IP score tests, split tests) will use real SOCKS5 routing
-- URLSession requests also properly configured with SOCKS5 proxy dictionaries (already partially working)
-- The IP Score test page will show the actual proxy IP address
-- Unified mode (DeviceProxyService) will apply the same proxy to every WebView simultaneously
-- Fallback to direct connection if no proxy is available
+**What changed:**
+- [x] `LoginWebSession` now accepts `networkConfig` and applies it via `NetworkSessionFactory.configureWKWebView()`
+- [x] `PPSRAutomationEngine` passes network config (unified or per-target) to every PPSR session
+- [x] `PPSRAutomationViewModel` test connection uses proper network config
+- [x] `WebViewPool.acquire()` accepts `networkConfig` parameter and applies `ProxyConfiguration`
+- [x] `NetworkSessionFactory.configureWKWebView()` now resolves effective config — routes WG/OVPN through local proxy when available
+- [x] `DeviceProxyService.effectiveProxyConfig` returns local proxy config for ALL config types (WG, OVPN, SOCKS5) not just SOCKS5
+- [x] Every WKWebView uses `WKWebsiteDataStore.proxyConfigurations` with proper SOCKS5 routing
+- [x] Unified mode applies the same proxy to every WebView simultaneously
+- [x] Fallback chain: VPN tunnel → local proxy → direct SOCKS5 → direct connection
 
 ---
 

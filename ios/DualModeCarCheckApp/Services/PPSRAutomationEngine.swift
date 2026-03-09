@@ -24,6 +24,8 @@ class PPSRAutomationEngine {
     var onLog: ((String, PPSRLogEntry.Level) -> Void)?
     var onBlankScreenshot: (() -> Void)?
     private let dohService = PPSRDoHService.shared
+    private let networkFactory = NetworkSessionFactory.shared
+    private let deviceProxy = DeviceProxyService.shared
 
     var canStartSession: Bool {
         activeSessions < maxConcurrency
@@ -41,6 +43,14 @@ class PPSRAutomationEngine {
 
         let session = LoginWebSession()
         session.stealthEnabled = stealthEnabled
+
+        if deviceProxy.isEnabled, let config = deviceProxy.activeConfig {
+            session.networkConfig = config
+        } else {
+            session.networkConfig = networkFactory.nextConfig(for: .ppsr)
+        }
+        logger.log("PPSR session network: \(session.networkConfig.label)", category: .network, level: .info, sessionId: sessionId)
+
         session.onFingerprintLog = { [weak self] msg, level in
             check.logs.append(PPSRLogEntry(message: msg, level: level))
             self?.onLog?(msg, level)

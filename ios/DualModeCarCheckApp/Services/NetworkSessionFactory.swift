@@ -153,7 +153,9 @@ class NetworkSessionFactory {
     func configureWKWebView(config wkConfig: WKWebViewConfiguration, networkConfig: ActiveNetworkConfig) {
         let dataStore = wkConfig.websiteDataStore ?? .nonPersistent()
 
-        switch networkConfig {
+        let resolvedConfig = resolveEffectiveConfig(networkConfig)
+
+        switch resolvedConfig {
         case .socks5(let proxy):
             let endpoint = NWEndpoint.hostPort(
                 host: NWEndpoint.Host(proxy.host),
@@ -165,24 +167,50 @@ class NetworkSessionFactory {
             }
             dataStore.proxyConfigurations = [proxyConfig]
             wkConfig.websiteDataStore = dataStore
-            logger.log("WKWebView SOCKS5 ProxyConfiguration applied: \(proxy.displayString)", category: .proxy, level: .info)
+            logger.log("WKWebView SOCKS5 ProxyConfiguration applied: \(proxy.displayString) (original: \(networkConfig.label))", category: .proxy, level: .info)
 
         case .wireGuardDNS(let wg):
             if vpnTunnel.isConnected {
                 logger.log("WKWebView WG: \(wg.displayString) — VPN tunnel active, traffic routed device-wide", category: .vpn, level: .info)
             } else {
-                logger.log("WKWebView WG: \(wg.displayString) — VPN tunnel not active, using DNS-level routing only", category: .vpn, level: .warning)
+                logger.log("WKWebView WG: \(wg.displayString) — no VPN tunnel or local proxy available, traffic will use real IP", category: .vpn, level: .warning)
             }
 
         case .openVPNProxy(let ovpn):
             if vpnTunnel.isConnected {
                 logger.log("WKWebView OVPN: \(ovpn.displayString) — VPN tunnel active, traffic routed device-wide", category: .vpn, level: .info)
             } else {
-                logger.log("WKWebView OVPN: \(ovpn.displayString) — VPN tunnel not active, direct connection", category: .vpn, level: .warning)
+                logger.log("WKWebView OVPN: \(ovpn.displayString) — no VPN tunnel or local proxy available, traffic will use real IP", category: .vpn, level: .warning)
             }
 
         case .direct:
             break
+        }
+    }
+
+    private func resolveEffectiveConfig(_ config: ActiveNetworkConfig) -> ActiveNetworkConfig {
+        if deviceProxy.isEnabled {
+            if deviceProxy.isVPNActive {
+                return .direct
+            }
+            if let localConfig = deviceProxy.effectiveProxyConfig, localProxy.isRunning {
+                return .socks5(localConfig)
+            }
+        }
+
+        switch config {
+        case .socks5:
+            return config
+        case .wireGuardDNS, .openVPNProxy:
+            if localProxy.isRunning, localProxy.upstreamProxy != nil {
+                return .socks5(localProxy.localProxyConfig)
+            }
+            if vpnTunnel.isConnected {
+                return .direct
+            }
+            return config
+        case .direct:
+            return config
         }
     }
 
