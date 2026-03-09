@@ -30,6 +30,9 @@ class DualFindViewModel {
 
     var appearanceMode: AppAppearanceMode = .dark
     var stealthEnabled: Bool = true
+    var debugMode: Bool = false
+    var testTimeout: TimeInterval = 90
+    var maxConcurrency: Int = 8
     var automationSettings: AutomationSettings = AutomationSettings()
 
     private var resumePoint: DualFindResumePoint?
@@ -45,6 +48,7 @@ class DualFindViewModel {
     private let logger = DebugLogger.shared
     private let backgroundService = BackgroundTaskService.shared
     private let networkFactory = NetworkSessionFactory.shared
+    private let blacklistService = BlacklistService.shared
 
     var progressText: String {
         guard totalEmails > 0 else { return "Ready" }
@@ -70,6 +74,7 @@ class DualFindViewModel {
         notifications.requestPermission()
         loadResumePoint()
         loadSettings()
+        loadAppSettings()
     }
 
     func parseEmails(from text: String) -> [String] {
@@ -83,6 +88,8 @@ class DualFindViewModel {
         guard !parsed.isEmpty else { return }
         let validPasswords = passwords.map { $0.trimmingCharacters(in: .whitespaces) }
         guard validPasswords.allSatisfy({ !$0.isEmpty }) else { return }
+
+        reloadAllSettings()
 
         emails = parsed
         totalEmails = parsed.count
@@ -98,10 +105,12 @@ class DualFindViewModel {
         buildSessions()
         buildEngines()
 
+        logSettingsSummary()
         log("Starting Dual Find: \(totalEmails) emails × 3 passwords × 2 sites = \(totalEmails * 3 * 2) combinations")
         log("Session mode: \(sessionCount.label)")
 
         isRunning = true
+        DeviceProxyService.shared.notifyBatchStart()
         backgroundService.beginExtendedBackgroundExecution(reason: "Dual Find Account scan")
 
         runTask = Task {
@@ -111,6 +120,9 @@ class DualFindViewModel {
 
     func resumeRun() {
         guard let rp = resumePoint else { return }
+
+        reloadAllSettings()
+
         emails = rp.emails
         totalEmails = rp.emails.count
         currentEmailIndex = rp.emailIndex
@@ -130,9 +142,11 @@ class DualFindViewModel {
         buildSessions()
         buildEngines()
 
+        logSettingsSummary()
         log("Resuming Dual Find from Email \(currentEmailIndex + 1)/\(totalEmails), Password \(currentPasswordIndex + 1)/3")
 
         isRunning = true
+        DeviceProxyService.shared.notifyBatchStart()
         backgroundService.beginExtendedBackgroundExecution(reason: "Dual Find Account resume")
 
         runTask = Task {
@@ -257,7 +271,7 @@ class DualFindViewModel {
 
         engine.proxyTarget = (site == .joefortune) ? .joe : .ignition
 
-        let outcome = await engine.runLoginTest(attempt, targetURL: testURL, timeout: 10)
+        let outcome = await engine.runLoginTest(attempt, targetURL: testURL, timeout: testTimeout)
 
         switch outcome {
         case .success:
@@ -313,7 +327,7 @@ class DualFindViewModel {
         updateSession(id: sessionInfoId, email: email, status: "Rebuilding", active: true)
 
         let freshEngine = LoginAutomationEngine()
-        freshEngine.debugMode = automationSettings.trueDetectionEnabled
+        freshEngine.debugMode = debugMode
         freshEngine.stealthEnabled = stealthEnabled
         freshEngine.automationSettings = automationSettings
         freshEngine.proxyTarget = (site == .joefortune) ? .joe : .ignition
@@ -333,7 +347,7 @@ class DualFindViewModel {
         let testURL = urlRotation.nextURL() ?? site.url
         urlRotation.isIgnitionMode = wasIgnition
 
-        let outcome = await freshEngine.runLoginTest(attempt, targetURL: testURL, timeout: 10)
+        let outcome = await freshEngine.runLoginTest(attempt, targetURL: testURL, timeout: testTimeout)
 
         switch outcome {
         case .success:
@@ -376,23 +390,24 @@ class DualFindViewModel {
 
         for i in 0..<perSite {
             let engine = LoginAutomationEngine()
-            engine.debugMode = automationSettings.trueDetectionEnabled
-            engine.stealthEnabled = stealthEnabled
-            engine.automationSettings = automationSettings
-            engine.proxyTarget = .joe
+            configureEngine(engine, target: .joe)
             wireEngineCallbacks(engine, label: "JOE-\(i + 1)")
             joeEngines.append(engine)
         }
 
         for i in 0..<perSite {
             let engine = LoginAutomationEngine()
-            engine.debugMode = automationSettings.trueDetectionEnabled
-            engine.stealthEnabled = stealthEnabled
-            engine.automationSettings = automationSettings
-            engine.proxyTarget = .ignition
+            configureEngine(engine, target: .ignition)
             wireEngineCallbacks(engine, label: "IGN-\(i + 1)")
             ignitionEngines.append(engine)
         }
+    }
+
+    private func configureEngine(_ engine: LoginAutomationEngine, target: ProxyRotationService.ProxyTarget) {
+        engine.debugMode = debugMode
+        engine.stealthEnabled = stealthEnabled
+        engine.automationSettings = automationSettings
+        engine.proxyTarget = target
     }
 
     private func wireEngineCallbacks(_ engine: LoginAutomationEngine, label: String) {
@@ -485,6 +500,35 @@ class DualFindViewModel {
            let loaded = try? JSONDecoder().decode(AutomationSettings.self, from: data) {
             automationSettings = loaded
         }
+        maxConcurrency = automationSettings.maxConcurrency
+    }
+
+    private func loadAppSettings() {
+        let persistence = LoginPersistenceService.shared
+        if let settings = persistence.loadSettings() {
+            debugMode = settings.debugMode
+            stealthEnabled = settings.stealthEnabled
+            testTimeout = settings.testTimeout
+            if let mode = AppAppearanceMode(rawValue: settings.appearanceMode) {
+                appearanceMode = mode
+            }
+        }
+    }
+
+    private func reloadAllSettings() {
+        loadSettings()
+        loadAppSettings()
+    }
+
+    private func logSettingsSummary() {
+        let joeMode = proxyService.connectionMode(for: .joe)
+        let ignMode = proxyService.connectionMode(for: .ignition)
+        let deviceWide = DeviceProxyService.shared.isEnabled
+        log("Settings: timeout=\(Int(testTimeout))s stealth=\(stealthEnabled) debug=\(debugMode) concurrency=\(maxConcurrency)")
+        log("Network: Joe=\(joeMode.label) Ignition=\(ignMode.label) DeviceWide=\(deviceWide)")
+        log("Automation: pageLoad=\(Int(automationSettings.pageLoadTimeout))s fpValidation=\(automationSettings.fingerprintValidationEnabled) humanSim=\(automationSettings.humanMouseMovement)")
+        log("Fallback: WG→OVPN=\(automationSettings.autoFallbackWGtoOVPN) OVPN→SOCKS5=\(automationSettings.autoFallbackOVPNtoSOCKS5)")
+        log("Delays: pageExtra=\(automationSettings.pageLoadExtraDelayMs)ms submitWait=\(automationSettings.submitButtonWaitDelayMs)ms betweenAttempts=\(automationSettings.betweenAttemptsDelayMs)ms")
     }
 
     // MARK: - Notifications
