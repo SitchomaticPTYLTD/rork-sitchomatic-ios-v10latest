@@ -589,6 +589,11 @@ class HumanInteractionEngine {
     // MARK: - Typing Engines
 
     private func typeCharByChar(text: String, executeJS: @escaping (String) async -> String?, sessionId: String, fieldName: String, minDelayMs: Int, maxDelayMs: Int) async -> Bool {
+        let fieldType = fieldName == "password" ? "password" : "email"
+        let fieldTypeFallback = fieldName == "password" ? "password" : "text"
+        let clearJS = "(function(){var el=document.activeElement;if(!el||(el.tagName!=='INPUT'&&el.tagName!=='TEXTAREA')){var inp=document.querySelector('input[type=\"" + "\(fieldType)" + "\"]')||document.querySelector('input[type=\"" + "\(fieldTypeFallback)" + "\"]');if(inp){inp.focus();el=inp;}}if(!el)return'NO_EL';var ns=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value');if(ns&&ns.set){ns.set.call(el,'');}else{el.value='';}el.dispatchEvent(new Event('input',{bubbles:true}));return'CLEARED';})()"
+        _ = await executeJS(clearJS)
+
         for (index, char) in text.enumerated() {
             let charStr = String(char)
             let escaped = charStr.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "'", with: "\\'").replacingOccurrences(of: "\n", with: "\\n")
@@ -646,6 +651,9 @@ class HumanInteractionEngine {
     }
 
     private func typeWithExecCommand(text: String, executeJS: @escaping (String) async -> String?, sessionId: String, fieldName: String, minDelayMs: Int, maxDelayMs: Int) async -> Bool {
+        let clearExecJS = "(function(){var el=document.activeElement;if(!el)return'NO_EL';el.select();document.execCommand('delete',false,null);if(el.value&&el.value.length>0){var ns=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value');if(ns&&ns.set){ns.set.call(el,'');}else{el.value='';}el.dispatchEvent(new Event('input',{bubbles:true}));}return'CLEARED';})()"
+        _ = await executeJS(clearExecJS)
+
         for (index, char) in text.enumerated() {
             let charStr = String(char)
             let escaped = charStr.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "'", with: "\\'").replacingOccurrences(of: "\n", with: "\\n")
@@ -678,6 +686,9 @@ class HumanInteractionEngine {
     }
 
     private func typeSlowWithCorrections(text: String, executeJS: @escaping (String) async -> String?, sessionId: String, fieldName: String) async -> Bool {
+        let clearSlowJS = "(function(){var el=document.activeElement;if(!el)return'NO_EL';var ns=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value');if(ns&&ns.set){ns.set.call(el,'');}else{el.value='';}el.dispatchEvent(new Event('input',{bubbles:true}));return'CLEARED';})()"
+        _ = await executeJS(clearSlowJS)
+
         let correctionChance = 0.08
         var i = 0
         let chars = Array(text)

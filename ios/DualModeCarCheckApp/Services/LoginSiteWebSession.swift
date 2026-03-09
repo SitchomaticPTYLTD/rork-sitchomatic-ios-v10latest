@@ -1020,6 +1020,23 @@ class LoginSiteWebSession: NSObject {
         _ = await executeJS(js)
     }
 
+    func getFieldValues() async -> (email: String, password: String) {
+        let js = """
+        (function() {
+            var emailEl = document.querySelector('input[type="email"]') || document.querySelector('input[autocomplete="email"]') || document.querySelector('input[autocomplete="username"]') || document.querySelector('#email') || document.querySelector('input[type="text"]');
+            var passEl = document.querySelector('input[type="password"]') || document.querySelector('#login-password');
+            var e = emailEl ? emailEl.value : '';
+            var p = passEl ? passEl.value : '';
+            return JSON.stringify({e: e, p: p});
+        })();
+        """
+        let result = await executeJS(js)
+        guard let result, let data = result.data(using: .utf8) else { return ("", "") }
+        struct FieldVals: Decodable { let e: String; let p: String }
+        guard let vals = try? JSONDecoder().decode(FieldVals.self, from: data) else { return ("", "") }
+        return (vals.e, vals.p)
+    }
+
     func clearAllInputFields() async {
         let js = """
         (function() {

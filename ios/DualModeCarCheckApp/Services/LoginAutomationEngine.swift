@@ -310,15 +310,27 @@ class LoginAutomationEngine {
             logger.log("Pattern '\(selectedPattern.rawValue)' result: \(patternResult.summary)", category: .automation, level: patternResult.overallSuccess ? .success : .warning, sessionId: sessionId, durationMs: patternMs)
 
             if !patternResult.usernameFilled || !patternResult.passwordFilled {
-                attempt.logs.append(PPSRLogEntry(message: "Cycle \(cycle): field fill failed — clearing fields then falling back to calibrated+legacy fill", level: .warning))
-                await session.clearAllInputFields()
-                try? await Task.sleep(for: .milliseconds(200))
-                let calUserResult = await session.fillUsernameCalibrated(attempt.credential.username, calibration: calibration)
-                attempt.logs.append(PPSRLogEntry(message: "Calibrated email fill: \(calUserResult.detail)", level: calUserResult.success ? .info : .warning))
-                try? await Task.sleep(for: .milliseconds(300))
-                let calPassResult = await session.fillPasswordCalibrated(attempt.credential.password, calibration: calibration)
-                attempt.logs.append(PPSRLogEntry(message: "Calibrated password fill: \(calPassResult.detail)", level: calPassResult.success ? .info : .warning))
-                try? await Task.sleep(for: .milliseconds(400))
+                let fieldValues = await session.getFieldValues()
+                let alreadyHasEmail = fieldValues.email == attempt.credential.username
+                let alreadyHasPass = fieldValues.password == attempt.credential.password
+
+                if alreadyHasEmail && alreadyHasPass {
+                    attempt.logs.append(PPSRLogEntry(message: "Cycle \(cycle): pattern reported incomplete but fields already contain correct values — skipping re-fill", level: .info))
+                } else {
+                    attempt.logs.append(PPSRLogEntry(message: "Cycle \(cycle): field fill failed — clearing fields then falling back to calibrated+legacy fill", level: .warning))
+                    await session.clearAllInputFields()
+                    try? await Task.sleep(for: .milliseconds(200))
+                    if !alreadyHasEmail {
+                        let calUserResult = await session.fillUsernameCalibrated(attempt.credential.username, calibration: calibration)
+                        attempt.logs.append(PPSRLogEntry(message: "Calibrated email fill: \(calUserResult.detail)", level: calUserResult.success ? .info : .warning))
+                        try? await Task.sleep(for: .milliseconds(300))
+                    }
+                    if !alreadyHasPass {
+                        let calPassResult = await session.fillPasswordCalibrated(attempt.credential.password, calibration: calibration)
+                        attempt.logs.append(PPSRLogEntry(message: "Calibrated password fill: \(calPassResult.detail)", level: calPassResult.success ? .info : .warning))
+                        try? await Task.sleep(for: .milliseconds(400))
+                    }
+                }
             }
 
             advanceTo(.submitting, attempt: attempt, message: "Cycle \(cycle)/\(maxSubmitCycles) — evaluating submit...")
