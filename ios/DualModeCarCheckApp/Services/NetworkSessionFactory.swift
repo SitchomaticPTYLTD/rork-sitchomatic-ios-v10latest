@@ -1,5 +1,6 @@
 import Foundation
 import WebKit
+import Network
 
 nonisolated enum ActiveNetworkConfig: Sendable {
     case direct
@@ -139,26 +140,67 @@ class NetworkSessionFactory {
     }
 
     func configureWKWebView(config wkConfig: WKWebViewConfiguration, networkConfig: ActiveNetworkConfig) {
+        let dataStore = wkConfig.websiteDataStore ?? .nonPersistent()
+
         switch networkConfig {
         case .socks5(let proxy):
-            let pacScript = generatePACScript(proxyHost: proxy.host, proxyPort: proxy.port, type: "SOCKS5")
-            injectPACProxy(into: wkConfig, pacScript: pacScript)
-            logger.log("WKWebView configured with SOCKS5 PAC: \(proxy.displayString)", category: .proxy, level: .debug)
+            let endpoint = NWEndpoint.hostPort(
+                host: NWEndpoint.Host(proxy.host),
+                port: NWEndpoint.Port(integerLiteral: UInt16(proxy.port))
+            )
+            let proxyConfig = ProxyConfiguration(socksv5Proxy: endpoint)
+            if let u = proxy.username, let p = proxy.password {
+                proxyConfig.applyCredential(username: u, password: p)
+            }
+            dataStore.proxyConfigurations = [proxyConfig]
+            wkConfig.websiteDataStore = dataStore
+            logger.log("WKWebView SOCKS5 ProxyConfiguration applied: \(proxy.displayString)", category: .proxy, level: .info)
 
         case .wireGuardDNS(let wg):
-            if let dnsServers = networkConfig.dnsServers, !dnsServers.isEmpty {
-                let dnsJS = buildDNSRoutingScript(servers: dnsServers, endpoint: wg.endpointHost)
-                let userScript = WKUserScript(source: dnsJS, injectionTime: .atDocumentStart, forMainFrameOnly: false)
-                wkConfig.userContentController.addUserScript(userScript)
-                logger.log("WKWebView WG DNS routing injected: \(dnsServers.joined(separator: ", "))", category: .vpn, level: .debug)
-            }
+            logger.log("WKWebView WG: \(wg.displayString) — requires VPN tunnel (Stage 3) or SOCKS5 proxy to route traffic. Currently direct.", category: .vpn, level: .warning)
 
-        case .openVPNProxy:
-            logger.log("WKWebView OVPN: no proxy injection — OpenVPN requires NetworkExtension tunnel", category: .vpn, level: .info)
+        case .openVPNProxy(let ovpn):
+            logger.log("WKWebView OVPN: \(ovpn.displayString) — requires VPN tunnel (Stage 3) to route traffic. Currently direct.", category: .vpn, level: .warning)
 
         case .direct:
             break
         }
+    }
+
+    func buildProxiedDataStore(for networkConfig: ActiveNetworkConfig) -> WKWebsiteDataStore {
+        let dataStore = WKWebsiteDataStore.nonPersistent()
+        switch networkConfig {
+        case .socks5(let proxy):
+            let endpoint = NWEndpoint.hostPort(
+                host: NWEndpoint.Host(proxy.host),
+                port: NWEndpoint.Port(integerLiteral: UInt16(proxy.port))
+            )
+            let proxyConfig = ProxyConfiguration(socksv5Proxy: endpoint)
+            if let u = proxy.username, let p = proxy.password {
+                proxyConfig.applyCredential(username: u, password: p)
+            }
+            dataStore.proxyConfigurations = [proxyConfig]
+            logger.log("DataStore SOCKS5 proxy applied: \(proxy.displayString)", category: .proxy, level: .debug)
+        default:
+            break
+        }
+        return dataStore
+    }
+
+    func buildURLSessionProxyConfiguration(for config: ActiveNetworkConfig) -> URLSessionConfiguration {
+        let sessionConfig = buildURLSessionConfiguration(for: config)
+        if case .socks5(let proxy) = config {
+            let endpoint = NWEndpoint.hostPort(
+                host: NWEndpoint.Host(proxy.host),
+                port: NWEndpoint.Port(integerLiteral: UInt16(proxy.port))
+            )
+            let proxyConfig = ProxyConfiguration(socksv5Proxy: endpoint)
+            if let u = proxy.username, let p = proxy.password {
+                proxyConfig.applyCredential(username: u, password: p)
+            }
+            sessionConfig.proxyConfigurations = [proxyConfig]
+        }
+        return sessionConfig
     }
 
     func resetRotationIndexes() {
@@ -214,39 +256,5 @@ class NetworkSessionFactory {
         return configs[index]
     }
 
-    // MARK: - PAC Proxy
 
-    private func generatePACScript(proxyHost: String, proxyPort: Int, type: String) -> String {
-        """
-        function FindProxyForURL(url, host) {
-            if (isPlainHostName(host) || host === "localhost" || host === "127.0.0.1") {
-                return "DIRECT";
-            }
-            return "\(type) \(proxyHost):\(proxyPort); DIRECT";
-        }
-        """
-    }
-
-    private func injectPACProxy(into config: WKWebViewConfiguration, pacScript: String) {
-        let js = """
-        (function() {
-            window.__networkProxy = true;
-            window.__proxyPAC = `\(pacScript.replacingOccurrences(of: "`", with: "\\`"))`;
-        })();
-        """
-        let userScript = WKUserScript(source: js, injectionTime: .atDocumentStart, forMainFrameOnly: false)
-        config.userContentController.addUserScript(userScript)
-    }
-
-    // MARK: - DNS Routing Script
-
-    private func buildDNSRoutingScript(servers: [String], endpoint: String) -> String {
-        """
-        (function() {
-            window.__wgDNS = [\(servers.map { "'\($0)'" }.joined(separator: ","))];
-            window.__wgEndpoint = '\(endpoint)';
-            window.__networkRouted = true;
-        })();
-        """
-    }
 }

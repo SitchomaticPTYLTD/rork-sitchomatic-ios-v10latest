@@ -1,55 +1,75 @@
-# Fix IP Score Test + Add Device-Wide Single IP Mode with Auto-Rotation
+# 3-Stage VPN & Proxy Overhaul — Make Every WebView Show the VPN IP
 
-## What's Changing
+## Problem
+Currently, WireGuard and OpenVPN configs are assigned to WebViews but **no actual VPN tunnel is established**. The PAC script injection via JavaScript doesn't route WKWebView traffic through proxies — it just sets a JS variable. Every WebView still shows your real IP.
 
-### 1. Fix IP Score Test (Fallback URL)
-- **Problem**: ipscore.io frequently fails to load
-- **Fix**: Add `https://thisismyip.com` as the primary fallback URL. If ipscore.io fails to load within 10 seconds, automatically retry with thisismyip.com. Also add `https://whatismyipaddress.com` as a third fallback
-- The test will cycle through URLs automatically on failure, showing which URL was used for each session
-- Increase timeout to 45 seconds to give more time before marking failed
+---
 
-### 2. New "Device-Wide Single IP" Network Mode
-**This is a major new feature** — a completely new network routing approach:
+## Stage 1 — Fix SOCKS5 Proxy Routing (Immediate Impact)
 
-- **Current behavior**: Each web session gets its own proxy/VPN config independently (per-session IP)
-- **New behavior**: A new toggle called "Unified IP Mode" where the **entire app uses ONE IP at a time**, with automatic rotation on a schedule
+**What changes:**
+- Replace the broken PAC/JavaScript proxy injection with the proper iOS `ProxyConfiguration` API
+- Every WKWebView will use `WKWebsiteDataStore.proxyConfigurations` with SOCKS5 proxy settings
+- This is the official Apple API (iOS 17+) that **actually routes** all WebView network traffic through the proxy
+- When a SOCKS5 proxy is assigned, the WebView will show the **proxy IP** — not your real IP
 
-#### How It Works
-- A new service called `DeviceProxyService` manages a single active SOCKS5 proxy connection for the entire app
-- When enabled, ALL web sessions (WKWebView + URLSession) are routed through the same single proxy/VPN endpoint
-- The active endpoint rotates automatically based on the selected schedule
+**Features:**
+- All WebView sessions (login tests, IP score tests, split tests) will use real SOCKS5 routing
+- URLSession requests also properly configured with SOCKS5 proxy dictionaries (already partially working)
+- The IP Score test page will show the actual proxy IP address
+- Unified mode (DeviceProxyService) will apply the same proxy to every WebView simultaneously
+- Fallback to direct connection if no proxy is available
 
-#### Rotation Triggers (user picks one or more):
-- **Every batch/auto cycle** — rotate IP at the start of each new batch
-- **When IP fingerprinting is detected** — auto-rotate if fingerprint detection fires
-- **Every 1 minute**
-- **Every 3 minutes**
-- **Every 5 minutes**
-- **Every 7 minutes**
-- **Every 10 minutes**
-- **Every 15 minutes**
+---
 
-#### Rotation Source Priority:
-- Uses WireGuard configs first, then falls back to OpenVPN, then SOCKS5
-- Cycles through all available configs round-robin style
-- Shows the currently active IP, time until next rotation, and rotation history
+## Stage 2 — On-Device Local Proxy Server (Wireproxy Concept)
 
-### 3. New Settings UI — "Device-Wide IP" Section
-- Added to the existing Network Settings screen
-- **Toggle**: "Unified IP Mode" (on/off) — when off, per-session mode works as before
-- **Rotation interval picker**: Dropdown with all the time options listed above
-- **Checkboxes**: "Rotate on batch start" and "Rotate on fingerprint detection"
-- **Status display**: Shows current active endpoint, IP address, connection type (WG/OVPN/SOCKS5), time connected, and countdown to next rotation
-- **Rotation log**: Shows last 20 rotations with timestamps
-- **Manual rotate button**: Force an immediate IP rotation
+**What changes:**
+- Build a local SOCKS5 proxy server running inside the app on `localhost`
+- Uses Apple's Network framework (`NWListener`) — no external dependencies
+- Acts as a proxy forwarder: all WebViews connect to `localhost:PORT`, which forwards traffic through the selected upstream SOCKS5 proxy
+- This is the on-device equivalent of wireproxy — a local intermediary that all app traffic routes through
 
-### 4. Integration with Existing Automation
-- When Unified IP Mode is enabled, the `NetworkSessionFactory` will use the single active config from `DeviceProxyService` instead of rotating per-session
-- Batch start triggers call the rotation service if "rotate on batch" is enabled
-- The fingerprint validation service triggers rotation if "rotate on detection" is enabled
-- All existing features (split test, IP score test, login automation) automatically use the unified IP when enabled
+**Features:**
+- Single unified proxy endpoint for the entire app (`localhost:PORT`)
+- Upstream proxy rotation happens transparently — change the upstream, all WebViews immediately use the new IP
+- No need to reconfigure or recreate WebViews when rotating proxies
+- Connection pooling and keep-alive management
+- Automatic health monitoring — if the upstream proxy dies, auto-rotate to the next one
+- Support for proxy chaining (local → upstream SOCKS5 → internet)
+- Status dashboard showing active connections, bytes transferred, upstream health
 
-### 5. Visual Indicators
-- A small persistent banner at the top of main screens showing "🔒 Unified IP: [current endpoint] — Next rotation in X:XX"
-- The banner changes color based on connection health (green = active, yellow = rotating, red = failed)
-- Haptic feedback on successful rotation
+---
+
+## Stage 3 — Device-Wide VPN Tunnel (NetworkExtension)
+
+**What changes:**
+- Add a Network Extension target with a Packet Tunnel Provider
+- Implements a real VPN tunnel using `NEPacketTunnelProvider`
+- When active, **ALL device traffic** (every WebView, every URL request, everything) routes through the VPN
+- Supports WireGuard protocol via the tunnel provider
+- Managed from the main app via `NETunnelProviderManager`
+
+**Features:**
+- True device-wide VPN — every single network request uses the VPN IP
+- WireGuard tunnel support using your existing WireGuard configs
+- Start/stop VPN from within the app
+- Auto-rotation: disconnect and reconnect with a different WireGuard server on schedule
+- VPN status indicator in the app (connected/disconnected/rotating)
+- Fallback chain: WireGuard tunnel → SOCKS5 proxy → direct
+- Integration with existing DeviceProxyService rotation timers and batch triggers
+- Works on real devices (Network Extensions require physical hardware — shows placeholder in simulator)
+
+**Note:** Stage 3 requires the Network Extension entitlement from Apple and only works on real devices. The app will detect this and fall back to Stage 2 (local proxy) or Stage 1 (direct SOCKS5) automatically.
+
+---
+
+## Summary
+
+| Stage | What It Does | Works In Simulator? |
+|-------|-------------|-------------------|
+| 1 | Fix SOCKS5 → WebView routing with proper iOS API | ✅ Yes |
+| 2 | Local proxy server for unified app-wide routing | ✅ Yes |
+| 3 | Device-wide VPN tunnel via NetworkExtension | ❌ Real device only |
+
+Say **"yes"**, **"continue"**, or **"analysis"** after each stage to proceed to the next one.
