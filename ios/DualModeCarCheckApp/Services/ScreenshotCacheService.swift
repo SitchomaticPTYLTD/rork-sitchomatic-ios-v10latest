@@ -6,8 +6,9 @@ class ScreenshotCacheService {
     static let shared = ScreenshotCacheService()
 
     private let cacheDirectory: URL
-    private let maxMemoryCacheCount = 100
-    private let maxDiskCacheCount = 500
+    private(set) var maxMemoryCacheCount: Int = 100
+    private(set) var maxDiskCacheCount: Int = 500
+    private let maxDiskCacheSizeBytes: Int64 = 200 * 1024 * 1024
     private var memoryCache: [String: UIImage] = [:]
     private var accessOrder: [String] = []
 
@@ -62,21 +63,28 @@ class ScreenshotCacheService {
         try? FileManager.default.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
     }
 
-    var diskCacheSize: String {
+    var diskCacheSizeBytes: Int64 {
         let fm = FileManager.default
-        guard let files = try? fm.contentsOfDirectory(at: cacheDirectory, includingPropertiesForKeys: [.fileSizeKey]) else {
-            return "0 KB"
-        }
-        var totalSize: Int64 = 0
+        guard let files = try? fm.contentsOfDirectory(at: cacheDirectory, includingPropertiesForKeys: [.fileSizeKey]) else { return 0 }
+        var total: Int64 = 0
         for file in files {
             if let values = try? file.resourceValues(forKeys: [.fileSizeKey]),
                let size = values.fileSize {
-                totalSize += Int64(size)
+                total += Int64(size)
             }
         }
-        let formatter = ByteCountFormatter()
-        formatter.countStyle = .file
-        return formatter.string(fromByteCount: totalSize)
+        return total
+    }
+
+    var diskCacheSize: String {
+        ByteCountFormatter.string(fromByteCount: diskCacheSizeBytes, countStyle: .file)
+    }
+
+    func setMaxCacheCounts(memory: Int, disk: Int) {
+        maxMemoryCacheCount = max(10, memory)
+        maxDiskCacheCount = max(20, disk)
+        evictMemoryCacheIfNeeded()
+        evictDiskCacheIfNeeded()
     }
 
     private func evictMemoryCacheIfNeeded() {
@@ -87,14 +95,15 @@ class ScreenshotCacheService {
     }
 
     private func evictDiskCacheIfNeeded() {
+        let diskMax = maxDiskCacheCount
+        let sizeMax = maxDiskCacheSizeBytes
         Task.detached(priority: .utility) {
             let fm = FileManager.default
             let cachesDir = fm.urls(for: .cachesDirectory, in: .userDomainMask).first!
             let dir = cachesDir.appendingPathComponent("ScreenshotCache", isDirectory: true)
-            guard let files = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.contentModificationDateKey]) else { return }
+            guard let files = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.fileSizeKey, .contentModificationDateKey]) else { return }
 
             let jpgFiles = files.filter { $0.pathExtension == "jpg" }
-            guard jpgFiles.count > self.maxDiskCacheCount else { return }
 
             let sorted = jpgFiles.sorted { a, b in
                 let aDate = (try? a.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
@@ -102,9 +111,30 @@ class ScreenshotCacheService {
                 return aDate < bDate
             }
 
-            let toRemove = sorted.prefix(jpgFiles.count - self.maxDiskCacheCount)
-            for file in toRemove {
-                try? fm.removeItem(at: file)
+            var removedByCount = 0
+            if sorted.count > diskMax {
+                let toRemove = sorted.prefix(sorted.count - diskMax)
+                for file in toRemove {
+                    try? fm.removeItem(at: file)
+                    removedByCount += 1
+                }
+            }
+
+            let remaining = sorted.dropFirst(removedByCount)
+            var totalSize: Int64 = 0
+            for file in remaining {
+                let size = (try? file.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
+                totalSize += Int64(size)
+            }
+
+            if totalSize > sizeMax {
+                let target = sizeMax * 3 / 4
+                for file in remaining {
+                    guard totalSize > target else { break }
+                    let size = Int64((try? file.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0)
+                    try? fm.removeItem(at: file)
+                    totalSize -= size
+                }
             }
         }
     }

@@ -3,6 +3,8 @@ import SwiftUI
 struct LoginSettingsContentView: View {
     @Bindable var vm: LoginViewModel
     @State private var showDebugScreenshots: Bool = false
+    @State private var showSelectTesting: Bool = false
+    @State private var selectedCredentialIds: Set<String> = []
     @AppStorage("introVideoEnabled") private var introVideoEnabled: Bool = false
 
     private var accentColor: Color {
@@ -88,7 +90,8 @@ struct LoginSettingsContentView: View {
             }
 
             Button {
-                vm.testAllUntested()
+                selectedCredentialIds = Set(vm.untestedCredentials.map(\.id))
+                showSelectTesting = true
             } label: {
                 HStack(spacing: 10) {
                     Image(systemName: "checklist").foregroundStyle(.blue)
@@ -98,8 +101,12 @@ struct LoginSettingsContentView: View {
                     }
                 }
             }
+            .disabled(vm.isRunning || vm.untestedCredentials.isEmpty)
         } header: {
             Text("Quick Actions")
+        }
+        .sheet(isPresented: $showSelectTesting) {
+            selectTestingSheet
         }
     }
 
@@ -334,6 +341,70 @@ struct LoginSettingsContentView: View {
         } footer: {
             Text("Blacklisted emails are excluded from import queues. Manage the full blacklist in the More tab.")
         }
+    }
+
+    private var selectTestingSheet: some View {
+        NavigationStack {
+            List {
+                Section {
+                    HStack {
+                        Button("Select All") {
+                            selectedCredentialIds = Set(vm.untestedCredentials.map(\.id))
+                        }
+                        Spacer()
+                        Button("Deselect All") {
+                            selectedCredentialIds.removeAll()
+                        }
+                    }
+                    .font(.subheadline.bold())
+                }
+                Section {
+                    ForEach(vm.untestedCredentials) { cred in
+                        Button {
+                            if selectedCredentialIds.contains(cred.id) {
+                                selectedCredentialIds.remove(cred.id)
+                            } else {
+                                selectedCredentialIds.insert(cred.id)
+                            }
+                        } label: {
+                            HStack(spacing: 10) {
+                                Image(systemName: selectedCredentialIds.contains(cred.id) ? "checkmark.circle.fill" : "circle")
+                                    .foregroundStyle(selectedCredentialIds.contains(cred.id) ? accentColor : .secondary)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(cred.username)
+                                        .font(.system(.subheadline, design: .monospaced, weight: .semibold))
+                                        .foregroundStyle(.primary)
+                                        .lineLimit(1)
+                                    Text(cred.maskedPassword)
+                                        .font(.system(.caption, design: .monospaced))
+                                        .foregroundStyle(.tertiary)
+                                }
+                                Spacer()
+                            }
+                        }
+                    }
+                } header: {
+                    Text("\(selectedCredentialIds.count) of \(vm.untestedCredentials.count) selected")
+                }
+            }
+            .listStyle(.insetGrouped)
+            .navigationTitle("Select Credentials")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { showSelectTesting = false }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Test \(selectedCredentialIds.count)") {
+                        showSelectTesting = false
+                        vm.testSelectedCredentials(ids: selectedCredentialIds)
+                    }
+                    .disabled(selectedCredentialIds.isEmpty)
+                }
+            }
+        }
+        .presentationDetents([.large])
+        .presentationDragIndicator(.visible)
     }
 
     private var aboutSection: some View {

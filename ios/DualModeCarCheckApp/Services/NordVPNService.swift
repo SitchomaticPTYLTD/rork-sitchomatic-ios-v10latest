@@ -143,6 +143,26 @@ class NordVPNService {
     var hasAccessKey: Bool { !accessKey.isEmpty }
     var hasPrivateKey: Bool { !privateKey.isEmpty }
 
+    private let maxRetryAttempts = 3
+    private let retryBaseDelay: TimeInterval = 2
+
+    private func isRetryableError(_ error: Error) -> Bool {
+        if let urlError = error as? URLError {
+            switch urlError.code {
+            case .timedOut, .networkConnectionLost, .notConnectedToInternet,
+                 .cannotConnectToHost, .cannotFindHost, .dnsLookupFailed:
+                return true
+            default:
+                return false
+            }
+        }
+        return false
+    }
+
+    private func isRetryableHTTPStatus(_ code: Int) -> Bool {
+        code == 429 || code == 502 || code == 503 || code == 504
+    }
+
     func fetchPrivateKey() async {
         guard hasAccessKey else {
             lastError = "No access key configured"
@@ -169,45 +189,60 @@ class NordVPNService {
             request.setValue("Basic \(credData.base64EncodedString())", forHTTPHeaderField: "Authorization")
         }
 
-        do {
-            let (data, response) = try await session.data(for: request)
-            if let http = response as? HTTPURLResponse, http.statusCode != 200 {
-                let body = String(data: data, encoding: .utf8) ?? ""
-                switch http.statusCode {
-                case 401:
-                    lastError = "Access token expired or invalid. Generate a new token from NordVPN dashboard → Manual Setup."
-                    isTokenExpired = true
-                case 403:
-                    lastError = "Access denied. Your NordVPN subscription may have expired or the token lacks permissions."
-                    isTokenExpired = true
-                case 404:
-                    lastError = "Credentials endpoint not found (HTTP 404). NordVPN may have updated their API."
-                case 429:
-                    lastError = "Rate limited by NordVPN. Wait a minute and try again."
-                default:
-                    lastError = "API returned HTTP \(http.statusCode)"
+        for attempt in 1...maxRetryAttempts {
+            do {
+                let (data, response) = try await session.data(for: request)
+                if let http = response as? HTTPURLResponse, http.statusCode != 200 {
+                    let body = String(data: data, encoding: .utf8) ?? ""
+                    if isRetryableHTTPStatus(http.statusCode) && attempt < maxRetryAttempts {
+                        logger.log("NordVPN: fetchPrivateKey HTTP \(http.statusCode) — retry \(attempt)/\(maxRetryAttempts)", category: .vpn, level: .warning)
+                        try? await Task.sleep(for: .seconds(retryBaseDelay * Double(attempt)))
+                        continue
+                    }
+                    switch http.statusCode {
+                    case 401:
+                        lastError = "Access token expired or invalid. Generate a new token from NordVPN dashboard → Manual Setup."
+                        isTokenExpired = true
+                    case 403:
+                        lastError = "Access denied. Your NordVPN subscription may have expired or the token lacks permissions."
+                        isTokenExpired = true
+                    case 404:
+                        lastError = "Credentials endpoint not found (HTTP 404). NordVPN may have updated their API."
+                    case 429:
+                        lastError = "Rate limited by NordVPN. Wait a minute and try again."
+                    default:
+                        lastError = "API returned HTTP \(http.statusCode)"
+                    }
+                    logger.log("NordVPN: fetchPrivateKey failed — HTTP \(http.statusCode): \(body.prefix(200))", category: .vpn, level: .error, metadata: ["statusCode": "\(http.statusCode)"])
+                    return
                 }
-                logger.log("NordVPN: fetchPrivateKey failed — HTTP \(http.statusCode): \(body.prefix(200))", category: .vpn, level: .error, metadata: ["statusCode": "\(http.statusCode)"])
+                let creds = try JSONDecoder().decode(NordCredentials.self, from: data)
+                if let pk = creds.nordlynx_private_key, !pk.isEmpty {
+                    setPrivateKey(pk)
+                    isTokenExpired = false
+                    logger.log("NordVPN: private key fetched successfully\(attempt > 1 ? " (attempt \(attempt))" : "")", category: .vpn, level: .success)
+                } else {
+                    lastError = "No private key in response. Token may not have NordLynx access."
+                    logger.log("NordVPN: response missing nordlynx_private_key", category: .vpn, level: .error)
+                }
+                return
+            } catch let retryError where isRetryableError(retryError) && attempt < maxRetryAttempts {
+                logger.log("NordVPN: fetchPrivateKey transient error — retry \(attempt)/\(maxRetryAttempts)", category: .vpn, level: .warning)
+                try? await Task.sleep(for: .seconds(retryBaseDelay * Double(attempt)))
+                continue
+            } catch let error as URLError where error.code == .timedOut {
+                lastError = "Request timed out. Check your connection and try again."
+                logger.logError("NordVPN: fetchPrivateKey timeout", error: error, category: .vpn)
+                return
+            } catch let error as URLError where error.code == .notConnectedToInternet || error.code == .networkConnectionLost {
+                lastError = "No internet connection."
+                logger.logError("NordVPN: fetchPrivateKey no network", error: error, category: .vpn)
+                return
+            } catch {
+                lastError = "Failed to fetch key: \(error.localizedDescription)"
+                logger.logError("NordVPN: fetchPrivateKey network error", error: error, category: .vpn)
                 return
             }
-            let creds = try JSONDecoder().decode(NordCredentials.self, from: data)
-            if let pk = creds.nordlynx_private_key, !pk.isEmpty {
-                setPrivateKey(pk)
-                isTokenExpired = false
-                logger.log("NordVPN: private key fetched successfully", category: .vpn, level: .success)
-            } else {
-                lastError = "No private key in response. Token may not have NordLynx access."
-                logger.log("NordVPN: response missing nordlynx_private_key", category: .vpn, level: .error)
-            }
-        } catch let error as URLError where error.code == .timedOut {
-            lastError = "Request timed out. Check your connection and try again."
-            logger.logError("NordVPN: fetchPrivateKey timeout", error: error, category: .vpn)
-        } catch let error as URLError where error.code == .notConnectedToInternet || error.code == .networkConnectionLost {
-            lastError = "No internet connection."
-            logger.logError("NordVPN: fetchPrivateKey no network", error: error, category: .vpn)
-        } catch {
-            lastError = "Failed to fetch key: \(error.localizedDescription)"
-            logger.logError("NordVPN: fetchPrivateKey network error", error: error, category: .vpn)
         }
     }
 
@@ -246,70 +281,91 @@ class NordVPNService {
         request.httpMethod = "GET"
         request.setValue("application/json", forHTTPHeaderField: "Accept")
 
-        do {
-            let (data, response) = try await session.data(for: request)
-            if let http = response as? HTTPURLResponse {
-                switch http.statusCode {
-                case 200:
-                    break
-                case 404:
-                    lastError = "Server endpoint not found (HTTP 404). NordVPN API may have changed."
-                    logger.log("NordVPN: fetchServers 404 — endpoint may be deprecated", category: .vpn, level: .error)
-                    let cached = loadCachedServers()
-                    if !cached.isEmpty {
-                        recommendedServers = cached
-                        lastError = (lastError ?? "") + " Using cached servers."
+        for attempt in 1...maxRetryAttempts {
+            do {
+                let (data, response) = try await session.data(for: request)
+                if let http = response as? HTTPURLResponse {
+                    if isRetryableHTTPStatus(http.statusCode) && attempt < maxRetryAttempts {
+                        logger.log("NordVPN: fetchServers HTTP \(http.statusCode) — retry \(attempt)/\(maxRetryAttempts)", category: .vpn, level: .warning)
+                        try? await Task.sleep(for: .seconds(retryBaseDelay * Double(attempt)))
+                        continue
                     }
-                    return
-                case 429:
-                    lastError = "Rate limited by NordVPN. Wait a minute and try again."
-                    logger.log("NordVPN: fetchServers rate limited", category: .vpn, level: .warning)
-                    return
-                default:
-                    lastError = "API returned HTTP \(http.statusCode)"
-                    logger.log("NordVPN: fetchServers failed — HTTP \(http.statusCode)", category: .vpn, level: .error)
-                    return
+                    switch http.statusCode {
+                    case 200:
+                        break
+                    case 404:
+                        lastError = "Server endpoint not found (HTTP 404). NordVPN API may have changed."
+                        logger.log("NordVPN: fetchServers 404 — endpoint may be deprecated", category: .vpn, level: .error)
+                        let cached = loadCachedServers()
+                        if !cached.isEmpty {
+                            recommendedServers = cached
+                            lastError = (lastError ?? "") + " Using cached servers."
+                        }
+                        return
+                    case 429:
+                        lastError = "Rate limited by NordVPN. Wait a minute and try again."
+                        logger.log("NordVPN: fetchServers rate limited", category: .vpn, level: .warning)
+                        let cached = loadCachedServers()
+                        if !cached.isEmpty {
+                            recommendedServers = cached
+                            lastError = (lastError ?? "") + " Using cached servers."
+                        }
+                        return
+                    default:
+                        lastError = "API returned HTTP \(http.statusCode)"
+                        logger.log("NordVPN: fetchServers failed — HTTP \(http.statusCode)", category: .vpn, level: .error)
+                        return
+                    }
                 }
-            }
-            let servers = try JSONDecoder().decode([NordVPNServer].self, from: data)
-            recommendedServers = servers
-            lastFetched = Date()
-            cacheServers(servers)
-            logger.log("NordVPN: fetched \(servers.count) servers (tech: \(technology))", category: .vpn, level: .success)
-        } catch is DecodingError {
-            lastError = "Failed to parse server response. API format may have changed."
-            logger.log("NordVPN: server response decoding failed", category: .vpn, level: .error)
-            let cached = loadCachedServers()
-            if !cached.isEmpty {
-                recommendedServers = cached
-                lastError = (lastError ?? "") + " Using cached servers."
-            }
-        } catch let error as URLError where error.code == .timedOut {
-            lastError = "Request timed out. Check your connection."
-            let cached = loadCachedServers()
-            if !cached.isEmpty {
-                recommendedServers = cached
-                lastError = (lastError ?? "") + " Using cached servers."
-            }
-            logger.logError("NordVPN: fetchServers timeout", error: error, category: .vpn)
-        } catch let error as URLError where error.code == .notConnectedToInternet || error.code == .networkConnectionLost {
-            lastError = "No internet connection."
-            let cached = loadCachedServers()
-            if !cached.isEmpty {
-                recommendedServers = cached
-                lastError = (lastError ?? "") + " Using cached servers."
-            }
-            logger.logError("NordVPN: fetchServers no network", error: error, category: .vpn)
-        } catch {
-            let cached = loadCachedServers()
-            if !cached.isEmpty {
-                recommendedServers = cached
+                let servers = try JSONDecoder().decode([NordVPNServer].self, from: data)
+                recommendedServers = servers
                 lastFetched = Date()
-                lastError = "Using cached servers (API unavailable)"
-                logger.log("NordVPN: API failed, loaded \(cached.count) cached servers", category: .vpn, level: .warning)
-            } else {
-                lastError = "Failed to fetch servers: \(error.localizedDescription)"
-                logger.logError("NordVPN: fetchServers error (no cache)", error: error, category: .vpn)
+                cacheServers(servers)
+                logger.log("NordVPN: fetched \(servers.count) servers (tech: \(technology))\(attempt > 1 ? " (attempt \(attempt))" : "")", category: .vpn, level: .success)
+                return
+            } catch is DecodingError {
+                lastError = "Failed to parse server response. API format may have changed."
+                logger.log("NordVPN: server response decoding failed", category: .vpn, level: .error)
+                let cached = loadCachedServers()
+                if !cached.isEmpty {
+                    recommendedServers = cached
+                    lastError = (lastError ?? "") + " Using cached servers."
+                }
+                return
+            } catch let retryError where isRetryableError(retryError) && attempt < maxRetryAttempts {
+                logger.log("NordVPN: fetchServers transient error — retry \(attempt)/\(maxRetryAttempts)", category: .vpn, level: .warning)
+                try? await Task.sleep(for: .seconds(retryBaseDelay * Double(attempt)))
+                continue
+            } catch let error as URLError where error.code == .timedOut {
+                lastError = "Request timed out. Check your connection."
+                let cached = loadCachedServers()
+                if !cached.isEmpty {
+                    recommendedServers = cached
+                    lastError = (lastError ?? "") + " Using cached servers."
+                }
+                logger.logError("NordVPN: fetchServers timeout", error: error, category: .vpn)
+                return
+            } catch let error as URLError where error.code == .notConnectedToInternet || error.code == .networkConnectionLost {
+                lastError = "No internet connection."
+                let cached = loadCachedServers()
+                if !cached.isEmpty {
+                    recommendedServers = cached
+                    lastError = (lastError ?? "") + " Using cached servers."
+                }
+                logger.logError("NordVPN: fetchServers no network", error: error, category: .vpn)
+                return
+            } catch {
+                let cached = loadCachedServers()
+                if !cached.isEmpty {
+                    recommendedServers = cached
+                    lastFetched = Date()
+                    lastError = "Using cached servers (API unavailable)"
+                    logger.log("NordVPN: API failed, loaded \(cached.count) cached servers", category: .vpn, level: .warning)
+                } else {
+                    lastError = "Failed to fetch servers: \(error.localizedDescription)"
+                    logger.logError("NordVPN: fetchServers error (no cache)", error: error, category: .vpn)
+                }
+                return
             }
         }
     }
