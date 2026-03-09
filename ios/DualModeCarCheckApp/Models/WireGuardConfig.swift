@@ -17,6 +17,7 @@ nonisolated struct WireGuardConfig: Identifiable, Codable, Sendable {
     var importedAt: Date
     var lastTested: Date?
     var isReachable: Bool
+    var failCount: Int
 
     init(
         id: UUID = UUID(),
@@ -34,7 +35,8 @@ nonisolated struct WireGuardConfig: Identifiable, Codable, Sendable {
         isEnabled: Bool = true,
         importedAt: Date = Date(),
         lastTested: Date? = nil,
-        isReachable: Bool = false
+        isReachable: Bool = false,
+        failCount: Int = 0
     ) {
         self.id = id
         self.fileName = fileName
@@ -52,6 +54,7 @@ nonisolated struct WireGuardConfig: Identifiable, Codable, Sendable {
         self.importedAt = importedAt
         self.lastTested = lastTested
         self.isReachable = isReachable
+        self.failCount = failCount
     }
 
     var endpointHost: String {
@@ -102,6 +105,27 @@ nonisolated struct WireGuardConfig: Identifiable, Codable, Sendable {
 
     var uniqueKey: String {
         "\(peerPublicKey)|\(peerEndpoint)"
+    }
+
+    nonisolated init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        fileName = try container.decode(String.self, forKey: .fileName)
+        interfaceAddress = try container.decode(String.self, forKey: .interfaceAddress)
+        interfacePrivateKey = try container.decode(String.self, forKey: .interfacePrivateKey)
+        interfaceDNS = try container.decode(String.self, forKey: .interfaceDNS)
+        interfaceMTU = try container.decodeIfPresent(Int.self, forKey: .interfaceMTU)
+        peerPublicKey = try container.decode(String.self, forKey: .peerPublicKey)
+        peerPreSharedKey = try container.decodeIfPresent(String.self, forKey: .peerPreSharedKey)
+        peerEndpoint = try container.decode(String.self, forKey: .peerEndpoint)
+        peerAllowedIPs = try container.decode(String.self, forKey: .peerAllowedIPs)
+        peerPersistentKeepalive = try container.decodeIfPresent(Int.self, forKey: .peerPersistentKeepalive)
+        rawContent = try container.decode(String.self, forKey: .rawContent)
+        isEnabled = try container.decode(Bool.self, forKey: .isEnabled)
+        importedAt = try container.decode(Date.self, forKey: .importedAt)
+        lastTested = try container.decodeIfPresent(Date.self, forKey: .lastTested)
+        isReachable = try container.decode(Bool.self, forKey: .isReachable)
+        failCount = try container.decodeIfPresent(Int.self, forKey: .failCount) ?? 0
     }
 
     static func parse(fileName: String, content: String) -> WireGuardConfig? {

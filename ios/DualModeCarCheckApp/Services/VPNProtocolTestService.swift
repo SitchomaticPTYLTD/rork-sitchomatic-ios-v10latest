@@ -30,32 +30,39 @@ nonisolated class VPNProtocolTestService: Sendable {
             }
         }
 
-        let udpResult = await testWireGuardUDPHandshake(host: host, port: UInt16(port))
-        let latency = elapsed(start)
+        let maxAttempts = 3
+        for attempt in 1...maxAttempts {
+            let udpResult = await testWireGuardUDPHandshake(host: host, port: UInt16(port))
+            let latency = elapsed(start)
 
-        if udpResult.portOpen && udpResult.protocolValidated {
-            return VPNProtocolTestResult(
-                reachable: true, protocolValidated: true,
-                latencyMs: latency, detail: "WG handshake initiation OK in \(latency)ms",
-                dnsResolved: true, portOpen: true
-            )
+            if udpResult.portOpen && udpResult.protocolValidated {
+                return VPNProtocolTestResult(
+                    reachable: true, protocolValidated: true,
+                    latencyMs: latency, detail: "WG handshake initiation OK in \(latency)ms (attempt \(attempt))",
+                    dnsResolved: true, portOpen: true
+                )
+            }
+
+            if udpResult.portOpen {
+                return VPNProtocolTestResult(
+                    reachable: true, protocolValidated: false,
+                    latencyMs: latency, detail: "UDP port open but WG handshake not validated (attempt \(attempt))",
+                    dnsResolved: true, portOpen: true
+                )
+            }
+
+            if attempt < maxAttempts {
+                try? await Task.sleep(for: .milliseconds(500 * attempt))
+            }
         }
 
-        if udpResult.portOpen {
-            return VPNProtocolTestResult(
-                reachable: true, protocolValidated: false,
-                latencyMs: latency, detail: "UDP port open but WG handshake not validated",
-                dnsResolved: true, portOpen: true
-            )
-        }
-
-        let tcpFallback = await testTCPPort(host: host, port: port, timeout: 8)
+        let tcpFallback = await testTCPPort(host: host, port: port, timeout: 10)
         let finalLatency = elapsed(start)
 
         return VPNProtocolTestResult(
             reachable: tcpFallback, protocolValidated: false,
             latencyMs: finalLatency,
-            detail: tcpFallback ? "TCP fallback reachable (UDP blocked) in \(finalLatency)ms" : "Endpoint unreachable (UDP + TCP failed)",
+            detail: tcpFallback ? "TCP fallback reachable (UDP blocked) in \(finalLatency)ms" : "Endpoint unreachable after \(maxAttempts) UDP attempts + TCP fallback",
             dnsResolved: true, portOpen: tcpFallback
         )
     }
@@ -124,13 +131,15 @@ nonisolated class VPNProtocolTestService: Sendable {
         }
 
         return await withCheckedContinuation { continuation in
+            let params = NWParameters.udp
+            params.requiredInterfaceType = .other
             let connection = NWConnection(
                 host: NWEndpoint.Host(host),
                 port: nwPort,
-                using: .udp
+                using: params
             )
             let guard_ = ContinuationGuard()
-            let queue = DispatchQueue(label: "wg.handshake.\(host).\(port)")
+            let queue = DispatchQueue(label: "wg.handshake.\(host).\(port).\(UUID().uuidString.prefix(6))")
 
             connection.stateUpdateHandler = { state in
                 switch state {
@@ -159,10 +168,18 @@ nonisolated class VPNProtocolTestService: Sendable {
                             }
                         }
                     })
-                case .failed, .cancelled:
+                case .failed(let error):
+                    if guard_.tryConsume() {
+                        let posixCode = (error as NSError).code
+                        let portLikelyOpen = posixCode == 61 || posixCode == 54
+                        continuation.resume(returning: (portLikelyOpen, false))
+                    }
+                case .cancelled:
                     if guard_.tryConsume() {
                         continuation.resume(returning: (false, false))
                     }
+                case .waiting:
+                    break
                 default:
                     break
                 }
@@ -170,7 +187,7 @@ nonisolated class VPNProtocolTestService: Sendable {
 
             connection.start(queue: queue)
 
-            queue.asyncAfter(deadline: .now() + 6) {
+            queue.asyncAfter(deadline: .now() + 10) {
                 if guard_.tryConsume() {
                     connection.cancel()
                     continuation.resume(returning: (false, false))

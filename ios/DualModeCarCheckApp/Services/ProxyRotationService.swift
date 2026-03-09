@@ -1284,34 +1284,35 @@ class ProxyRotationService {
     }
 
     func markWGConfigReachable(_ config: WireGuardConfig, target: ProxyTarget, reachable: Bool) {
+        func update(_ configs: inout [WireGuardConfig]) {
+            if let idx = configs.firstIndex(where: { $0.id == config.id || $0.uniqueKey == config.uniqueKey }) {
+                configs[idx].isReachable = reachable
+                configs[idx].lastTested = Date()
+                if reachable {
+                    configs[idx].failCount = 0
+                    configs[idx].isEnabled = true
+                } else {
+                    configs[idx].failCount += 1
+                    if configs[idx].failCount >= 3 {
+                        configs[idx].isEnabled = false
+                    }
+                }
+            }
+        }
         switch target {
-        case .joe:
-            if let idx = joeWGConfigs.firstIndex(where: { $0.id == config.id || $0.uniqueKey == config.uniqueKey }) {
-                joeWGConfigs[idx].isReachable = reachable
-                joeWGConfigs[idx].lastTested = Date()
-                if !reachable { joeWGConfigs[idx].isEnabled = false }
-            }
-        case .ignition:
-            if let idx = ignitionWGConfigs.firstIndex(where: { $0.id == config.id || $0.uniqueKey == config.uniqueKey }) {
-                ignitionWGConfigs[idx].isReachable = reachable
-                ignitionWGConfigs[idx].lastTested = Date()
-                if !reachable { ignitionWGConfigs[idx].isEnabled = false }
-            }
-        case .ppsr:
-            if let idx = ppsrWGConfigs.firstIndex(where: { $0.id == config.id || $0.uniqueKey == config.uniqueKey }) {
-                ppsrWGConfigs[idx].isReachable = reachable
-                ppsrWGConfigs[idx].lastTested = Date()
-                if !reachable { ppsrWGConfigs[idx].isEnabled = false }
-            }
+        case .joe: update(&joeWGConfigs)
+        case .ignition: update(&ignitionWGConfigs)
+        case .ppsr: update(&ppsrWGConfigs)
         }
         persistWGConfigs(for: target)
     }
 
     func testAllWGConfigs(target: ProxyTarget) async {
+        resetWGTestState(for: target)
         let configs = wgConfigs(for: target)
         guard !configs.isEmpty else { return }
-        let maxConcurrent = 8
-        await withTaskGroup(of: (String, Bool).self) { group in
+        let maxConcurrent = 6
+        await withTaskGroup(of: (String, Bool, Int).self) { group in
             var launched = 0
             for config in configs {
                 if launched >= maxConcurrent {
@@ -1320,8 +1321,8 @@ class ProxyRotationService {
                     }
                 }
                 group.addTask {
-                    let reachable = await self.testWGEndpointReachability(config)
-                    return (config.uniqueKey, reachable)
+                    let (reachable, latency) = await self.testWGEndpointWithLatency(config)
+                    return (config.uniqueKey, reachable, latency)
                 }
                 launched += 1
             }
@@ -1332,13 +1333,37 @@ class ProxyRotationService {
         persistWGConfigs(for: target)
     }
 
-    private func applyWGTestResult(_ result: (String, Bool), target: ProxyTarget) {
-        let (uniqueKey, reachable) = result
+    private func resetWGTestState(for target: ProxyTarget) {
+        func reset(_ configs: inout [WireGuardConfig]) {
+            for i in configs.indices {
+                configs[i].isEnabled = true
+                configs[i].isReachable = false
+                configs[i].lastTested = nil
+                configs[i].failCount = 0
+            }
+        }
+        switch target {
+        case .joe: reset(&joeWGConfigs)
+        case .ignition: reset(&ignitionWGConfigs)
+        case .ppsr: reset(&ppsrWGConfigs)
+        }
+    }
+
+    private func applyWGTestResult(_ result: (String, Bool, Int), target: ProxyTarget) {
+        let (uniqueKey, reachable, _) = result
         func update(_ configs: inout [WireGuardConfig]) {
             if let idx = configs.firstIndex(where: { $0.uniqueKey == uniqueKey }) {
                 configs[idx].isReachable = reachable
                 configs[idx].lastTested = Date()
-                if !reachable { configs[idx].isEnabled = false }
+                if reachable {
+                    configs[idx].failCount = 0
+                    configs[idx].isEnabled = true
+                } else {
+                    configs[idx].failCount += 1
+                    if configs[idx].failCount >= 3 {
+                        configs[idx].isEnabled = false
+                    }
+                }
             }
         }
         switch target {
