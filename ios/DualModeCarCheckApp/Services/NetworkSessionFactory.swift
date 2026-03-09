@@ -46,9 +46,14 @@ class NetworkSessionFactory {
     private var ppsrOVPNIndex: Int = 0
 
     private let localProxy = LocalProxyServer.shared
+    private let vpnTunnel = VPNTunnelManager.shared
 
     func nextConfig(for target: ProxyRotationService.ProxyTarget) -> ActiveNetworkConfig {
         if deviceProxy.isEnabled, let config = deviceProxy.activeConfig {
+            if deviceProxy.isVPNActive {
+                logger.log("NetworkFactory: VPN tunnel active — traffic routed device-wide for \(target.rawValue)", category: .vpn, level: .debug)
+                return .direct
+            }
             if let localConfig = deviceProxy.effectiveProxyConfig, localProxy.isRunning {
                 logger.log("NetworkFactory: using local proxy 127.0.0.1:\(localConfig.port) → upstream \(config.label) for \(target.rawValue)", category: .network, level: .debug)
                 return .socks5(localConfig)
@@ -163,10 +168,18 @@ class NetworkSessionFactory {
             logger.log("WKWebView SOCKS5 ProxyConfiguration applied: \(proxy.displayString)", category: .proxy, level: .info)
 
         case .wireGuardDNS(let wg):
-            logger.log("WKWebView WG: \(wg.displayString) — requires VPN tunnel (Stage 3) or SOCKS5 proxy to route traffic. Currently direct.", category: .vpn, level: .warning)
+            if vpnTunnel.isConnected {
+                logger.log("WKWebView WG: \(wg.displayString) — VPN tunnel active, traffic routed device-wide", category: .vpn, level: .info)
+            } else {
+                logger.log("WKWebView WG: \(wg.displayString) — VPN tunnel not active, using DNS-level routing only", category: .vpn, level: .warning)
+            }
 
         case .openVPNProxy(let ovpn):
-            logger.log("WKWebView OVPN: \(ovpn.displayString) — requires VPN tunnel (Stage 3) to route traffic. Currently direct.", category: .vpn, level: .warning)
+            if vpnTunnel.isConnected {
+                logger.log("WKWebView OVPN: \(ovpn.displayString) — VPN tunnel active, traffic routed device-wide", category: .vpn, level: .info)
+            } else {
+                logger.log("WKWebView OVPN: \(ovpn.displayString) — VPN tunnel not active, direct connection", category: .vpn, level: .warning)
+            }
 
         case .direct:
             break

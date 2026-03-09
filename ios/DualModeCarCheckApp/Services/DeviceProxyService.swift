@@ -60,7 +60,19 @@ class DeviceProxyService {
 
     private let proxyService = ProxyRotationService.shared
     private let localProxy = LocalProxyServer.shared
+    private let vpnTunnel = VPNTunnelManager.shared
     private let logger = DebugLogger.shared
+
+    var vpnTunnelEnabled: Bool = false {
+        didSet {
+            persistSettings()
+            if isEnabled && vpnTunnelEnabled {
+                activateVPNTunnel()
+            } else if !vpnTunnelEnabled {
+                deactivateVPNTunnel()
+            }
+        }
+    }
 
     var localProxyEnabled: Bool = true {
         didSet {
@@ -158,7 +170,7 @@ class DeviceProxyService {
         }
         performRotation(reason: "Activated")
         restartRotationTimer()
-        logger.log("DeviceProxy: Unified IP mode ENABLED (localProxy: \(localProxyEnabled))", category: .network, level: .info)
+        logger.log("DeviceProxy: Unified IP mode ENABLED (localProxy: \(localProxyEnabled), vpnTunnel: \(vpnTunnelEnabled))", category: .network, level: .info)
     }
 
     private func deactivateUnifiedMode() {
@@ -171,6 +183,7 @@ class DeviceProxyService {
         activeSince = nil
         isActive = false
         localProxy.stop()
+        deactivateVPNTunnel()
         logger.log("DeviceProxy: Unified IP mode DISABLED", category: .network, level: .info)
     }
 
@@ -228,10 +241,42 @@ class DeviceProxyService {
         }
 
         syncLocalProxyUpstream()
+        syncVPNTunnel()
 
         isRotating = false
 
         logger.log("DeviceProxy: rotated → \(activeEndpointLabel ?? "Unknown") (reason: \(reason))", category: .network, level: .info)
+    }
+
+    private func activateVPNTunnel() {
+        guard vpnTunnel.isSupported else {
+            logger.log("DeviceProxy: VPN tunnel not supported on this device", category: .vpn, level: .warning)
+            return
+        }
+        Task {
+            await vpnTunnel.loadExistingManager()
+            syncVPNTunnel()
+        }
+    }
+
+    private func deactivateVPNTunnel() {
+        if vpnTunnel.isActive {
+            vpnTunnel.disconnect()
+        }
+    }
+
+    private func syncVPNTunnel() {
+        guard vpnTunnelEnabled, isEnabled else { return }
+        if case .wireGuardDNS(let wg) = activeConfig {
+            Task {
+                await vpnTunnel.reconnectWithConfig(wg)
+            }
+            logger.log("DeviceProxy: VPN tunnel connecting to WG \(wg.serverName)", category: .vpn, level: .info)
+        }
+    }
+
+    var isVPNActive: Bool {
+        vpnTunnelEnabled && vpnTunnel.isConnected
     }
 
     private func syncLocalProxyUpstream() {
@@ -294,6 +339,7 @@ class DeviceProxyService {
             "rotateOnBatch": rotateOnBatchStart,
             "rotateOnFingerprint": rotateOnFingerprintDetection,
             "localProxy": localProxyEnabled,
+            "vpnTunnel": vpnTunnelEnabled,
         ]
         UserDefaults.standard.set(dict, forKey: settingsKey)
     }
@@ -306,5 +352,6 @@ class DeviceProxyService {
         if let batch = dict["rotateOnBatch"] as? Bool { rotateOnBatchStart = batch }
         if let fp = dict["rotateOnFingerprint"] as? Bool { rotateOnFingerprintDetection = fp }
         if let lp = dict["localProxy"] as? Bool { localProxyEnabled = lp }
+        if let vt = dict["vpnTunnel"] as? Bool { vpnTunnelEnabled = vt }
     }
 }
