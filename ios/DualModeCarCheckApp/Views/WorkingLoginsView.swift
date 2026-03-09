@@ -28,7 +28,11 @@ struct WorkingLoginsView: View {
                     icon: "checkmark.shield.fill",
                     title: "No Working Cards",
                     subtitle: "Cards that pass PPSR tests will appear here.",
-                    accentColor: .green
+                    accentColor: .green,
+                    tips: [
+                        EmptyStateTip(icon: "play.fill", text: "Run tests from the Dashboard to start validating cards"),
+                        EmptyStateTip(icon: "doc.on.doc", text: "Working cards can be copied or exported as .txt")
+                    ]
                 )
             } else {
                 exportBar

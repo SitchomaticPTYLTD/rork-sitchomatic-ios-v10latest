@@ -6,8 +6,12 @@ struct LoginCredentialsListView: View {
     @State private var showImportSheet: Bool = false
     @State private var importText: String = ""
     @State private var searchText: String = ""
-    @State private var sortOption: SortOption = .dateAdded
-    @State private var sortAscending: Bool = false
+    @State private var sortOption: SortOption = {
+        if let raw = UserDefaults.standard.string(forKey: "login_cred_sort_option"),
+           let opt = SortOption(rawValue: raw) { return opt }
+        return .dateAdded
+    }()
+    @State private var sortAscending: Bool = UserDefaults.standard.bool(forKey: "login_cred_sort_ascending")
     @State private var filterStatus: CredentialStatus? = nil
     @State private var bulkText: String = ""
     @State private var showBulkImport: Bool = false
@@ -76,6 +80,12 @@ struct LoginCredentialsListView: View {
             }
         }
         .sheet(isPresented: $showImportSheet) { importSheet }
+        .onChange(of: sortOption) { _, newValue in
+            UserDefaults.standard.set(newValue.rawValue, forKey: "login_cred_sort_option")
+        }
+        .onChange(of: sortAscending) { _, newValue in
+            UserDefaults.standard.set(newValue, forKey: "login_cred_sort_ascending")
+        }
     }
 
     private var bulkImportBox: some View {
@@ -228,19 +238,24 @@ struct LoginCredentialsListView: View {
                         subtitle: "Import credentials to get started.",
                         accentColor: .green,
                         actionTitle: "Import Credentials",
-                        action: { showImportSheet = true }
+                        action: { showImportSheet = true },
+                        tips: [
+                            EmptyStateTip(icon: "doc.on.clipboard", text: "Paste in user:pass, user;pass, or user,pass format"),
+                            EmptyStateTip(icon: "list.bullet", text: "One credential per line for bulk import"),
+                            EmptyStateTip(icon: "arrow.triangle.2.circlepath", text: "Duplicates are automatically excluded")
+                        ]
                     )
                 } else {
                     EmptyStateView(
                         icon: "magnifyingglass",
                         title: "No Matches",
-                        subtitle: "No credentials match your current filters.",
+                        subtitle: "Try adjusting your filters or search terms.",
                         accentColor: .secondary
                     )
                 }
             } else {
                 List {
-                    ForEach(filteredCredentials) { cred in
+                    ForEach(Array(filteredCredentials.prefix(500))) { cred in
                         NavigationLink(value: cred.id) {
                             LoginSavedCredRow(credential: cred)
                         }
@@ -249,6 +264,16 @@ struct LoginCredentialsListView: View {
                             Button { vm.testSingleCredential(cred) } label: { Label("Test", systemImage: "play.fill") }.tint(.green)
                         }
                         .listRowBackground(Color(.secondarySystemGroupedBackground))
+                    }
+                    if filteredCredentials.count > 500 {
+                        HStack {
+                            Spacer()
+                            Text("Showing 500 of \(filteredCredentials.count) — use search to narrow results")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                        }
+                        .listRowBackground(Color.clear)
                     }
                 }
                 .listStyle(.insetGrouped)
@@ -266,13 +291,18 @@ struct LoginCredentialsListView: View {
                         subtitle: "Import credentials to get started.",
                         accentColor: .green,
                         actionTitle: "Import Credentials",
-                        action: { showImportSheet = true }
+                        action: { showImportSheet = true },
+                        tips: [
+                            EmptyStateTip(icon: "doc.on.clipboard", text: "Paste in user:pass, user;pass, or user,pass format"),
+                            EmptyStateTip(icon: "list.bullet", text: "One credential per line for bulk import"),
+                            EmptyStateTip(icon: "arrow.triangle.2.circlepath", text: "Duplicates are automatically excluded")
+                        ]
                     )
                 } else {
                     EmptyStateView(
                         icon: "magnifyingglass",
                         title: "No Matches",
-                        subtitle: "No credentials match your current filters.",
+                        subtitle: "Try adjusting your filters or search terms.",
                         accentColor: .secondary
                     )
                 }

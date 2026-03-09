@@ -28,6 +28,7 @@ nonisolated struct BINCountryInfo: Codable, Sendable {
 actor BINLookupService {
     static let shared = BINLookupService()
     private var cache: [String: PPSRBINData] = [:]
+    private var inFlight: [String: Task<PPSRBINData, Never>] = [:]
 
     private let lookupURLs: [String] = [
         "https://api.freebinchecker.com/bin/",
@@ -40,47 +41,57 @@ actor BINLookupService {
             return cached
         }
 
-        let data = await MainActor.run { PPSRBINData(bin: prefix) }
-
-        let config = URLSessionConfiguration.ephemeral
-        config.timeoutIntervalForRequest = 8
-        config.timeoutIntervalForResource = 10
-        config.waitsForConnectivity = false
-        let session = URLSession(configuration: config)
-        defer { session.invalidateAndCancel() }
-
-        for baseURL in lookupURLs {
-            guard let url = URL(string: "\(baseURL)\(prefix)") else { continue }
-
-            do {
-                var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData, timeoutInterval: 8)
-                request.setValue("application/json", forHTTPHeaderField: "Accept")
-                let (responseData, response) = try await session.data(for: request)
-
-                guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200, !responseData.isEmpty else {
-                    continue
-                }
-
-                let decoded = try JSONDecoder().decode(BINAPIResponse.self, from: responseData)
-
-                await MainActor.run {
-                    data.scheme = decoded.card?.scheme ?? ""
-                    data.type = decoded.card?.type ?? ""
-                    data.category = decoded.card?.category ?? ""
-                    data.issuer = decoded.issuer?.name ?? ""
-                    data.country = decoded.country?.name ?? ""
-                    data.countryCode = decoded.country?.alpha_2_code ?? ""
-                    data.isLoaded = true
-                }
-
-                cache[prefix] = data
-                return data
-            } catch {
-                continue
-            }
+        if let existing = inFlight[prefix] {
+            return await existing.value
         }
 
-        cache[prefix] = data
-        return data
+        let task = Task<PPSRBINData, Never> {
+            let data = await MainActor.run { PPSRBINData(bin: prefix) }
+
+            let config = URLSessionConfiguration.ephemeral
+            config.timeoutIntervalForRequest = 8
+            config.timeoutIntervalForResource = 10
+            config.waitsForConnectivity = false
+            let session = URLSession(configuration: config)
+            defer { session.invalidateAndCancel() }
+
+            for baseURL in lookupURLs {
+                guard let url = URL(string: "\(baseURL)\(prefix)") else { continue }
+
+                do {
+                    var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData, timeoutInterval: 8)
+                    request.setValue("application/json", forHTTPHeaderField: "Accept")
+                    let (responseData, response) = try await session.data(for: request)
+
+                    guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200, !responseData.isEmpty else {
+                        continue
+                    }
+
+                    let decoded = try JSONDecoder().decode(BINAPIResponse.self, from: responseData)
+
+                    await MainActor.run {
+                        data.scheme = decoded.card?.scheme ?? ""
+                        data.type = decoded.card?.type ?? ""
+                        data.category = decoded.card?.category ?? ""
+                        data.issuer = decoded.issuer?.name ?? ""
+                        data.country = decoded.country?.name ?? ""
+                        data.countryCode = decoded.country?.alpha_2_code ?? ""
+                        data.isLoaded = true
+                    }
+
+                    return data
+                } catch {
+                    continue
+                }
+            }
+
+            return data
+        }
+
+        inFlight[prefix] = task
+        let result = await task.value
+        cache[prefix] = result
+        inFlight.removeValue(forKey: prefix)
+        return result
     }
 }

@@ -16,7 +16,11 @@ struct LoginWorkingListView: View {
                     icon: "checkmark.shield.fill",
                     title: "No Working Logins",
                     subtitle: "Credentials that pass login tests will appear here.",
-                    accentColor: .green
+                    accentColor: .green,
+                    tips: [
+                        EmptyStateTip(icon: "play.fill", text: "Run tests from the Dashboard to start validating credentials"),
+                        EmptyStateTip(icon: "doc.on.doc", text: "Working logins can be copied or exported as .txt")
+                    ]
                 )
             } else {
                 exportBar

@@ -265,13 +265,18 @@ struct SavedCredentialsView: View {
                         subtitle: "Import cards to get started.",
                         accentColor: .teal,
                         actionTitle: "Import Cards",
-                        action: { showImportSheet = true }
+                        action: { showImportSheet = true },
+                        tips: [
+                            EmptyStateTip(icon: "doc.on.clipboard", text: "Paste cards from clipboard in pipe, colon, or comma format"),
+                            EmptyStateTip(icon: "doc.badge.plus", text: "Import CSV/TSV files via the file browser"),
+                            EmptyStateTip(icon: "arrow.triangle.2.circlepath", text: "Duplicates are automatically excluded")
+                        ]
                     )
                 } else {
                     EmptyStateView(
                         icon: "magnifyingglass",
                         title: "No Matches",
-                        subtitle: "No cards match your current filters.",
+                        subtitle: "Try adjusting your filters or search terms.",
                         accentColor: .secondary
                     )
                 }
@@ -324,13 +329,18 @@ struct SavedCredentialsView: View {
                         subtitle: "Import cards to get started.",
                         accentColor: .teal,
                         actionTitle: "Import Cards",
-                        action: { showImportSheet = true }
+                        action: { showImportSheet = true },
+                        tips: [
+                            EmptyStateTip(icon: "doc.on.clipboard", text: "Paste cards from clipboard in pipe, colon, or comma format"),
+                            EmptyStateTip(icon: "doc.badge.plus", text: "Import CSV/TSV files via the file browser"),
+                            EmptyStateTip(icon: "arrow.triangle.2.circlepath", text: "Duplicates are automatically excluded")
+                        ]
                     )
                 } else {
                     EmptyStateView(
                         icon: "magnifyingglass",
                         title: "No Matches",
-                        subtitle: "No cards match your current filters.",
+                        subtitle: "Try adjusting your filters or search terms.",
                         accentColor: .secondary
                     )
                 }

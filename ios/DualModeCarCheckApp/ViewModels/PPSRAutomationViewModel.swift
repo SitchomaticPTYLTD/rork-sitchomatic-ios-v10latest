@@ -40,9 +40,23 @@ class PPSRAutomationViewModel {
     var showBatchResultPopup: Bool = false
     var consecutiveUnusualFailures: Int = 0
     var lastBatchResult: BatchResult?
+    var batchTotalCount: Int = 0
+    var batchCompletedCount: Int = 0
+    var batchProgress: Double {
+        guard batchTotalCount > 0 else { return 0 }
+        return Double(batchCompletedCount) / Double(batchTotalCount)
+    }
     var testTimeout: TimeInterval = 30
-    var cardSortOption: CardSortOption = .dateAdded
-    var cardSortAscending: Bool = false
+    var cardSortOption: CardSortOption = {
+        if let raw = UserDefaults.standard.string(forKey: "ppsr_card_sort_option"),
+           let opt = CardSortOption(rawValue: raw) { return opt }
+        return .dateAdded
+    }() {
+        didSet { UserDefaults.standard.set(cardSortOption.rawValue, forKey: "ppsr_card_sort_option") }
+    }
+    var cardSortAscending: Bool = UserDefaults.standard.bool(forKey: "ppsr_card_sort_ascending") {
+        didSet { UserDefaults.standard.set(cardSortAscending, forKey: "ppsr_card_sort_ascending") }
+    }
 
     nonisolated enum CardSortOption: String, CaseIterable, Identifiable, Sendable {
         case dateAdded = "Date Added"
@@ -56,6 +70,7 @@ class PPSRAutomationViewModel {
     }
     var diagnosticReport: DiagnosticReport?
     var isDiagnosticRunning: Bool = false
+    private var connectionTestTask: Task<Void, Never>?
     var lastHealthCheck: (healthy: Bool, detail: String)?
     var autoHealAttempted: Bool = false
     var consecutiveConnectionFailures: Int = 0
@@ -264,6 +279,15 @@ class PPSRAutomationViewModel {
     }
 
     func testConnection() async {
+        connectionTestTask?.cancel()
+        let task = Task {
+            await _testConnection()
+        }
+        connectionTestTask = task
+        await task.value
+    }
+
+    private func _testConnection() async {
         connectionStatus = .connecting
         log("Testing connection to \(LoginWebSession.targetURL.absoluteString)...")
 
@@ -634,6 +658,8 @@ class PPSRAutomationViewModel {
         isPaused = false
         isStopping = false
         batchStartTime = Date()
+        batchTotalCount = cardsToTest.count
+        batchCompletedCount = 0
         autoRetryBackoffCounts.removeAll()
         log("Starting batch test: \(cardsToTest.count) cards, max \(maxConcurrency) concurrent, stealth: \(stealthEnabled ? "ON" : "OFF")")
         logger.log("PPSR BATCH START: \(cardsToTest.count) cards, concurrency=\(maxConcurrency), stealth=\(stealthEnabled)", category: .ppsr, level: .info, metadata: ["count": "\(cardsToTest.count)"])
@@ -679,6 +705,7 @@ class PPSRAutomationViewModel {
                         let outcome = await engine.runCheck(check, timeout: testTimeout)
                         await MainActor.run {
                             self.activeTestCount -= 1
+                            self.batchCompletedCount += 1
                             self.handleOutcome(outcome, card: card, check: check, vin: vin)
 
                             switch outcome {
@@ -755,6 +782,8 @@ class PPSRAutomationViewModel {
 
         isPaused = false
         isStopping = false
+        batchTotalCount = cardsToTest.count
+        batchCompletedCount = 0
         log("Starting selected test: \(cardsToTest.count) cards, max \(maxConcurrency) concurrent")
         isRunning = true
         startHeartbeatMonitor()
@@ -795,6 +824,7 @@ class PPSRAutomationViewModel {
                         let outcome = await engine.runCheck(check, timeout: testTimeout)
                         await MainActor.run {
                             self.activeTestCount -= 1
+                            self.batchCompletedCount += 1
                             self.handleOutcome(outcome, card: card, check: check, vin: vin)
                             switch outcome {
                             case .pass: batchWorking += 1

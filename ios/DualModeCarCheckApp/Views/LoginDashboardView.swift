@@ -152,40 +152,59 @@ struct LoginDashboardView: View {
     }
 
     private var testingBanner: some View {
-        HStack(spacing: 10) {
-            ProgressView()
-                .tint(.teal)
-            VStack(alignment: .leading, spacing: 1) {
-                HStack(spacing: 6) {
-                    Text("Testing in Progress")
-                        .font(.subheadline.bold())
-                        .foregroundStyle(.teal)
-                    if vm.isPaused {
-                        Text(vm.pauseCountdown > 0 ? "PAUSED \(vm.pauseCountdown)s" : "PAUSED")
-                            .font(.system(.caption2, design: .monospaced, weight: .heavy))
-                            .foregroundStyle(.orange)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(Color.orange.opacity(0.15))
-                            .clipShape(Capsule())
-                            .contentTransition(.numericText(value: Double(vm.pauseCountdown)))
-                            .animation(.snappy, value: vm.pauseCountdown)
+        VStack(spacing: 10) {
+            HStack(spacing: 10) {
+                ProgressView()
+                    .tint(.teal)
+                VStack(alignment: .leading, spacing: 1) {
+                    HStack(spacing: 6) {
+                        Text("Testing in Progress")
+                            .font(.subheadline.bold())
+                            .foregroundStyle(.teal)
+                        if vm.isPaused {
+                            Text(vm.pauseCountdown > 0 ? "PAUSED \(vm.pauseCountdown)s" : "PAUSED")
+                                .font(.system(.caption2, design: .monospaced, weight: .heavy))
+                                .foregroundStyle(.orange)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Color.orange.opacity(0.15))
+                                .clipShape(Capsule())
+                                .contentTransition(.numericText(value: Double(vm.pauseCountdown)))
+                                .animation(.snappy, value: vm.pauseCountdown)
+                        }
+                        if vm.isStopping {
+                            Text("STOPPING")
+                                .font(.system(.caption2, design: .monospaced, weight: .heavy))
+                                .foregroundStyle(.red)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Color.red.opacity(0.15))
+                                .clipShape(Capsule())
+                        }
                     }
-                    if vm.isStopping {
-                        Text("STOPPING")
-                            .font(.system(.caption2, design: .monospaced, weight: .heavy))
-                            .foregroundStyle(.red)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(Color.red.opacity(0.15))
-                            .clipShape(Capsule())
+                    Text("\(vm.activeTestCount) active · \(vm.untestedCards.count) queued · \(vm.testingCards.count) testing")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+
+            if vm.batchTotalCount > 0 {
+                VStack(spacing: 4) {
+                    ProgressView(value: vm.batchProgress)
+                        .tint(.teal)
+                    HStack {
+                        Text("\(vm.batchCompletedCount)/\(vm.batchTotalCount) completed")
+                            .font(.system(.caption2, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Text("\(Int(vm.batchProgress * 100))%")
+                            .font(.system(.caption2, design: .monospaced, weight: .bold))
+                            .foregroundStyle(.teal)
+                            .contentTransition(.numericText())
                     }
                 }
-                Text("\(vm.activeTestCount) active · \(vm.untestedCards.count) queued · \(vm.testingCards.count) testing")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
-            Spacer()
         }
         .padding(14)
         .background(Color.teal.opacity(0.08))
@@ -401,6 +420,11 @@ struct LoginDashboardView: View {
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                     }
+                    if vm.connectionStatus == .error {
+                        Text(connectionGuidance)
+                            .font(.caption2)
+                            .foregroundStyle(.orange)
+                    }
                 }
                 Spacer()
                 if vm.isDiagnosticRunning {
@@ -474,6 +498,28 @@ struct LoginDashboardView: View {
         .padding(14)
         .background(Color(.secondarySystemGroupedBackground))
         .clipShape(.rect(cornerRadius: 14))
+    }
+
+    private var connectionGuidance: String {
+        if let report = vm.diagnosticReport {
+            let failedSteps = report.steps.filter { $0.status == .failed }
+            if failedSteps.contains(where: { $0.name == "System DNS" }) {
+                return "DNS resolution failed — try enabling Stealth Mode or switching to a different network."
+            }
+            if failedSteps.contains(where: { $0.detail.contains("403") || $0.detail.contains("blocked") }) {
+                return "Server may be blocking requests — enable Stealth Mode and reduce concurrency."
+            }
+            if failedSteps.contains(where: { $0.detail.contains("timed out") }) {
+                return "Connection timed out — check your internet or try a different proxy/VPN."
+            }
+            if failedSteps.contains(where: { $0.detail.contains("CAPTCHA") }) {
+                return "CAPTCHA detected — enable Stealth Mode and set concurrency to 1."
+            }
+        }
+        if vm.consecutiveConnectionFailures >= 3 {
+            return "Multiple failures detected — try switching networks or checking proxy settings."
+        }
+        return "Run diagnostics to identify the issue."
     }
 
     private func stepIcon(_ status: DiagnosticStep.StepStatus) -> String {

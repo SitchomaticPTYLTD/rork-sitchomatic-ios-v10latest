@@ -24,6 +24,12 @@ class LoginViewModel {
     var showBatchResultPopup: Bool = false
     var lastBatchResult: BatchResult?
     var consecutiveUnusualFailures: Int = 0
+    var batchTotalCount: Int = 0
+    var batchCompletedCount: Int = 0
+    var batchProgress: Double {
+        guard batchTotalCount > 0 else { return 0 }
+        return Double(batchCompletedCount) / Double(batchTotalCount)
+    }
     var autoRetryEnabled: Bool = true
     var autoRetryMaxAttempts: Int = 3
     private var autoRetryBackoffCounts: [String: Int] = [:]
@@ -99,6 +105,7 @@ class LoginViewModel {
     private var settingsSaveTask: Task<Void, Never>?
     private var credentialsSaveTask: Task<Void, Never>?
     private var heartbeatTask: Task<Void, Never>?
+    private var connectionTestTask: Task<Void, Never>?
     private let sessionHeartbeatTimeout: TimeInterval = 90
 
     init() {
@@ -350,6 +357,13 @@ class LoginViewModel {
     }
 
     func testConnection() async {
+        connectionTestTask?.cancel()
+        let task = Task { await _testConnection() }
+        connectionTestTask = task
+        await task.value
+    }
+
+    private func _testConnection() async {
         connectionStatus = .connecting
         let testURL = getNextTestURL()
         log("Testing connection to \(testURL.host ?? "unknown")...")
@@ -660,6 +674,8 @@ class LoginViewModel {
 
     private func testSingleSiteBatch(_ credsToTest: [LoginCredential]) {
         isRunning = true
+        batchTotalCount = credsToTest.count
+        batchCompletedCount = 0
         startHeartbeatMonitor()
         backgroundService.beginExtendedBackgroundExecution(reason: "Login batch test")
         persistence.saveTestQueue(credentialIds: credsToTest.map(\.id))
@@ -700,6 +716,7 @@ class LoginViewModel {
                         let outcome = await engine.runLoginTest(attempt, targetURL: testURL, timeout: testTimeout)
                         await MainActor.run {
                             self.activeTestCount -= 1
+                            self.batchCompletedCount += 1
                             self.handleOutcome(outcome, credential: cred, attempt: attempt)
 
                             switch outcome {
@@ -722,6 +739,8 @@ class LoginViewModel {
 
     private func testDualSite(_ credsToTest: [LoginCredential]) {
         isRunning = true
+        batchTotalCount = credsToTest.count
+        batchCompletedCount = 0
         startHeartbeatMonitor()
         backgroundService.beginExtendedBackgroundExecution(reason: "Login dual-site batch test")
         persistence.saveTestQueue(credentialIds: credsToTest.map(\.id))
@@ -767,6 +786,7 @@ class LoginViewModel {
                         let outcome = await targetEngine.runLoginTest(attempt, targetURL: testURL, timeout: testTimeout)
                         await MainActor.run {
                             self.activeTestCount -= 1
+                            self.batchCompletedCount += 1
                             attempt.logs.insert(PPSRLogEntry(message: "[\(siteLabel)] Tested on \(testURL.host ?? "")", level: .info), at: 0)
                             self.handleOutcome(outcome, credential: cred, attempt: attempt)
 

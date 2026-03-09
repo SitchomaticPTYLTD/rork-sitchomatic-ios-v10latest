@@ -206,32 +206,51 @@ struct LoginDashboardContentView: View {
     }
 
     private var testingBanner: some View {
-        HStack(spacing: 10) {
-            ProgressView().tint(accentColor)
-            VStack(alignment: .leading, spacing: 1) {
-                HStack(spacing: 6) {
-                    Text("Testing in Progress").font(.subheadline.bold()).foregroundStyle(accentColor)
-                    if vm.isPaused {
-                        Text(vm.pauseCountdown > 0 ? "PAUSED \(vm.pauseCountdown)s" : "PAUSED")
-                            .font(.system(.caption2, design: .monospaced, weight: .heavy))
-                            .foregroundStyle(.orange)
-                            .padding(.horizontal, 6).padding(.vertical, 2)
-                            .background(Color.orange.opacity(0.15)).clipShape(Capsule())
-                            .contentTransition(.numericText(value: Double(vm.pauseCountdown)))
-                            .animation(.snappy, value: vm.pauseCountdown)
+        VStack(spacing: 10) {
+            HStack(spacing: 10) {
+                ProgressView().tint(accentColor)
+                VStack(alignment: .leading, spacing: 1) {
+                    HStack(spacing: 6) {
+                        Text("Testing in Progress").font(.subheadline.bold()).foregroundStyle(accentColor)
+                        if vm.isPaused {
+                            Text(vm.pauseCountdown > 0 ? "PAUSED \(vm.pauseCountdown)s" : "PAUSED")
+                                .font(.system(.caption2, design: .monospaced, weight: .heavy))
+                                .foregroundStyle(.orange)
+                                .padding(.horizontal, 6).padding(.vertical, 2)
+                                .background(Color.orange.opacity(0.15)).clipShape(Capsule())
+                                .contentTransition(.numericText(value: Double(vm.pauseCountdown)))
+                                .animation(.snappy, value: vm.pauseCountdown)
+                        }
+                        if vm.isStopping {
+                            Text("STOPPING")
+                                .font(.system(.caption2, design: .monospaced, weight: .heavy))
+                                .foregroundStyle(.red)
+                                .padding(.horizontal, 6).padding(.vertical, 2)
+                                .background(Color.red.opacity(0.15)).clipShape(Capsule())
+                        }
                     }
-                    if vm.isStopping {
-                        Text("STOPPING")
-                            .font(.system(.caption2, design: .monospaced, weight: .heavy))
-                            .foregroundStyle(.red)
-                            .padding(.horizontal, 6).padding(.vertical, 2)
-                            .background(Color.red.opacity(0.15)).clipShape(Capsule())
+                    Text("\(vm.activeTestCount) active · \(vm.untestedCredentials.count) queued · \(vm.testingCredentials.count) testing")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+
+            if vm.batchTotalCount > 0 {
+                VStack(spacing: 4) {
+                    ProgressView(value: vm.batchProgress)
+                        .tint(accentColor)
+                    HStack {
+                        Text("\(vm.batchCompletedCount)/\(vm.batchTotalCount) completed")
+                            .font(.system(.caption2, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Text("\(Int(vm.batchProgress * 100))%")
+                            .font(.system(.caption2, design: .monospaced, weight: .bold))
+                            .foregroundStyle(accentColor)
+                            .contentTransition(.numericText())
                     }
                 }
-                Text("\(vm.activeTestCount) active · \(vm.untestedCredentials.count) queued · \(vm.testingCredentials.count) testing")
-                    .font(.caption).foregroundStyle(.secondary)
             }
-            Spacer()
         }
         .padding(14)
         .background(Color.green.opacity(0.08))
