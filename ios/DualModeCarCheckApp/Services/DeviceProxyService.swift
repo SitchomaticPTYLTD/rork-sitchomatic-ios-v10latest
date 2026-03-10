@@ -257,6 +257,11 @@ class DeviceProxyService {
         isRotating = true
         let previousLabel = activeEndpointLabel ?? "None"
 
+        if wireProxyTunnelEnabled && wireProxyBridge.isActive {
+            wireProxyBridge.stop()
+            localProxy.enableWireProxyMode(false)
+        }
+
         let config = resolveNextConfig()
         activeConfig = config
         activeSince = Date()
@@ -390,6 +395,43 @@ class DeviceProxyService {
 
     var wireProxyStats: WireProxyStats {
         wireProxyBridge.stats
+    }
+
+    func reconnectWireProxy() {
+        guard wireProxyTunnelEnabled, isEnabled else { return }
+        wireProxyBridge.stop()
+        localProxy.enableWireProxyMode(false)
+        logger.log("DeviceProxy: WireProxy reconnect requested", category: .vpn, level: .info)
+        syncWireProxyTunnel()
+    }
+
+    func rotateWireProxyConfig() {
+        guard wireProxyTunnelEnabled, isEnabled else { return }
+        wireProxyBridge.stop()
+        localProxy.enableWireProxyMode(false)
+        let config = resolveNextConfig()
+        activeConfig = config
+        activeSince = Date()
+
+        switch config {
+        case .wireGuardDNS(let wg):
+            activeEndpointLabel = "WG: \(wg.fileName)"
+            activeConnectionType = "WireGuard"
+            Task {
+                await wireProxyBridge.start(with: wg)
+                if wireProxyBridge.isActive {
+                    localProxy.enableWireProxyMode(true)
+                    logger.log("DeviceProxy: WireProxy rotated to \(wg.serverName)", category: .vpn, level: .success)
+                } else {
+                    localProxy.enableWireProxyMode(false)
+                    logger.log("DeviceProxy: WireProxy rotation failed for \(wg.serverName)", category: .vpn, level: .error)
+                }
+            }
+        default:
+            activeEndpointLabel = config.label
+            activeConnectionType = "Direct"
+            logger.log("DeviceProxy: WireProxy rotation landed on non-WG config, tunnel stopped", category: .vpn, level: .warning)
+        }
     }
 
     var effectiveProxyConfig: ProxyConfig? {

@@ -97,7 +97,7 @@ Currently, WireGuard and OpenVPN configs are assigned to WebViews but **no actua
 - 100% userspace — works in simulator, no NetworkExtension required
 
 **Remaining stages:**
-- Stage 6: Full Integration, UI & Rotation (wire everything into DeviceProxyService)
+- ~~Stage 6: Full Integration, UI & Rotation (wire everything into DeviceProxyService)~~ ✅ Done
 
 ---
 
@@ -140,6 +140,34 @@ Currently, WireGuard and OpenVPN configs are assigned to WebViews but **no actua
 
 ---
 
+## Stage 6 — Full Integration, UI & Rotation ✅ COMPLETE
+
+**What changed:**
+- [x] `WireProxyDashboardView` — dedicated real-time dashboard for the WireProxy tunnel: tunnel status overview with uptime/connection counters, WireGuard session metrics (handshake count, packets sent/received, bytes, last handshake time), DNS & bridge stats (queries, cache hits, cache size, hit rate), TCP session manager stats (active/total/connections/failed, success rate), local proxy integration view (routing mode, listening address, connection counts), actions (start/stop/reconnect tunnel, rotate config)
+- [x] `DeviceNetworkSettingsView` — new WireProxy Tunnel section (Stage 6): toggle for userspace WG tunnel, live status indicator with uptime, bandwidth up/down/DNS stats, WG session summary (status, handshake count, packet counts), error display, reconnect/rotate config buttons, navigation link to WireProxy Dashboard
+- [x] Enhanced `DeviceProxyService` — `reconnectWireProxy()` method (stops bridge, re-syncs tunnel), `rotateWireProxyConfig()` method (stops bridge, resolves next WG config, starts new tunnel), rotation-aware `performRotation()` (stops active wireproxy tunnel before rotating, then re-syncs)
+- [x] Enhanced `NetworkSessionFactory` — wireproxy-aware priority in `nextConfig()` (WireProxy tunnel active → local proxy takes priority over VPN tunnel), wireproxy-aware `resolveEffectiveConfig()` for WKWebView routing
+
+**Files created:**
+- `Views/WireProxyDashboardView.swift` — WireProxy tunnel monitoring dashboard
+
+**Files modified:**
+- `Views/DeviceNetworkSettingsView.swift` — Added WireProxy Tunnel section with full status/controls
+- `Services/DeviceProxyService.swift` — Added reconnect, rotate, rotation-aware tunnel lifecycle
+- `Services/NetworkSessionFactory.swift` — WireProxy priority in config resolution chain
+
+**Features delivered:**
+- WireProxy Dashboard — dedicated view showing tunnel status, WG session metrics, DNS/TCP stats, local proxy integration, start/stop/reconnect/rotate actions
+- Inline tunnel controls — toggle, status, bandwidth, WG session summary directly in Network Settings
+- Rotation-aware tunnel lifecycle — when rotation fires, active wireproxy tunnel is cleanly stopped and restarted with the new WG config
+- Manual reconnect — restart tunnel with current config without full rotation
+- Manual rotate — pick next WG config and establish new tunnel
+- NetworkSessionFactory wireproxy priority — when wireproxy is active, all traffic routes through `127.0.0.1:18080 → WG tunnel` before checking VPN tunnel or direct SOCKS5
+- Complete fallback chain: WireProxy tunnel → VPN tunnel → local proxy (upstream SOCKS5) → direct SOCKS5 → direct connection
+- 100% userspace — entire stack works in simulator, no provisioning required
+
+---
+
 ## Summary
 
 | Stage | What It Does | Works In Simulator? | Status |
@@ -149,4 +177,4 @@ Currently, WireGuard and OpenVPN configs are assigned to WebViews but **no actua
 | 3 | Device-wide VPN tunnel via NetworkExtension | ❌ Real device only | ✅ Complete |
 | 4 | WireGuard crypto + Noise handshake + encrypted UDP transport | ✅ Yes | ✅ Complete |
 | 5 | Userspace TCP/IP stack + WireProxy SOCKS5 bridge | ✅ Yes | ✅ Complete |
-| 6 | Full integration, UI & rotation | ✅ Yes | Pending |
+| 6 | Full integration, UI & rotation | ✅ Yes | ✅ Complete |

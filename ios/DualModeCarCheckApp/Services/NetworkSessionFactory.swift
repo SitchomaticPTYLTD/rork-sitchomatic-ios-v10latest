@@ -47,9 +47,15 @@ class NetworkSessionFactory {
 
     private let localProxy = LocalProxyServer.shared
     private let vpnTunnel = VPNTunnelManager.shared
+    private let wireProxyBridge = WireProxyBridge.shared
 
     func nextConfig(for target: ProxyRotationService.ProxyTarget) -> ActiveNetworkConfig {
         if deviceProxy.isEnabled, let config = deviceProxy.activeConfig {
+            if deviceProxy.isWireProxyActive, localProxy.isRunning, localProxy.wireProxyMode {
+                let localConfig = localProxy.localProxyConfig
+                logger.log("NetworkFactory: WireProxy tunnel active → 127.0.0.1:\(localConfig.port) for \(target.rawValue)", category: .vpn, level: .debug)
+                return .socks5(localConfig)
+            }
             if deviceProxy.isVPNActive {
                 logger.log("NetworkFactory: VPN tunnel active — traffic routed device-wide for \(target.rawValue)", category: .vpn, level: .debug)
                 return .direct
@@ -190,6 +196,9 @@ class NetworkSessionFactory {
 
     private func resolveEffectiveConfig(_ config: ActiveNetworkConfig) -> ActiveNetworkConfig {
         if deviceProxy.isEnabled {
+            if deviceProxy.isWireProxyActive, localProxy.isRunning, localProxy.wireProxyMode {
+                return .socks5(localProxy.localProxyConfig)
+            }
             if deviceProxy.isVPNActive {
                 return .direct
             }
@@ -202,6 +211,9 @@ class NetworkSessionFactory {
         case .socks5:
             return config
         case .wireGuardDNS, .openVPNProxy:
+            if localProxy.isRunning, localProxy.wireProxyMode, wireProxyBridge.isActive {
+                return .socks5(localProxy.localProxyConfig)
+            }
             if localProxy.isRunning, localProxy.upstreamProxy != nil {
                 return .socks5(localProxy.localProxyConfig)
             }

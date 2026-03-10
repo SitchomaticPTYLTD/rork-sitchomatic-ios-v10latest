@@ -22,6 +22,7 @@ struct DeviceNetworkSettingsView: View {
     private let localProxy = LocalProxyServer.shared
     private let vpnTunnel = VPNTunnelManager.shared
     private let healthMonitor = ProxyHealthMonitor.shared
+    private let wireProxyBridge = WireProxyBridge.shared
     private let logger = DebugLogger.shared
     @State private var rotationTimerTick: Int = 0
     @State private var rotationTickTimer: Timer?
@@ -31,6 +32,7 @@ struct DeviceNetworkSettingsView: View {
             deviceWideBanner
             unifiedIPSection
             if deviceProxy.isEnabled {
+                wireProxyTunnelSection
                 localProxySection
                 vpnTunnelSection
             }
@@ -316,6 +318,203 @@ struct DeviceNetworkSettingsView: View {
             }
         } footer: {
             Text("When enabled, the entire app uses a single IP at a time instead of per-session rotation. The active endpoint rotates automatically based on your selected schedule.")
+        }
+    }
+
+    // MARK: - WireProxy Tunnel (Stage 6)
+
+    private var wireProxyTunnelSection: some View {
+        Section {
+            Toggle(isOn: Binding(
+                get: { deviceProxy.wireProxyTunnelEnabled },
+                set: { deviceProxy.wireProxyTunnelEnabled = $0 }
+            )) {
+                HStack(spacing: 10) {
+                    ZStack {
+                        Circle()
+                            .fill(wireProxyBridge.isActive ? Color.purple.opacity(0.15) : Color.gray.opacity(0.1))
+                            .frame(width: 36, height: 36)
+                        Image(systemName: "shield.lefthalf.filled.trianglebadge.exclamationmark")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(wireProxyBridge.isActive ? .purple : .secondary)
+                    }
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("WireProxy Tunnel")
+                            .font(.subheadline.bold())
+                        Text("Userspace WG tunnel (no VPN needed)")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .tint(.purple)
+            .sensoryFeedback(.impact(weight: .heavy), trigger: deviceProxy.wireProxyTunnelEnabled)
+
+            if deviceProxy.wireProxyTunnelEnabled {
+                HStack(spacing: 10) {
+                    Circle()
+                        .fill(wireProxyStatusColor)
+                        .frame(width: 8, height: 8)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(wireProxyBridge.status.rawValue)
+                            .font(.system(.caption, design: .monospaced, weight: .bold))
+                            .foregroundStyle(wireProxyStatusColor)
+                        if wireProxyBridge.isActive {
+                            Text("Uptime: \(wireProxyBridge.uptimeString)")
+                                .font(.system(.caption2, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    Spacer()
+                    if wireProxyBridge.isActive {
+                        VStack(alignment: .trailing, spacing: 2) {
+                            Text("\(wireProxyBridge.stats.tcpSessionsActive) tcp")
+                                .font(.system(.caption2, design: .monospaced, weight: .bold))
+                                .foregroundStyle(.purple)
+                            Text("\(wireProxyBridge.stats.connectionsServed) served")
+                                .font(.system(.caption2, design: .monospaced))
+                                .foregroundStyle(.tertiary)
+                        }
+                    }
+                }
+
+                if wireProxyBridge.isActive {
+                    HStack(spacing: 16) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack(spacing: 4) {
+                                Image(systemName: "arrow.up")
+                                    .font(.system(size: 9, weight: .bold))
+                                    .foregroundStyle(.blue)
+                                Text("Up")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Text(formatBytes(wireProxyBridge.stats.bytesUpstream))
+                                .font(.system(.caption, design: .monospaced, weight: .bold))
+                        }
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack(spacing: 4) {
+                                Image(systemName: "arrow.down")
+                                    .font(.system(size: 9, weight: .bold))
+                                    .foregroundStyle(.green)
+                                Text("Down")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Text(formatBytes(wireProxyBridge.stats.bytesDownstream))
+                                .font(.system(.caption, design: .monospaced, weight: .bold))
+                        }
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("DNS")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                            Text("\(wireProxyBridge.stats.dnsQueriesTotal) queries")
+                                .font(.system(.caption, design: .monospaced, weight: .bold))
+                                .foregroundStyle(.cyan)
+                        }
+                        Spacer()
+                    }
+
+                    let wgStats = wireProxyBridge.wgSessionStats
+                    HStack(spacing: 10) {
+                        Image(systemName: "lock.fill")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundStyle(.purple)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("WG Session")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                            Text("\(wireProxyBridge.wgSessionStatus.rawValue) · \(wgStats.handshakeCount) handshakes")
+                                .font(.system(.caption, design: .monospaced, weight: .medium))
+                        }
+                        Spacer()
+                        Text("\(wgStats.packetsSent)/\(wgStats.packetsReceived) pkt")
+                            .font(.system(.caption2, design: .monospaced))
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+
+                if let error = wireProxyBridge.lastError {
+                    HStack(spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.caption2)
+                            .foregroundStyle(.orange)
+                        Text(error)
+                            .font(.system(.caption2, design: .monospaced))
+                            .foregroundStyle(.orange)
+                            .lineLimit(2)
+                    }
+                }
+
+                HStack(spacing: 12) {
+                    if wireProxyBridge.isActive {
+                        Button {
+                            deviceProxy.reconnectWireProxy()
+                        } label: {
+                            Label("Reconnect", systemImage: "arrow.clockwise.circle.fill")
+                                .font(.caption.bold())
+                                .foregroundStyle(.orange)
+                        }
+
+                        Button {
+                            deviceProxy.rotateWireProxyConfig()
+                        } label: {
+                            Label("Rotate Config", systemImage: "arrow.triangle.2.circlepath.circle.fill")
+                                .font(.caption.bold())
+                                .foregroundStyle(.purple)
+                        }
+                        .sensoryFeedback(.impact(weight: .heavy), trigger: deviceProxy.activeEndpointLabel)
+                    }
+                }
+
+                NavigationLink {
+                    WireProxyDashboardView()
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "chart.bar.xaxis")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(.purple)
+                        Text("WireProxy Dashboard")
+                            .font(.subheadline.bold())
+                        Spacer()
+                        Text(wireProxyBridge.status.rawValue)
+                            .font(.system(.caption2, design: .monospaced))
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+            }
+        } header: {
+            HStack {
+                Image(systemName: "shield.lefthalf.filled.trianglebadge.exclamationmark")
+                Text("WireProxy Tunnel (Stage 6)")
+                Spacer()
+                if wireProxyBridge.isActive {
+                    Text("ACTIVE")
+                        .font(.system(.caption2, design: .monospaced, weight: .bold))
+                        .foregroundStyle(.purple)
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(Color.purple.opacity(0.12))
+                        .clipShape(Capsule())
+                } else if wireProxyBridge.status == .connecting || wireProxyBridge.status == .reconnecting {
+                    Text("CONNECTING")
+                        .font(.system(.caption2, design: .monospaced, weight: .bold))
+                        .foregroundStyle(.orange)
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(Color.orange.opacity(0.12))
+                        .clipShape(Capsule())
+                }
+            }
+        } footer: {
+            Text("Userspace WireGuard tunnel routes all traffic through the encrypted WG tunnel without requiring a VPN profile or NetworkExtension. Works in simulator. Uses the active WireGuard config from rotation.")
+        }
+    }
+
+    private var wireProxyStatusColor: Color {
+        switch wireProxyBridge.status {
+        case .established: .purple
+        case .connecting, .reconnecting: .orange
+        case .stopped: .secondary
+        case .failed: .red
         }
     }
 
