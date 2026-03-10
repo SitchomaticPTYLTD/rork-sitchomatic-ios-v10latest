@@ -1,7 +1,7 @@
 import Foundation
 
 nonisolated let kDefaultNickKey = "68b9f594ef76d1ec4ef82eb3e0c0a93dfe0ad4bd091a38965218d1f23340c78d"
-nonisolated let kDefaultPoliKey = "e9f2ab075820d8ccc3362eadc4bbadb335571961002b5d5d606cbe4083680625"
+nonisolated let kDefaultPoliKey = "e9f2ab92d0403a4715baf19e67d70b5ebc2b860c4f17bb5396085bb10dedf579"
 
 @MainActor
 class NordVPNKeyStore {
