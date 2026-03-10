@@ -73,6 +73,35 @@ Currently, WireGuard and OpenVPN configs are assigned to WebViews but **no actua
 
 ---
 
+## Stage 4 — WireGuard Crypto Foundation + Noise Handshake + Encrypted Transport ✅ COMPLETE
+
+**What changed:**
+- [x] `Blake2s` — pure Swift BLAKE2s hash implementation per RFC 7693, 32-byte output, keyed hash support, no external dependencies
+- [x] `WireGuardCrypto` — HMAC-BLAKE2s, KDF1/KDF2/KDF3 (WireGuard's custom key derivation), MAC computation (16-byte), TAI64N timestamp generation, Curve25519 DH via CryptoKit, ChaCha20-Poly1305 AEAD encrypt/decrypt, ephemeral keypair generation, base64 key parsing, hash mixing, WireGuard construction/identifier constants
+- [x] `NoiseHandshake` — full Noise_IKpsk2 handshake initiator: builds 148-byte Message 1 (ephemeral DH, encrypted static key, encrypted TAI64N timestamp, mac1/mac2), parses 92-byte Message 2 (responder ephemeral, AEAD verification, PSK mixing), derives transport session keys (sending_key, receiving_key, sender_index, receiver_index)
+- [x] `WireGuardTransport` — WireGuard session lifecycle manager: UDP connection via NWConnection, handshake initiation and response parsing, encrypted transport packets (type 4) with counter-based nonces, bidirectional packet send/receive, persistent keepalive timer, 120s rekey timer, cookie reply handling, session statistics (packets/bytes sent/received, handshake count), anti-replay via monotonic nonce tracking
+
+**Files created:**
+- `Services/WireProxy/Crypto/Blake2s.swift` — Pure Swift BLAKE2s (RFC 7693)
+- `Services/WireProxy/Crypto/WireGuardCrypto.swift` — WG-specific crypto wrappers
+- `Services/WireProxy/Handshake/NoiseHandshake.swift` — Noise_IKpsk2 state machine
+- `Services/WireProxy/Transport/WireGuardTransport.swift` — Encrypted UDP session
+
+**Features delivered:**
+- Pure Swift BLAKE2s hash — no Go bridge, no external C libraries, ~150 lines implementing RFC 7693
+- Full WireGuard Noise_IKpsk2 handshake as initiator — generates Message 1, parses Message 2, derives transport keys
+- CryptoKit integration — Curve25519 for DH, ChaCha20-Poly1305 for AEAD (hardware-accelerated on Apple silicon)
+- Encrypted UDP transport — send/receive IP packets through WireGuard tunnel over UDP
+- Session management — keepalive, rekey after 120s, cookie handling, connection statistics
+- Configurable from existing WireGuardConfig — uses private key, peer public key, PSK, endpoint from parsed .conf files
+- 100% userspace — works in simulator, no NetworkExtension required
+
+**Remaining stages:**
+- Stage 5: Userspace TCP/IP Stack + WireProxy SOCKS5 Bridge (connect SOCKS5 to WG tunnel)
+- Stage 6: Full Integration, UI & Rotation (wire everything into DeviceProxyService)
+
+---
+
 ## Summary
 
 | Stage | What It Does | Works In Simulator? | Status |
@@ -80,3 +109,6 @@ Currently, WireGuard and OpenVPN configs are assigned to WebViews but **no actua
 | 1 | Fix SOCKS5 → WebView routing with proper iOS API | ✅ Yes | ✅ Complete |
 | 2 | Local proxy server (wireproxy) for unified app-wide routing | ✅ Yes | ✅ Complete |
 | 3 | Device-wide VPN tunnel via NetworkExtension | ❌ Real device only | ✅ Complete |
+| 4 | WireGuard crypto + Noise handshake + encrypted UDP transport | ✅ Yes | ✅ Complete |
+| 5 | Userspace TCP/IP stack + WireProxy SOCKS5 bridge | ✅ Yes | Pending |
+| 6 | Full integration, UI & rotation | ✅ Yes | Pending |
