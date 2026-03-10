@@ -45,6 +45,13 @@ nonisolated struct DualFindSessionInfo: Identifiable, Sendable {
     }
 }
 
+nonisolated enum DualFindTestOutcome: Sendable {
+    case success
+    case disabled
+    case transient
+    case noAccount
+}
+
 nonisolated enum DualFindSessionCount: Int, CaseIterable, Sendable {
     case four = 4
     case six = 6

