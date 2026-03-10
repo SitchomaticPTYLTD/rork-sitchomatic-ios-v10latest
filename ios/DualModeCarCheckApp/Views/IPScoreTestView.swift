@@ -21,6 +21,8 @@ class IPScoreSession: Identifiable {
     var webView: WKWebView?
     var currentSiteIndex: Int = 0
     var usedSite: String = "thisismyip.com"
+    var screenshot: UIImage?
+    var detectedIPFromPage: String?
 
     nonisolated static let fallbackURLs: [URL] = [
         URL(string: "https://thisismyip.com")!,
@@ -103,6 +105,18 @@ class IPScoreWebViewDelegate: NSObject, WKNavigationDelegate {
             self.session.isLoading = false
             self.session.pageTitle = webView.title ?? ""
             self.session.currentURL = webView.url?.absoluteString ?? ""
+            self.captureScreenshot(webView)
+        }
+    }
+
+    private func captureScreenshot(_ webView: WKWebView) {
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2))
+            let config = WKSnapshotConfiguration()
+            config.rect = webView.bounds
+            if let image = try? await webView.takeSnapshot(configuration: config) {
+                self.session.screenshot = image
+            }
         }
     }
 
@@ -672,13 +686,39 @@ struct IPScoreSessionRow: View {
     var body: some View {
         VStack(spacing: 8) {
             HStack(spacing: 10) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(statusColor.opacity(0.12))
-                        .frame(width: 40, height: 40)
-                    Text("S\(session.index)")
-                        .font(.system(size: 14, weight: .black, design: .monospaced))
-                        .foregroundStyle(statusColor)
+                if let screenshot = session.screenshot {
+                    Color(.secondarySystemGroupedBackground)
+                        .frame(width: 56, height: 44)
+                        .overlay {
+                            Image(uiImage: screenshot)
+                                .resizable()
+                                .aspectRatio(contentMode: .fill)
+                                .allowsHitTesting(false)
+                        }
+                        .clipShape(.rect(cornerRadius: 8))
+                        .overlay(alignment: .bottomTrailing) {
+                            Text("S\(session.index)")
+                                .font(.system(size: 8, weight: .black, design: .monospaced))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 3)
+                                .padding(.vertical, 1)
+                                .background(statusColor.opacity(0.8))
+                                .clipShape(.rect(cornerRadius: 3))
+                                .offset(x: 2, y: 2)
+                        }
+                } else {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(statusColor.opacity(0.12))
+                            .frame(width: 56, height: 44)
+                        if session.status == .loading || session.status == .retrying {
+                            ProgressView().controlSize(.mini).tint(statusColor)
+                        } else {
+                            Text("S\(session.index)")
+                                .font(.system(size: 14, weight: .black, design: .monospaced))
+                                .foregroundStyle(statusColor)
+                        }
+                    }
                 }
 
                 VStack(alignment: .leading, spacing: 3) {
@@ -778,68 +818,130 @@ struct IPScoreSessionTile: View {
     let timerTick: Int
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("S\(session.index)")
-                    .font(.system(size: 13, weight: .black, design: .monospaced))
-                    .foregroundStyle(statusColor)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(statusColor.opacity(0.12))
-                    .clipShape(.rect(cornerRadius: 4))
+        VStack(spacing: 0) {
+            screenshotArea
 
-                Spacer()
-
-                if session.status == .loading || session.status == .retrying {
-                    ProgressView().controlSize(.mini).tint(.indigo)
-                } else {
-                    Image(systemName: session.status == .loaded ? "checkmark.circle.fill" : "xmark.circle.fill")
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text("S\(session.index)")
+                        .font(.system(size: 11, weight: .black, design: .monospaced))
                         .foregroundStyle(statusColor)
-                        .font(.system(size: 14))
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 2)
+                        .background(statusColor.opacity(0.12))
+                        .clipShape(.rect(cornerRadius: 4))
+
+                    Text(session.usedSite)
+                        .font(.system(size: 8, weight: .bold, design: .monospaced))
+                        .foregroundStyle(.cyan.opacity(0.8))
+                        .lineLimit(1)
+
+                    Spacer()
+
+                    Text("\(session.elapsedSeconds)s")
+                        .font(.system(size: 9, weight: .bold, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .contentTransition(.numericText())
                 }
-            }
 
-            Text(session.usedSite)
-                .font(.system(size: 9, weight: .bold, design: .monospaced))
-                .foregroundStyle(.cyan.opacity(0.8))
-
-            Text(session.networkLabel)
-                .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                .foregroundStyle(.secondary)
-                .lineLimit(2)
-
-            if let server = session.assignedVPNServer {
-                HStack(spacing: 3) {
-                    Image(systemName: "shield.checkered")
-                        .font(.system(size: 8, weight: .bold))
-                    Text(server.prefix(18))
-                        .font(.system(size: 8, weight: .medium, design: .monospaced))
-                }
-                .foregroundStyle(.indigo.opacity(0.8))
-                .lineLimit(1)
-            }
-
-            if let ip = session.assignedVPNIP {
-                Text(ip)
-                    .font(.system(size: 8, weight: .medium, design: .monospaced))
-                    .foregroundStyle(.cyan.opacity(0.7))
-                    .lineLimit(1)
-            }
-
-            Spacer(minLength: 0)
-
-            HStack {
-                Spacer()
-                Text("\(session.elapsedSeconds)s")
-                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                Text(session.networkLabel)
+                    .font(.system(size: 8, weight: .semibold, design: .monospaced))
                     .foregroundStyle(.secondary)
-                    .contentTransition(.numericText())
+                    .lineLimit(1)
+
+                if let server = session.assignedVPNServer {
+                    HStack(spacing: 3) {
+                        Image(systemName: "shield.checkered")
+                            .font(.system(size: 7, weight: .bold))
+                        Text(String(server.prefix(18)))
+                            .font(.system(size: 7, weight: .medium, design: .monospaced))
+                    }
+                    .foregroundStyle(.indigo.opacity(0.8))
+                    .lineLimit(1)
+                }
+
+                if let proxy = session.assignedProxy {
+                    HStack(spacing: 3) {
+                        Image(systemName: "network")
+                            .font(.system(size: 7, weight: .bold))
+                        Text(proxy)
+                            .font(.system(size: 7, weight: .medium, design: .monospaced))
+                    }
+                    .foregroundStyle(.orange.opacity(0.7))
+                    .lineLimit(1)
+                }
+            }
+            .padding(8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color(.secondarySystemGroupedBackground))
+            .clipShape(.rect(cornerRadii: .init(bottomLeading: 12, bottomTrailing: 12)))
+        }
+    }
+
+    private var screenshotArea: some View {
+        Group {
+            if let screenshot = session.screenshot {
+                Color(.secondarySystemGroupedBackground)
+                    .frame(height: 110)
+                    .overlay {
+                        Image(uiImage: screenshot)
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                            .allowsHitTesting(false)
+                    }
+                    .clipShape(.rect(cornerRadii: .init(topLeading: 12, topTrailing: 12)))
+                    .overlay(alignment: .topTrailing) {
+                        statusBadge
+                            .padding(6)
+                    }
+            } else {
+                Color(.tertiarySystemFill)
+                    .frame(height: 110)
+                    .overlay {
+                        if session.status == .loading || session.status == .retrying {
+                            VStack(spacing: 6) {
+                                ProgressView()
+                                    .controlSize(.small)
+                                    .tint(.indigo)
+                                Text(session.status == .retrying ? "Retrying..." : "Loading...")
+                                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                            }
+                        } else if session.status == .failed {
+                            VStack(spacing: 6) {
+                                Image(systemName: "xmark.circle.fill")
+                                    .font(.title3)
+                                    .foregroundStyle(.red.opacity(0.6))
+                                Text("Failed")
+                                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                                    .foregroundStyle(.red.opacity(0.6))
+                            }
+                        } else {
+                            Image(systemName: "photo")
+                                .font(.title2)
+                                .foregroundStyle(.quaternary)
+                        }
+                    }
+                    .clipShape(.rect(cornerRadii: .init(topLeading: 12, topTrailing: 12)))
+                    .overlay(alignment: .topTrailing) {
+                        statusBadge
+                            .padding(6)
+                    }
             }
         }
-        .padding(12)
-        .frame(minHeight: 120)
-        .background(Color(.secondarySystemGroupedBackground))
-        .clipShape(.rect(cornerRadius: 12))
+    }
+
+    private var statusBadge: some View {
+        HStack(spacing: 3) {
+            Circle().fill(statusColor).frame(width: 5, height: 5)
+            Text(session.status.rawValue)
+                .font(.system(size: 7, weight: .heavy, design: .monospaced))
+                .foregroundStyle(statusColor)
+        }
+        .padding(.horizontal, 5)
+        .padding(.vertical, 3)
+        .background(.ultraThinMaterial)
+        .clipShape(Capsule())
     }
 
     private var statusColor: Color {
