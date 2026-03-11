@@ -202,6 +202,92 @@ class NordVPNService {
         code == 429 || code == 502 || code == 503 || code == 504
     }
 
+    nonisolated enum TokenTestResult: Sendable {
+        case success(privateKeyPrefix: String)
+        case failed(reason: String)
+        case expired
+
+        var isSuccess: Bool {
+            if case .success = self { return true }
+            return false
+        }
+    }
+
+    static func isValidTokenFormat(_ token: String) -> Bool {
+        let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        guard trimmed.count >= 32 else { return false }
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_."))
+        return trimmed.unicodeScalars.allSatisfy { allowed.contains($0) }
+    }
+
+    func testAccessToken() async {
+        guard hasAccessKey else {
+            tokenTestResult = .failed(reason: "No access token set. Generate one from NordVPN dashboard → Manual Setup.")
+            return
+        }
+
+        guard Self.isValidTokenFormat(accessKey) else {
+            tokenTestResult = .failed(reason: "Token format looks invalid. NordVPN tokens are 64+ character hex strings. Go to my.nordaccount.com → Manual Setup to generate a real token.")
+            return
+        }
+
+        isTestingToken = true
+        tokenTestResult = nil
+        defer { isTestingToken = false }
+
+        let config = URLSessionConfiguration.ephemeral
+        config.timeoutIntervalForRequest = 15
+        config.timeoutIntervalForResource = 20
+        let session = URLSession(configuration: config)
+        defer { session.invalidateAndCancel() }
+
+        guard let url = URL(string: "https://api.nordvpn.com/v1/users/services/credentials") else { return }
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+
+        let credentials = "token:\(accessKey)"
+        if let credData = credentials.data(using: .utf8) {
+            request.setValue("Basic \(credData.base64EncodedString())", forHTTPHeaderField: "Authorization")
+        }
+
+        do {
+            let (data, response) = try await session.data(for: request)
+            if let http = response as? HTTPURLResponse {
+                switch http.statusCode {
+                case 200:
+                    if let creds = try? JSONDecoder().decode(NordCredentials.self, from: data),
+                       let pk = creds.nordlynx_private_key, !pk.isEmpty {
+                        setPrivateKey(pk)
+                        isTokenExpired = false
+                        tokenTestResult = .success(privateKeyPrefix: String(pk.prefix(8)))
+                        logger.log("NordVPN: token test SUCCESS — private key obtained", category: .vpn, level: .success)
+                    } else {
+                        let body = String(data: data, encoding: .utf8) ?? ""
+                        tokenTestResult = .failed(reason: "API returned 200 but no nordlynx_private_key in response. Body: \(body.prefix(200))")
+                        logger.log("NordVPN: token test — 200 but no private key", category: .vpn, level: .error)
+                    }
+                case 401:
+                    isTokenExpired = true
+                    tokenTestResult = .expired
+                    logger.log("NordVPN: token test — 401 Unauthorized (token expired/invalid)", category: .vpn, level: .error)
+                case 403:
+                    isTokenExpired = true
+                    tokenTestResult = .failed(reason: "403 Forbidden — subscription may be expired or token lacks permissions.")
+                    logger.log("NordVPN: token test — 403 Forbidden", category: .vpn, level: .error)
+                default:
+                    let body = String(data: data, encoding: .utf8) ?? ""
+                    tokenTestResult = .failed(reason: "HTTP \(http.statusCode): \(body.prefix(200))")
+                    logger.log("NordVPN: token test — HTTP \(http.statusCode)", category: .vpn, level: .error)
+                }
+            }
+        } catch {
+            tokenTestResult = .failed(reason: "Network error: \(error.localizedDescription)")
+            logger.logError("NordVPN: token test network error", error: error, category: .vpn)
+        }
+    }
+
     func fetchPrivateKey() async {
         guard hasAccessKey else {
             lastError = "No access key configured"
@@ -288,6 +374,8 @@ class NordVPNService {
     var isTokenExpired: Bool = UserDefaults.standard.bool(forKey: "nordvpn_token_expired_v1") {
         didSet { UserDefaults.standard.set(isTokenExpired, forKey: "nordvpn_token_expired_v1") }
     }
+    var isTestingToken: Bool = false
+    var tokenTestResult: TokenTestResult?
     var isDownloadingOVPN: Bool = false
     var ovpnDownloadProgress: String = ""
     var isAutoPopulating: Bool = false

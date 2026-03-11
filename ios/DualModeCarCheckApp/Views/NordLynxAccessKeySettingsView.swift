@@ -9,6 +9,7 @@ struct NordLynxAccessKeySettingsView: View {
     @State private var showDeleteConfirmation: Bool = false
     @State private var saved: Bool = false
     @State private var keyChangeBounce: Int = 0
+    @State private var nordService = NordVPNService.shared
 
     private let tintColor = Color(red: 0.0, green: 0.78, blue: 1.0)
 
@@ -17,6 +18,7 @@ struct NordLynxAccessKeySettingsView: View {
             ScrollView {
                 VStack(spacing: 24) {
                     activeKeyCard
+                    tokenTestSection
                     keySelectionSection
                     if !showAddCustom {
                         addCustomKeyButton
@@ -68,9 +70,11 @@ struct NordLynxAccessKeySettingsView: View {
 
     private var activeKeyCard: some View {
         VStack(spacing: 12) {
-            Image(systemName: "checkmark.shield.fill")
+            let hasValidPK = nordService.hasPrivateKey
+
+            Image(systemName: hasValidPK ? "checkmark.shield.fill" : "exclamationmark.shield.fill")
                 .font(.system(size: 32, weight: .light))
-                .foregroundStyle(.green)
+                .foregroundStyle(hasValidPK ? .green : .orange)
                 .symbolEffect(.bounce, value: keyChangeBounce)
 
             let activeKey = NordLynxConfigGeneratorService.activeAccessKey
@@ -84,6 +88,16 @@ struct NordLynxAccessKeySettingsView: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
 
+            if hasValidPK {
+                Label("Private key obtained - WireGuard ready", systemImage: "checkmark.circle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.green)
+            } else {
+                Label("No private key - test your token below", systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+
             if saved {
                 Label("Key switched successfully", systemImage: "checkmark.circle.fill")
                     .font(.caption)
@@ -95,6 +109,126 @@ struct NordLynxAccessKeySettingsView: View {
         .padding(20)
         .background(.ultraThinMaterial, in: .rect(cornerRadius: 16))
         .animation(.spring(response: 0.4), value: saved)
+    }
+
+    private var tokenTestSection: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Label("Token Verification", systemImage: "network.badge.shield.half.filled")
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(.secondary)
+
+            Button {
+                Task { await nordService.testAccessToken() }
+            } label: {
+                HStack(spacing: 10) {
+                    if nordService.isTestingToken {
+                        ProgressView()
+                            .controlSize(.small)
+                            .tint(.white)
+                    } else {
+                        Image(systemName: "antenna.radiowaves.left.and.right")
+                            .font(.body.weight(.semibold))
+                    }
+                    Text(nordService.isTestingToken ? "Testing..." : "Test Token & Fetch Private Key")
+                        .fontWeight(.semibold)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 12)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(tintColor)
+            .disabled(nordService.isTestingToken || !nordService.hasAccessKey)
+
+            if let result = nordService.tokenTestResult {
+                tokenResultView(result)
+            }
+
+            if nordService.isTokenExpired {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.red)
+                        Text("Token Expired / Invalid")
+                            .font(.caption.bold())
+                            .foregroundStyle(.red)
+                    }
+                    Text("Your current token was rejected by NordVPN (401/403). You must generate a fresh token:")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+
+                    Link(destination: URL(string: "https://my.nordaccount.com/dashboard/nordvpn/manual-configuration/")!) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "arrow.up.right.square")
+                            Text("Open NordVPN Dashboard")
+                                .fontWeight(.medium)
+                        }
+                        .font(.caption)
+                        .foregroundStyle(tintColor)
+                    }
+                }
+                .padding(12)
+                .background(.red.opacity(0.08), in: .rect(cornerRadius: 10))
+            }
+        }
+        .padding(20)
+        .background(.ultraThinMaterial, in: .rect(cornerRadius: 16))
+    }
+
+    @ViewBuilder
+    private func tokenResultView(_ result: NordVPNService.TokenTestResult) -> some View {
+        switch result {
+        case .success(let pkPrefix):
+            HStack(spacing: 8) {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Token Valid!")
+                        .font(.caption.bold())
+                        .foregroundStyle(.green)
+                    Text("Private key: \(pkPrefix)...")
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+            .padding(12)
+            .background(.green.opacity(0.08), in: .rect(cornerRadius: 10))
+
+        case .expired:
+            HStack(spacing: 8) {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundStyle(.red)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Token Expired (401)")
+                        .font(.caption.bold())
+                        .foregroundStyle(.red)
+                    Text("Generate a new token from your NordVPN dashboard -> Manual Setup.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+            .padding(12)
+            .background(.red.opacity(0.08), in: .rect(cornerRadius: 10))
+
+        case .failed(let reason):
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundStyle(.orange)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Test Failed")
+                        .font(.caption.bold())
+                        .foregroundStyle(.orange)
+                    Text(reason)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer()
+            }
+            .padding(12)
+            .background(.orange.opacity(0.08), in: .rect(cornerRadius: 10))
+        }
     }
 
     private var keySelectionSection: some View {
@@ -255,7 +389,7 @@ struct NordLynxAccessKeySettingsView: View {
                 .padding(12)
                 .background(Color.white.opacity(0.06), in: .rect(cornerRadius: 10))
 
-            TextField("Paste your NordVPN access key…", text: $customKeyInput, axis: .vertical)
+            TextField("Paste your NordVPN access token...", text: $customKeyInput, axis: .vertical)
                 .font(.system(.subheadline, design: .monospaced))
                 .foregroundStyle(.white)
                 .autocorrectionDisabled()
@@ -263,6 +397,16 @@ struct NordLynxAccessKeySettingsView: View {
                 .lineLimit(3)
                 .padding(12)
                 .background(Color.white.opacity(0.06), in: .rect(cornerRadius: 10))
+
+            if !customKeyInput.isEmpty && !NordVPNService.isValidTokenFormat(customKeyInput) {
+                HStack(spacing: 4) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.caption2)
+                    Text("Token looks invalid - NordVPN tokens are 64+ character alphanumeric strings")
+                        .font(.caption2)
+                }
+                .foregroundStyle(.orange)
+            }
 
             Button {
                 saveCustomKey()
@@ -285,17 +429,71 @@ struct NordLynxAccessKeySettingsView: View {
     }
 
     private var infoSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Label("How to get your access key", systemImage: "questionmark.circle")
+        VStack(alignment: .leading, spacing: 14) {
+            Label("How NordVPN Authentication Works", systemImage: "info.circle.fill")
                 .font(.subheadline.weight(.medium))
                 .foregroundStyle(.secondary)
 
-            VStack(alignment: .leading, spacing: 8) {
-                infoRow(number: "1", text: "Log in to your NordVPN account dashboard")
-                infoRow(number: "2", text: "Go to NordVPN → Manual Setup")
-                infoRow(number: "3", text: "Copy your Access Token / Private Key")
-                infoRow(number: "4", text: "Add it as a custom key above")
+            VStack(alignment: .leading, spacing: 4) {
+                Text("You cannot use email/password directly.")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.white)
+                Text("NordVPN requires an Access Token generated from their dashboard. This token is used to fetch your WireGuard private key via their API.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
+            .padding(12)
+            .background(.white.opacity(0.04), in: .rect(cornerRadius: 10))
+
+            VStack(alignment: .leading, spacing: 10) {
+                Label("Steps to get your token", systemImage: "list.number")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.white)
+
+                infoRow(number: "1", text: "Go to my.nordaccount.com and log in")
+                infoRow(number: "2", text: "Navigate to NordVPN > Manual Setup")
+                infoRow(number: "3", text: "Click \"Generate new token\"")
+                infoRow(number: "4", text: "Copy the 64-char hex token")
+                infoRow(number: "5", text: "Paste it here as a custom key")
+                infoRow(number: "6", text: "Hit \"Test Token\" above to verify it works")
+            }
+
+            Link(destination: URL(string: "https://my.nordaccount.com/dashboard/nordvpn/manual-configuration/")!) {
+                HStack(spacing: 8) {
+                    Image(systemName: "globe")
+                    Text("Open NordVPN Manual Setup")
+                        .fontWeight(.semibold)
+                    Spacer()
+                    Image(systemName: "arrow.up.right")
+                        .font(.caption)
+                }
+                .font(.subheadline)
+                .foregroundStyle(.white)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+                .background(tintColor.opacity(0.2), in: .rect(cornerRadius: 12))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12)
+                        .strokeBorder(tintColor.opacity(0.3), lineWidth: 1)
+                )
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("What the token does:")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.white)
+                Text("Token -> NordVPN API -> WireGuard Private Key -> Combined with server public keys -> Full WireGuard tunnel configs.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("The API uses: Basic auth with token:YOUR_TOKEN -> returns nordlynx_private_key. Server IPs (not DNS hostnames) are used for WireGuard endpoints on port 51820.")
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(12)
+            .background(.white.opacity(0.04), in: .rect(cornerRadius: 10))
         }
         .padding(20)
         .background(.ultraThinMaterial, in: .rect(cornerRadius: 16))
@@ -316,10 +514,10 @@ struct NordLynxAccessKeySettingsView: View {
     }
 
     private func maskedKey(_ key: String) -> String {
-        guard key.count > 12 else { return String(repeating: "•", count: key.count) }
+        guard key.count > 12 else { return String(repeating: "\u{2022}", count: key.count) }
         let prefix = key.prefix(6)
         let suffix = key.suffix(6)
-        return "\(prefix)••••••••\(suffix)"
+        return "\(prefix)........\(suffix)"
     }
 
     private func saveCustomKey() {
