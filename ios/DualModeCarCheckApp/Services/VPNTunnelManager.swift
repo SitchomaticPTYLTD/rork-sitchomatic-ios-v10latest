@@ -81,12 +81,27 @@ class VPNTunnelManager {
         didSet { persistSettings() }
     }
     var killSwitchEnabled: Bool = false {
-        didSet { persistSettings() }
+        didSet {
+            persistSettings()
+            if let manager { updateTunnelSettings(manager) }
+        }
     }
     var onDemandEnabled: Bool = false {
         didSet {
             persistSettings()
             if let manager { updateOnDemandRules(manager) }
+        }
+    }
+    var includeAllNetworks: Bool = true {
+        didSet {
+            persistSettings()
+            if let manager { updateTunnelSettings(manager) }
+        }
+    }
+    var excludeLocalNetworks: Bool = true {
+        didSet {
+            persistSettings()
+            if let manager { updateTunnelSettings(manager) }
         }
     }
 
@@ -173,8 +188,23 @@ class VPNTunnelManager {
                 "endpoint": wgConfig.peerEndpoint,
                 "dns": wgConfig.interfaceDNS,
                 "mtu": String(wgConfig.interfaceMTU ?? 1420),
+                "privateKey": wgConfig.interfacePrivateKey,
+                "publicKey": wgConfig.peerPublicKey,
+                "address": wgConfig.interfaceAddress,
+                "allowedIPs": wgConfig.peerAllowedIPs,
             ]
+            if let psk = wgConfig.peerPreSharedKey, !psk.isEmpty {
+                proto.providerConfiguration?["presharedKey"] = psk
+            }
+            if let keepalive = wgConfig.peerPersistentKeepalive {
+                proto.providerConfiguration?["persistentKeepalive"] = String(keepalive)
+            }
             proto.disconnectOnSleep = false
+
+            if includeAllNetworks {
+                proto.includeAllNetworks = true
+                proto.excludeLocalNetworks = excludeLocalNetworks
+            }
 
             tunnelManager.protocolConfiguration = proto
             tunnelManager.localizedDescription = "WireGuard - \(wgConfig.serverName)"
@@ -417,6 +447,30 @@ class VPNTunnelManager {
         }
     }
 
+    private func updateTunnelSettings(_ tunnelManager: NETunnelProviderManager) {
+        guard let proto = tunnelManager.protocolConfiguration as? NETunnelProviderProtocol else { return }
+
+        if includeAllNetworks {
+            proto.includeAllNetworks = true
+            proto.excludeLocalNetworks = excludeLocalNetworks
+        } else {
+            proto.includeAllNetworks = false
+            proto.excludeLocalNetworks = false
+        }
+
+        if killSwitchEnabled {
+            proto.includeAllNetworks = true
+            proto.excludeLocalNetworks = excludeLocalNetworks
+        }
+
+        tunnelManager.protocolConfiguration = proto
+
+        Task {
+            try? await tunnelManager.saveToPreferences()
+            logger.log("VPNTunnel: updated tunnel settings (includeAll: \(includeAllNetworks), excludeLocal: \(excludeLocalNetworks), killSwitch: \(killSwitchEnabled))", category: .vpn, level: .info)
+        }
+    }
+
     private func addEvent(configName: String, type: VPNConnectionEvent.EventType, detail: String) {
         let event = VPNConnectionEvent(configName: configName, eventType: type, detail: detail)
         connectionStats.connectionHistory.insert(event, at: 0)
@@ -507,6 +561,8 @@ class VPNTunnelManager {
             "maxReconnectAttempts": maxReconnectAttempts,
             "killSwitch": killSwitchEnabled,
             "onDemand": onDemandEnabled,
+            "includeAllNetworks": includeAllNetworks,
+            "excludeLocalNetworks": excludeLocalNetworks,
         ]
         UserDefaults.standard.set(dict, forKey: settingsKey)
     }
@@ -522,6 +578,8 @@ class VPNTunnelManager {
         if let mr = dict["maxReconnectAttempts"] as? Int { maxReconnectAttempts = mr }
         if let ks = dict["killSwitch"] as? Bool { killSwitchEnabled = ks }
         if let od = dict["onDemand"] as? Bool { onDemandEnabled = od }
+        if let ian = dict["includeAllNetworks"] as? Bool { includeAllNetworks = ian }
+        if let eln = dict["excludeLocalNetworks"] as? Bool { excludeLocalNetworks = eln }
     }
 
     nonisolated deinit {

@@ -50,15 +50,16 @@ class NetworkSessionFactory {
     private let wireProxyBridge = WireProxyBridge.shared
 
     func nextConfig(for target: ProxyRotationService.ProxyTarget) -> ActiveNetworkConfig {
+        if vpnTunnel.isConnected {
+            logger.log("NetworkFactory: device-wide VPN tunnel active — all traffic routed via VPN for \(target.rawValue)", category: .vpn, level: .debug)
+            return .direct
+        }
+
         if deviceProxy.isEnabled, let config = deviceProxy.activeConfig {
             if deviceProxy.isWireProxyActive, localProxy.isRunning, localProxy.wireProxyMode {
                 let localConfig = localProxy.localProxyConfig
                 logger.log("NetworkFactory: WireProxy tunnel active → 127.0.0.1:\(localConfig.port) for \(target.rawValue)", category: .vpn, level: .debug)
                 return .socks5(localConfig)
-            }
-            if deviceProxy.isVPNActive {
-                logger.log("NetworkFactory: VPN tunnel active — traffic routed device-wide for \(target.rawValue)", category: .vpn, level: .debug)
-                return .direct
             }
             if let localConfig = deviceProxy.effectiveProxyConfig, localProxy.isRunning {
                 logger.log("NetworkFactory: using local proxy 127.0.0.1:\(localConfig.port) → upstream \(config.label) for \(target.rawValue)", category: .network, level: .debug)
@@ -83,8 +84,20 @@ class NetworkSessionFactory {
             return .direct
 
         case .wireguard:
+            if vpnTunnel.isConnected {
+                logger.log("NetworkFactory: VPN tunnel connected device-wide for WG mode \(target.rawValue)", category: .vpn, level: .debug)
+                return .direct
+            }
+            if wireProxyBridge.isActive, localProxy.isRunning, localProxy.wireProxyMode {
+                let localConfig = localProxy.localProxyConfig
+                logger.log("NetworkFactory: WireProxy active → 127.0.0.1:\(localConfig.port) for \(target.rawValue)", category: .vpn, level: .debug)
+                return .socks5(localConfig)
+            }
             if let wg = nextWGConfig(for: target) {
-                logger.log("NetworkFactory: assigned WG \(wg.displayString) for \(target.rawValue)", category: .vpn, level: .debug)
+                logger.log("NetworkFactory: assigned WG \(wg.displayString) for \(target.rawValue) — triggering VPN tunnel connect", category: .vpn, level: .debug)
+                Task {
+                    await vpnTunnel.configureAndConnect(with: wg)
+                }
                 return .wireGuardDNS(wg)
             }
             logger.log("NetworkFactory: no enabled WG config for \(target.rawValue) — falling back to OpenVPN", category: .vpn, level: .warning)
@@ -139,18 +152,32 @@ class NetworkSessionFactory {
             logger.log("URLSession configured with SOCKS5: \(proxy.displayString)", category: .proxy, level: .trace)
 
         case .wireGuardDNS(let wg):
-            let endpoint = wg.endpointHost
-            let port = wg.endpointPort
-            if let dnsServers = config.dnsServers, !dnsServers.isEmpty {
-                logger.log("URLSession WG DNS-routed: \(dnsServers.joined(separator: ", ")) via \(endpoint):\(port) — NOTE: Full WG tunnel requires NetworkExtension; using DNS-level routing only", category: .vpn, level: .info)
+            if vpnTunnel.isConnected {
+                logger.log("URLSession WG: device-wide VPN active via \(wg.displayString) — traffic routed through tunnel", category: .vpn, level: .info)
+            } else if wireProxyBridge.isActive, localProxy.isRunning, localProxy.wireProxyMode {
+                let localConfig = localProxy.localProxyConfig
+                var proxyDict: [String: Any] = [
+                    "SOCKSEnable": 1,
+                    "SOCKSProxy": localConfig.host,
+                    "SOCKSPort": localConfig.port,
+                ]
+                if let u = localConfig.username { proxyDict["SOCKSUser"] = u }
+                if let p = localConfig.password { proxyDict["SOCKSPassword"] = p }
+                sessionConfig.connectionProxyDictionary = proxyDict
+                logger.log("URLSession WG: routed via WireProxy local proxy 127.0.0.1:\(localConfig.port)", category: .vpn, level: .info)
             } else {
-                logger.log("URLSession WG: no DNS servers in config \(endpoint):\(port) — operating as direct connection", category: .vpn, level: .warning)
+                logger.log("URLSession WG: \(wg.displayString) — no active tunnel, triggering device-wide VPN connect", category: .vpn, level: .warning)
+                Task {
+                    await vpnTunnel.configureAndConnect(with: wg)
+                }
             }
 
         case .openVPNProxy(let ovpn):
-            let host = ovpn.remoteHost
-            let port = ovpn.remotePort
-            logger.log("URLSession OVPN: \(host):\(port) (\(ovpn.proto)) — NOTE: Full OpenVPN tunnel requires NetworkExtension; endpoint validated via protocol handshake", category: .vpn, level: .info)
+            if vpnTunnel.isConnected {
+                logger.log("URLSession OVPN: device-wide VPN active — traffic routed through tunnel for \(ovpn.displayString)", category: .vpn, level: .info)
+            } else {
+                logger.log("URLSession OVPN: \(ovpn.remoteHost):\(ovpn.remotePort) (\(ovpn.proto)) — no active tunnel, traffic may use real IP", category: .vpn, level: .warning)
+            }
         }
 
         return sessionConfig
@@ -177,16 +204,29 @@ class NetworkSessionFactory {
 
         case .wireGuardDNS(let wg):
             if vpnTunnel.isConnected {
-                logger.log("WKWebView WG: \(wg.displayString) — VPN tunnel active, traffic routed device-wide", category: .vpn, level: .info)
+                logger.log("WKWebView WG: \(wg.displayString) — device-wide VPN tunnel active, all WebView traffic routed via tunnel", category: .vpn, level: .info)
+            } else if wireProxyBridge.isActive, localProxy.isRunning, localProxy.wireProxyMode {
+                let localConfig = localProxy.localProxyConfig
+                let endpoint = NWEndpoint.hostPort(
+                    host: NWEndpoint.Host(localConfig.host),
+                    port: NWEndpoint.Port(integerLiteral: UInt16(localConfig.port))
+                )
+                let proxyConfig = ProxyConfiguration(socksv5Proxy: endpoint)
+                dataStore.proxyConfigurations = [proxyConfig]
+                wkConfig.websiteDataStore = dataStore
+                logger.log("WKWebView WG: \(wg.displayString) — routed via WireProxy local proxy 127.0.0.1:\(localConfig.port)", category: .vpn, level: .info)
             } else {
-                logger.log("WKWebView WG: \(wg.displayString) — no VPN tunnel or local proxy available, traffic will use real IP", category: .vpn, level: .warning)
+                logger.log("WKWebView WG: \(wg.displayString) — no tunnel active, triggering device-wide VPN connect", category: .vpn, level: .warning)
+                Task {
+                    await vpnTunnel.configureAndConnect(with: wg)
+                }
             }
 
         case .openVPNProxy(let ovpn):
             if vpnTunnel.isConnected {
-                logger.log("WKWebView OVPN: \(ovpn.displayString) — VPN tunnel active, traffic routed device-wide", category: .vpn, level: .info)
+                logger.log("WKWebView OVPN: \(ovpn.displayString) — device-wide VPN tunnel active, all WebView traffic routed via tunnel", category: .vpn, level: .info)
             } else {
-                logger.log("WKWebView OVPN: \(ovpn.displayString) — no VPN tunnel or local proxy available, traffic will use real IP", category: .vpn, level: .warning)
+                logger.log("WKWebView OVPN: \(ovpn.displayString) — no VPN tunnel available, WebView traffic will use real IP", category: .vpn, level: .warning)
             }
 
         case .direct:

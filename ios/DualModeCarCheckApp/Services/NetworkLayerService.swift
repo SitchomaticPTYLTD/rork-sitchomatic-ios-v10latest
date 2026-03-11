@@ -8,6 +8,7 @@ class NetworkLayerService {
 
     private let proxyService = ProxyRotationService.shared
     private let protocolTester = VPNProtocolTestService.shared
+    private let vpnTunnel = VPNTunnelManager.shared
     private let logger = DebugLogger.shared
 
     var lastHealthCheck: Date?
@@ -20,6 +21,11 @@ class NetworkLayerService {
     var fallbackLog: [String] = []
 
     func resolveActiveConfig(for target: ProxyRotationService.ProxyTarget) async -> ActiveNetworkConfig {
+        if vpnTunnel.isConnected {
+            logger.log("NetworkLayer: device-wide VPN active — returning direct for \(target.rawValue)", category: .vpn, level: .debug)
+            return .direct
+        }
+
         let preferredMode = proxyService.connectionMode(for: target)
         activeMode = preferredMode
 

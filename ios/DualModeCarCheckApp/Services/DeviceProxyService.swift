@@ -311,7 +311,12 @@ class DeviceProxyService {
         }
         Task {
             await vpnTunnel.loadExistingManager()
-            syncVPNTunnel()
+            if case .wireGuardDNS(let wg) = activeConfig {
+                await vpnTunnel.configureAndConnect(with: wg)
+                logger.log("DeviceProxy: VPN tunnel activated device-wide with \(wg.serverName)", category: .vpn, level: .info)
+            } else {
+                syncVPNTunnel()
+            }
         }
     }
 
@@ -325,9 +330,13 @@ class DeviceProxyService {
         guard vpnTunnelEnabled, isEnabled else { return }
         if case .wireGuardDNS(let wg) = activeConfig {
             Task {
-                await vpnTunnel.reconnectWithConfig(wg)
+                if vpnTunnel.isConnected, vpnTunnel.activeConfigName == wg.fileName {
+                    logger.log("DeviceProxy: VPN tunnel already connected to \(wg.serverName)", category: .vpn, level: .debug)
+                    return
+                }
+                await vpnTunnel.configureAndConnect(with: wg)
             }
-            logger.log("DeviceProxy: VPN tunnel connecting to WG \(wg.serverName)", category: .vpn, level: .info)
+            logger.log("DeviceProxy: VPN tunnel connecting device-wide to WG \(wg.serverName)", category: .vpn, level: .info)
         }
     }
 
@@ -435,6 +444,9 @@ class DeviceProxyService {
     }
 
     var effectiveProxyConfig: ProxyConfig? {
+        if vpnTunnel.isConnected {
+            return nil
+        }
         guard isEnabled, isActive, localProxyEnabled, localProxy.isRunning else { return nil }
         switch activeConfig {
         case .socks5:
@@ -443,14 +455,8 @@ class DeviceProxyService {
             if wireProxyTunnelEnabled && wireProxyBridge.isActive {
                 return localProxy.localProxyConfig
             }
-            if vpnTunnelEnabled && vpnTunnel.isConnected {
-                return nil
-            }
-            return localProxy.localProxyConfig
+            return nil
         case .openVPNProxy:
-            if vpnTunnelEnabled && vpnTunnel.isConnected {
-                return nil
-            }
             return localProxy.localProxyConfig
         case .direct, .none:
             return nil
