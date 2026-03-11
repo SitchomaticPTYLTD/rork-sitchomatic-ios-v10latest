@@ -389,7 +389,7 @@ struct IPScoreTestView: View {
                 networkInfoRow(icon: "server.rack", label: "Nord Servers", value: "\(nordService.recommendedServers.count) loaded")
                 networkInfoRow(icon: "network", label: "Proxies", value: "\(proxyService.savedProxies.count) configured")
                 networkInfoRow(icon: "lock.shield.fill", label: "WireGuard", value: "\(proxyService.joeWGConfigs.count) configs")
-                networkInfoRow(icon: "shield.checkered", label: "Unified IP", value: deviceProxy.isEnabled ? "ON" : "OFF")
+                networkInfoRow(icon: "shield.checkered", label: "IP Routing", value: deviceProxy.ipRoutingMode.shortLabel)
             }
             .padding()
             .background(Color(.secondarySystemGroupedBackground))

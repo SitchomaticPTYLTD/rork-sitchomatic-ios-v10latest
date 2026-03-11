@@ -29,11 +29,14 @@ struct DeviceNetworkSettingsView: View {
     var body: some View {
         List {
             deviceWideBanner
-            unifiedIPSection
+            ipRoutingSection
             if deviceProxy.isEnabled {
-                localProxySection
+                unitedIPOptionsSection
             }
             connectionModeSection
+            if proxyService.unifiedConnectionMode == .wireguard {
+                wireProxyServerSection
+            }
             ignitionRegionSection
             nordVPNSection
             endpointConfigSection
@@ -106,221 +109,265 @@ struct DeviceNetworkSettingsView: View {
         }
     }
 
-    // MARK: - Unified IP Mode
+    // MARK: - IP Routing Mode
 
-    private var unifiedIPSection: some View {
+    private var ipRoutingSection: some View {
         Section {
-            Toggle(isOn: Binding(
-                get: { deviceProxy.isEnabled },
-                set: { deviceProxy.isEnabled = $0 }
+            Picker(selection: Binding(
+                get: { deviceProxy.ipRoutingMode },
+                set: { deviceProxy.ipRoutingMode = $0 }
             )) {
+                ForEach(IPRoutingMode.allCases, id: \.self) { mode in
+                    Label(mode.label, systemImage: mode.icon).tag(mode)
+                }
+            } label: {
                 HStack(spacing: 10) {
                     ZStack {
                         Circle()
                             .fill(deviceProxy.isEnabled ? Color.cyan.opacity(0.15) : Color.gray.opacity(0.1))
                             .frame(width: 36, height: 36)
-                        Image(systemName: "shield.checkered")
+                        Image(systemName: deviceProxy.ipRoutingMode.icon)
                             .font(.system(size: 16, weight: .semibold))
                             .foregroundStyle(deviceProxy.isEnabled ? .cyan : .secondary)
                     }
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Unified IP Mode")
+                        Text("IP Routing")
                             .font(.subheadline.bold())
-                        Text("One IP for entire app, auto-rotate")
+                        Text(deviceProxy.ipRoutingMode.label)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .pickerStyle(.menu)
+            .sensoryFeedback(.impact(weight: .heavy), trigger: deviceProxy.ipRoutingMode)
+
+            if deviceProxy.isEnabled && deviceProxy.isActive {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 8) {
+                        Circle()
+                            .fill(deviceProxy.isRotating ? .yellow : .green)
+                            .frame(width: 8, height: 8)
+                        Text(deviceProxy.isRotating ? "Rotating..." : "Active")
+                            .font(.system(.caption, design: .monospaced, weight: .bold))
+                            .foregroundStyle(deviceProxy.isRotating ? .yellow : .green)
+                        Spacer()
+                        Text(deviceProxy.activeConnectionType)
+                            .font(.system(.caption2, design: .monospaced, weight: .bold))
+                            .foregroundStyle(.cyan)
+                            .padding(.horizontal, 6).padding(.vertical, 2)
+                            .background(Color.cyan.opacity(0.12))
+                            .clipShape(Capsule())
+                    }
+
+                    if let label = deviceProxy.activeEndpointLabel {
+                        HStack(spacing: 6) {
+                            Image(systemName: "globe")
+                                .font(.system(size: 10, weight: .bold))
+                                .foregroundStyle(.cyan.opacity(0.7))
+                            Text(label)
+                                .font(.system(.caption, design: .monospaced))
+                                .foregroundStyle(.primary)
+                                .lineLimit(1)
+                        }
+                    }
+
+                    HStack(spacing: 12) {
+                        if let since = deviceProxy.activeSince {
+                            HStack(spacing: 4) {
+                                Image(systemName: "clock")
+                                    .font(.system(size: 9, weight: .bold))
+                                Text("Connected \(since.formatted(.relative(presentation: .numeric)))")
+                                    .font(.system(.caption2, design: .monospaced))
+                            }
+                            .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        if deviceProxy.rotationInterval != .everyBatch {
+                            let _ = rotationTimerTick
+                            HStack(spacing: 4) {
+                                Image(systemName: "timer")
+                                    .font(.system(size: 9, weight: .bold))
+                                Text("Next: \(deviceProxy.rotationCountdownLabel)")
+                                    .font(.system(.caption2, design: .monospaced, weight: .bold))
+                            }
+                            .foregroundStyle(.orange)
+                        }
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+        } header: {
+            HStack {
+                Image(systemName: deviceProxy.ipRoutingMode.icon)
+                Text("IP Routing")
+                Spacer()
+                Text(deviceProxy.ipRoutingMode.shortLabel)
+                    .font(.system(.caption2, design: .monospaced, weight: .bold))
+                    .foregroundStyle(deviceProxy.isEnabled ? .cyan : .secondary)
+                    .padding(.horizontal, 6).padding(.vertical, 2)
+                    .background((deviceProxy.isEnabled ? Color.cyan : Color.gray).opacity(0.12))
+                    .clipShape(Capsule())
+            }
+        } footer: {
+            if deviceProxy.isEnabled {
+                Text("App-Wide United IP: the entire app shares one IP that auto-rotates on a schedule.")
+            } else {
+                Text("Separate IP per Session: each web session gets its own IP from the config pool.")
+            }
+        }
+    }
+
+    // MARK: - United IP Options (only when app-wide mode)
+
+    private var unitedIPOptionsSection: some View {
+        Section {
+            Picker(selection: Binding(
+                get: { deviceProxy.rotationInterval },
+                set: { deviceProxy.rotationInterval = $0 }
+            )) {
+                ForEach(RotationInterval.allCases, id: \.self) { interval in
+                    Label(interval.label, systemImage: interval.icon).tag(interval)
+                }
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                        .foregroundStyle(.cyan)
+                    Text("Rotation Interval")
+                }
+            }
+            .pickerStyle(.menu)
+            .sensoryFeedback(.impact(weight: .medium), trigger: deviceProxy.rotationInterval)
+
+            Toggle(isOn: Binding(
+                get: { deviceProxy.rotateOnBatchStart },
+                set: { deviceProxy.rotateOnBatchStart = $0 }
+            )) {
+                HStack(spacing: 10) {
+                    Image(systemName: "arrow.clockwise.circle")
+                        .foregroundStyle(.indigo)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("Rotate on Batch Start")
+                            .font(.subheadline)
+                        Text("New IP each batch/auto cycle")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                     }
                 }
             }
             .tint(.cyan)
-            .sensoryFeedback(.impact(weight: .heavy), trigger: deviceProxy.isEnabled)
 
-            if deviceProxy.isEnabled {
-                if deviceProxy.isActive {
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack(spacing: 8) {
-                            Circle()
-                                .fill(deviceProxy.isRotating ? .yellow : .green)
-                                .frame(width: 8, height: 8)
-                            Text(deviceProxy.isRotating ? "Rotating..." : "Active")
-                                .font(.system(.caption, design: .monospaced, weight: .bold))
-                                .foregroundStyle(deviceProxy.isRotating ? .yellow : .green)
-                            Spacer()
-                            Text(deviceProxy.activeConnectionType)
-                                .font(.system(.caption2, design: .monospaced, weight: .bold))
-                                .foregroundStyle(.cyan)
-                                .padding(.horizontal, 6).padding(.vertical, 2)
-                                .background(Color.cyan.opacity(0.12))
-                                .clipShape(Capsule())
-                        }
+            Toggle(isOn: Binding(
+                get: { deviceProxy.rotateOnFingerprintDetection },
+                set: { deviceProxy.rotateOnFingerprintDetection = $0 }
+            )) {
+                HStack(spacing: 10) {
+                    Image(systemName: "fingerprint")
+                        .foregroundStyle(.red)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("Rotate on Fingerprint")
+                            .font(.subheadline)
+                        Text("Auto-rotate when IP fingerprinting detected")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .tint(.cyan)
 
-                        if let label = deviceProxy.activeEndpointLabel {
+            Toggle(isOn: Binding(
+                get: { deviceProxy.autoFailoverEnabled },
+                set: { deviceProxy.autoFailoverEnabled = $0 }
+            )) {
+                HStack(spacing: 10) {
+                    Image(systemName: "arrow.triangle.branch")
+                        .foregroundStyle(.orange)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("Auto-Failover")
+                            .font(.subheadline)
+                        Text("Rotate when upstream dies")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .tint(.orange)
+
+            Button {
+                deviceProxy.rotateNow(reason: "Manual")
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "arrow.triangle.2.circlepath.circle.fill")
+                        .font(.system(size: 18))
+                        .foregroundStyle(.cyan)
+                    Text("Rotate Now")
+                        .font(.subheadline.bold())
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            .sensoryFeedback(.impact(weight: .heavy), trigger: deviceProxy.rotationLog.count)
+
+            if !deviceProxy.rotationLog.isEmpty {
+                DisclosureGroup {
+                    ForEach(deviceProxy.rotationLog) { entry in
+                        VStack(alignment: .leading, spacing: 3) {
                             HStack(spacing: 6) {
-                                Image(systemName: "globe")
-                                    .font(.system(size: 10, weight: .bold))
-                                    .foregroundStyle(.cyan.opacity(0.7))
-                                Text(label)
-                                    .font(.system(.caption, design: .monospaced))
+                                Text(entry.reason)
+                                    .font(.system(.caption2, design: .monospaced, weight: .bold))
+                                    .foregroundStyle(.cyan)
+                                Spacer()
+                                Text(entry.timestamp, style: .time)
+                                    .font(.system(.caption2, design: .monospaced))
+                                    .foregroundStyle(.tertiary)
+                            }
+                            HStack(spacing: 4) {
+                                Text(entry.fromLabel)
+                                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                                Image(systemName: "arrow.right")
+                                    .font(.system(size: 8, weight: .bold))
+                                    .foregroundStyle(.tertiary)
+                                Text(entry.toLabel)
+                                    .font(.system(size: 10, weight: .medium, design: .monospaced))
                                     .foregroundStyle(.primary)
-                                    .lineLimit(1)
                             }
                         }
-
-                        HStack(spacing: 12) {
-                            if let since = deviceProxy.activeSince {
-                                HStack(spacing: 4) {
-                                    Image(systemName: "clock")
-                                        .font(.system(size: 9, weight: .bold))
-                                    Text("Connected \(since.formatted(.relative(presentation: .numeric)))")
-                                        .font(.system(.caption2, design: .monospaced))
-                                }
-                                .foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                            if deviceProxy.rotationInterval != .everyBatch {
-                                let _ = rotationTimerTick
-                                HStack(spacing: 4) {
-                                    Image(systemName: "timer")
-                                        .font(.system(size: 9, weight: .bold))
-                                    Text("Next: \(deviceProxy.rotationCountdownLabel)")
-                                        .font(.system(.caption2, design: .monospaced, weight: .bold))
-                                }
-                                .foregroundStyle(.orange)
-                            }
-                        }
+                        .padding(.vertical, 2)
                     }
-                    .padding(.vertical, 4)
-                }
-
-                Picker(selection: Binding(
-                    get: { deviceProxy.rotationInterval },
-                    set: { deviceProxy.rotationInterval = $0 }
-                )) {
-                    ForEach(RotationInterval.allCases, id: \.self) { interval in
-                        Label(interval.label, systemImage: interval.icon).tag(interval)
-                    }
-                } label: {
-                    HStack(spacing: 10) {
-                        Image(systemName: "arrow.triangle.2.circlepath")
-                            .foregroundStyle(.cyan)
-                        Text("Rotation Interval")
-                    }
-                }
-                .pickerStyle(.menu)
-                .sensoryFeedback(.impact(weight: .medium), trigger: deviceProxy.rotationInterval)
-
-                Toggle(isOn: Binding(
-                    get: { deviceProxy.rotateOnBatchStart },
-                    set: { deviceProxy.rotateOnBatchStart = $0 }
-                )) {
-                    HStack(spacing: 10) {
-                        Image(systemName: "arrow.clockwise.circle")
-                            .foregroundStyle(.indigo)
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text("Rotate on Batch Start")
-                                .font(.subheadline)
-                            Text("New IP each batch/auto cycle")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                }
-                .tint(.cyan)
-
-                Toggle(isOn: Binding(
-                    get: { deviceProxy.rotateOnFingerprintDetection },
-                    set: { deviceProxy.rotateOnFingerprintDetection = $0 }
-                )) {
-                    HStack(spacing: 10) {
-                        Image(systemName: "fingerprint")
-                            .foregroundStyle(.red)
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text("Rotate on Fingerprint")
-                                .font(.subheadline)
-                            Text("Auto-rotate when IP fingerprinting detected")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                }
-                .tint(.cyan)
-
-                Button {
-                    deviceProxy.rotateNow(reason: "Manual")
                 } label: {
                     HStack(spacing: 8) {
-                        Image(systemName: "arrow.triangle.2.circlepath.circle.fill")
-                            .font(.system(size: 18))
+                        Image(systemName: "list.bullet.rectangle")
                             .foregroundStyle(.cyan)
-                        Text("Rotate Now")
-                            .font(.subheadline.bold())
-                        Spacer()
-                        Image(systemName: "chevron.right")
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
-                    }
-                }
-                .sensoryFeedback(.impact(weight: .heavy), trigger: deviceProxy.rotationLog.count)
-
-                if !deviceProxy.rotationLog.isEmpty {
-                    DisclosureGroup {
-                        ForEach(deviceProxy.rotationLog) { entry in
-                            VStack(alignment: .leading, spacing: 3) {
-                                HStack(spacing: 6) {
-                                    Text(entry.reason)
-                                        .font(.system(.caption2, design: .monospaced, weight: .bold))
-                                        .foregroundStyle(.cyan)
-                                    Spacer()
-                                    Text(entry.timestamp, style: .time)
-                                        .font(.system(.caption2, design: .monospaced))
-                                        .foregroundStyle(.tertiary)
-                                }
-                                HStack(spacing: 4) {
-                                    Text(entry.fromLabel)
-                                        .font(.system(size: 10, weight: .medium, design: .monospaced))
-                                        .foregroundStyle(.secondary)
-                                    Image(systemName: "arrow.right")
-                                        .font(.system(size: 8, weight: .bold))
-                                        .foregroundStyle(.tertiary)
-                                    Text(entry.toLabel)
-                                        .font(.system(size: 10, weight: .medium, design: .monospaced))
-                                        .foregroundStyle(.primary)
-                                }
-                            }
-                            .padding(.vertical, 2)
-                        }
-                    } label: {
-                        HStack(spacing: 8) {
-                            Image(systemName: "list.bullet.rectangle")
-                                .foregroundStyle(.cyan)
-                            Text("Rotation Log (\(deviceProxy.rotationLog.count))")
-                                .font(.subheadline)
-                        }
+                        Text("Rotation Log (\(deviceProxy.rotationLog.count))")
+                            .font(.subheadline)
                     }
                 }
             }
         } header: {
             HStack {
                 Image(systemName: "shield.checkered")
-                Text("Unified IP Mode")
+                Text("United IP Rotation")
                 Spacer()
-                if deviceProxy.isEnabled {
-                    Text(deviceProxy.isActive ? "ACTIVE" : "OFF")
+                if deviceProxy.isActive {
+                    Text("ACTIVE")
                         .font(.system(.caption2, design: .monospaced, weight: .bold))
-                        .foregroundStyle(deviceProxy.isActive ? .cyan : .secondary)
+                        .foregroundStyle(.cyan)
                         .padding(.horizontal, 6).padding(.vertical, 2)
-                        .background((deviceProxy.isActive ? Color.cyan : Color.gray).opacity(0.12))
+                        .background(Color.cyan.opacity(0.12))
                         .clipShape(Capsule())
                 }
             }
         } footer: {
-            Text("When enabled, the entire app uses a single IP at a time instead of per-session rotation. The active endpoint rotates automatically based on your selected schedule.")
+            Text("Controls for the app-wide united IP rotation schedule, batch triggers, and failover.")
         }
     }
 
-    // MARK: - Local Proxy Server
+    // MARK: - WireProxy Server (separate, only for WireGuard mode)
 
-    private var localProxySection: some View {
+    private var wireProxyServerSection: some View {
         Section {
             Toggle(isOn: Binding(
                 get: { deviceProxy.localProxyEnabled },
@@ -336,9 +383,9 @@ struct DeviceNetworkSettingsView: View {
                             .foregroundStyle(localProxy.isRunning ? .green : .secondary)
                     }
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Wireproxy Server")
+                        Text("WireProxy Server")
                             .font(.subheadline.bold())
-                        Text("On-device SOCKS5 forwarder")
+                        Text("On-device SOCKS5 tunnel forwarder")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                     }
@@ -458,7 +505,7 @@ struct DeviceNetworkSettingsView: View {
                     }
                 }
 
-                if wireProxyBridge.isActive || (deviceProxy.isActive && deviceProxy.activeConnectionType == "WireGuard") {
+                if wireProxyBridge.isActive {
                     NavigationLink {
                         WireProxyDashboardView()
                     } label: {
@@ -469,44 +516,20 @@ struct DeviceNetworkSettingsView: View {
                             Text("WireGuard Tunnel")
                                 .font(.subheadline.bold())
                             Spacer()
-                            if wireProxyBridge.isActive {
-                                Text("ACTIVE")
-                                    .font(.system(.caption2, design: .monospaced, weight: .bold))
-                                    .foregroundStyle(.purple)
-                                    .padding(.horizontal, 6).padding(.vertical, 2)
-                                    .background(Color.purple.opacity(0.12))
-                                    .clipShape(Capsule())
-                            } else {
-                                Text(wireProxyBridge.status.rawValue)
-                                    .font(.system(.caption2, design: .monospaced))
-                                    .foregroundStyle(.tertiary)
-                            }
+                            Text("ACTIVE")
+                                .font(.system(.caption2, design: .monospaced, weight: .bold))
+                                .foregroundStyle(.purple)
+                                .padding(.horizontal, 6).padding(.vertical, 2)
+                                .background(Color.purple.opacity(0.12))
+                                .clipShape(Capsule())
                         }
                     }
                 }
-
-                Toggle(isOn: Binding(
-                    get: { deviceProxy.autoFailoverEnabled },
-                    set: { deviceProxy.autoFailoverEnabled = $0 }
-                )) {
-                    HStack(spacing: 10) {
-                        Image(systemName: "arrow.triangle.branch")
-                            .foregroundStyle(.orange)
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text("Auto-Failover")
-                                .font(.subheadline)
-                            Text("Rotate when upstream dies")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                }
-                .tint(.orange)
             }
         } header: {
             HStack {
                 Image(systemName: "server.rack")
-                Text("Wireproxy Server (Stage 2)")
+                Text("WireProxy Server")
                 Spacer()
                 if localProxy.isRunning {
                     Text("RUNNING")
@@ -518,7 +541,7 @@ struct DeviceNetworkSettingsView: View {
                 }
             }
         } footer: {
-            Text("The wireproxy server runs on localhost and forwards all WebView traffic through the active upstream SOCKS5 proxy. Health monitoring auto-detects dead upstreams and triggers failover rotation.")
+            Text("Routes WebView traffic through an encrypted WireGuard tunnel via localhost SOCKS5. Only available in WireGuard connection mode.")
         }
     }
 

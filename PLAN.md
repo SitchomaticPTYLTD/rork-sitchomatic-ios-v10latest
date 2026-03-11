@@ -1,21 +1,32 @@
-# Fix WireProxy DNS resolution and connection capacity
+# Increase Connection Limit, Rework IP Mode Toggle & Clean Up WireProxy Visibility
 
-## Problem
-WireProxy tunnel connects successfully (handshake works), but **every DNS lookup fails** because of a bug in how DNS responses are parsed. This means no website can ever load through the tunnel.
+## Changes
 
-A secondary issue is that the connection limit (50) is too low — failed DNS causes rapid retries that exhaust all connection slots.
+### 1. Max Concurrent Connections → 500
+- Increase the local proxy server's connection cap from 200 to 500 so high-burst test runs (like 8 concurrent IP score sessions) don't get rejected at capacity
 
-## Fixes
+### 2. Rework "Unified IP Mode" into IP Routing Toggle
+Replace the current "Unified IP Mode" on/off toggle with a clear two-option picker:
 
-**1. Fix DNS response parser (root cause)**
-- The DNS answer record parser skips the wrong number of bytes — it misses the 4-byte TTL field, causing it to read garbage data instead of the actual record length
-- Fix: add the missing 4-byte skip so the parser correctly reads the record type and data length
-- This will make DNS resolution work, which means websites will actually load through the tunnel
+- **"Separate IP per Session"** — each web session gets its own IP from the config pool (current behavior when unified is OFF)
+- **"App-Wide United IP"** — the entire app shares one IP that auto-rotates on a schedule (current behavior when unified is ON)
 
-**2. Increase connection capacity**
-- Raise the maximum simultaneous connections from 50 to 200
-- This prevents the cascading "rejected connection" failures when multiple browser sessions are running tests at the same time
+This applies across the Network Settings screen, the banner at the top of Joe/Ignition/PPSR views, and any other place that references "Unified IP". The rotation interval, rotate-on-batch, rotate-on-fingerprint, and rotate-now controls remain under the "App-Wide United IP" option.
 
-**3. Add DNS retry with fallback**
-- If the primary DNS server (from the WireGuard config, e.g. 103.86.96.100) fails to resolve, automatically retry with a public DNS server (1.1.1.1) as fallback
-- This adds resilience if NordVPN's DNS server is slow or unresponsive
+### 3. Separate WireProxy from IP Mode
+- Move the WireProxy server toggle and dashboard out of the "Unified IP" section — it currently sits nested inside the IP mode section, implying it's part of that feature
+- WireProxy server will become its own independent section in Network Settings, clearly labeled as the on-device SOCKS5 tunnel forwarder
+- The WireGuard Tunnel dashboard link stays within that section
+
+### 4. Only Show WireProxy When Compatible
+- The WireProxy server section and WireGuard Tunnel dashboard link will only appear when the connection mode is set to **WireGuard**
+- If connection mode is DNS, SOCKS5 Proxy, or OpenVPN, the WireProxy sections are hidden entirely since they can't be activated
+- The WireProxy dashboard navigation link only shows when `wireProxyBridge.isActive` (not when connection type is merely "WireGuard" but tunnel hasn't started)
+
+### 5. Full Networking Review Pass
+- Audit `NetworkSessionFactory` to ensure WireProxy tunnel routing is correctly prioritized when active
+- Verify `DeviceProxyService` properly handles the renamed IP mode states
+- Ensure `AppDataExportService` exports/imports the new IP mode naming correctly
+- Update banner view (`UnifiedIPBannerView`) to reflect the new naming — show "United IP" when app-wide mode is active, hide when per-session mode is active
+- Confirm Super Test's WireProxy WebView phase correctly checks tunnel availability before running
+- Clean up any stale references to the old "Unified IP Mode" naming across all views (Settings, Automation Settings, Login Network Settings, Super Test)

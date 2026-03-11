@@ -869,7 +869,7 @@ class AppDataExportService {
         lines.append("Joe Connection: \(proxyService.joeConnectionMode.label)")
         lines.append("Ignition Connection: \(proxyService.ignitionConnectionMode.label)")
         lines.append("PPSR Connection: \(proxyService.ppsrConnectionMode.label)")
-        lines.append("Unified Connection: \(proxyService.unifiedConnectionMode.label)")
+        lines.append("Unified Connection: \(proxyService.unifiedConnectionMode.label)\nIP Routing: \(DeviceProxyService.shared.ipRoutingMode.label)")
         lines.append("Network Region: \(proxyService.networkRegion.label)")
         lines.append("Auto-Exclude Blacklist: \(blacklistService.autoExcludeBlacklist)")
         lines.append("Auto-Blacklist No Acc: \(blacklistService.autoBlacklistNoAcc)")

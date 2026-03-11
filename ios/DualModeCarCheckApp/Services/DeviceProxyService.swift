@@ -37,6 +37,27 @@ nonisolated enum RotationInterval: String, CaseIterable, Codable, Sendable {
     }
 }
 
+nonisolated enum IPRoutingMode: String, CaseIterable, Codable, Sendable {
+    case separatePerSession = "Separate IP per Session"
+    case appWideUnited = "App-Wide United IP"
+
+    var label: String { rawValue }
+
+    var icon: String {
+        switch self {
+        case .separatePerSession: "arrow.triangle.branch"
+        case .appWideUnited: "shield.checkered"
+        }
+    }
+
+    var shortLabel: String {
+        switch self {
+        case .separatePerSession: "Per-Session"
+        case .appWideUnited: "United IP"
+        }
+    }
+}
+
 nonisolated struct RotationLogEntry: Identifiable, Sendable {
     let id: UUID
     let timestamp: Date
@@ -79,15 +100,19 @@ class DeviceProxyService {
         }
     }
 
-    var isEnabled: Bool = false {
+    var ipRoutingMode: IPRoutingMode = .separatePerSession {
         didSet {
             persistSettings()
-            if isEnabled {
+            if ipRoutingMode == .appWideUnited {
                 activateUnifiedMode()
             } else {
                 deactivateUnifiedMode()
             }
         }
+    }
+
+    var isEnabled: Bool {
+        ipRoutingMode == .appWideUnited
     }
 
     var rotationInterval: RotationInterval = .every5Min {
@@ -148,7 +173,7 @@ class DeviceProxyService {
         healthMonitor.autoFailoverEnabled = autoFailoverEnabled
         healthMonitor.checkIntervalSeconds = healthCheckInterval
         healthMonitor.maxConsecutiveFailures = maxFailuresBeforeRotation
-        if isEnabled {
+        if ipRoutingMode == .appWideUnited {
             activateUnifiedMode()
         }
     }
@@ -222,7 +247,7 @@ class DeviceProxyService {
         rotationTimer = nil
         nextRotationDate = nil
 
-        guard isEnabled, let interval = rotationInterval.seconds else { return }
+        guard ipRoutingMode == .appWideUnited, let interval = rotationInterval.seconds else { return }
 
         nextRotationDate = Date().addingTimeInterval(interval)
         rotationTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
@@ -344,7 +369,7 @@ class DeviceProxyService {
     }
 
     func reconnectWireProxy() {
-        guard isEnabled, case .wireGuardDNS = activeConfig else { return }
+        guard ipRoutingMode == .appWideUnited, case .wireGuardDNS = activeConfig else { return }
         wireProxyBridge.stop()
         localProxy.enableWireProxyMode(false)
         logger.log("DeviceProxy: WireProxy reconnect requested", category: .vpn, level: .info)
@@ -374,7 +399,7 @@ class DeviceProxyService {
 
         rotationLog.removeAll()
 
-        if isEnabled {
+        if ipRoutingMode == .appWideUnited {
             performRotation(reason: "Profile Switch")
         }
 
@@ -383,7 +408,7 @@ class DeviceProxyService {
     }
 
     func rotateWireProxyConfig() {
-        guard isEnabled else { return }
+        guard ipRoutingMode == .appWideUnited else { return }
         wireProxyBridge.stop()
         localProxy.enableWireProxyMode(false)
         let config = resolveNextConfig()
@@ -412,7 +437,7 @@ class DeviceProxyService {
     }
 
     var effectiveProxyConfig: ProxyConfig? {
-        guard isEnabled, isActive, localProxyEnabled, localProxy.isRunning else { return nil }
+        guard ipRoutingMode == .appWideUnited, isActive, localProxyEnabled, localProxy.isRunning else { return nil }
         switch activeConfig {
         case .socks5:
             return localProxy.localProxyConfig
@@ -508,7 +533,7 @@ class DeviceProxyService {
 
     private func persistSettings() {
         let dict: [String: Any] = [
-            "enabled": isEnabled,
+            "ipRoutingMode": ipRoutingMode.rawValue,
             "interval": rotationInterval.rawValue,
             "rotateOnBatch": rotateOnBatchStart,
             "rotateOnFingerprint": rotateOnFingerprintDetection,
@@ -525,7 +550,12 @@ class DeviceProxyService {
         let fallbackKey = "device_proxy_settings_v1"
         let dict = UserDefaults.standard.dictionary(forKey: key) ?? UserDefaults.standard.dictionary(forKey: fallbackKey)
         guard let dict else { return }
-        if let enabled = dict["enabled"] as? Bool { isEnabled = enabled }
+        if let modeRaw = dict["ipRoutingMode"] as? String,
+           let mode = IPRoutingMode(rawValue: modeRaw) {
+            ipRoutingMode = mode
+        } else if let enabled = dict["enabled"] as? Bool {
+            ipRoutingMode = enabled ? .appWideUnited : .separatePerSession
+        }
         if let interval = dict["interval"] as? String,
            let parsed = RotationInterval(rawValue: interval) { rotationInterval = parsed }
         if let batch = dict["rotateOnBatch"] as? Bool { rotateOnBatchStart = batch }

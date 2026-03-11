@@ -6,7 +6,7 @@ struct UnifiedIPBannerView: View {
     @State private var tickTimer: Timer?
 
     var body: some View {
-        if deviceProxy.isEnabled && deviceProxy.isActive {
+        if deviceProxy.ipRoutingMode == .appWideUnited && deviceProxy.isActive {
             HStack(spacing: 8) {
                 Circle()
                     .fill(bannerColor)
@@ -14,6 +14,10 @@ struct UnifiedIPBannerView: View {
 
                 Image(systemName: "shield.checkered")
                     .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(bannerColor)
+
+                Text("United IP")
+                    .font(.system(size: 9, weight: .heavy, design: .monospaced))
                     .foregroundStyle(bannerColor)
 
                 if let label = deviceProxy.activeEndpointLabel {
