@@ -20,40 +20,51 @@ enum TimeoutResolver {
     }
 
     static func resolveRequestTimeout(_ hardcoded: TimeInterval) -> TimeInterval {
-        let userTimeout = userTestTimeout
         let pageLoad = shared.pageLoadTimeout
-        let effective = max(hardcoded, userTimeout, pageLoad)
-        return effective
+        if pageLoad > 0 {
+            return pageLoad
+        }
+        return hardcoded
     }
 
     static func resolveResourceTimeout(_ hardcoded: TimeInterval) -> TimeInterval {
-        let userTimeout = userTestTimeout
         let pageLoad = shared.pageLoadTimeout
-        let effective = max(hardcoded, userTimeout, pageLoad) + 30
-        return effective
+        if pageLoad > 0 {
+            return pageLoad + 30
+        }
+        return hardcoded + 30
     }
 
     static func resolvePageLoadTimeout(_ hardcoded: TimeInterval) -> TimeInterval {
-        let userTimeout = userTestTimeout
         let pageLoad = shared.pageLoadTimeout
-        return max(hardcoded, userTimeout, pageLoad)
+        if pageLoad > 0 {
+            return pageLoad
+        }
+        return hardcoded
     }
 
     static func resolveHeartbeatTimeout(_ hardcoded: TimeInterval) -> TimeInterval {
-        let userTimeout = userTestTimeout
         let pageLoad = shared.pageLoadTimeout
-        let highestTest = max(userTimeout, pageLoad)
-        return max(hardcoded, highestTest + 30)
+        let effective = pageLoad > 0 ? pageLoad : hardcoded
+        return effective + 30
     }
 
     static func resolveTestTimeout(_ hardcoded: TimeInterval, userSetting: TimeInterval) -> TimeInterval {
         let pageLoad = shared.pageLoadTimeout
-        return max(hardcoded, userSetting, pageLoad)
+        if userSetting > 0 && userSetting != 90 {
+            return userSetting
+        }
+        if pageLoad > 0 {
+            return max(hardcoded, pageLoad)
+        }
+        return hardcoded
     }
 
     static func resolveAutoHealCap(_ currentTimeout: TimeInterval) -> TimeInterval {
-        let userTimeout = userTestTimeout
         let pageLoad = shared.pageLoadTimeout
-        return max(currentTimeout, userTimeout, pageLoad)
+        if pageLoad > 0 {
+            return max(currentTimeout, pageLoad)
+        }
+        return currentTimeout
     }
 }

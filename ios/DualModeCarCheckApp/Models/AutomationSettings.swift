@@ -230,6 +230,17 @@ nonisolated struct AutomationSettings: Codable, Sendable {
     var webViewImageLoadingEnabled: Bool = true
     var webViewPluginsEnabled: Bool = false
 
+    // MARK: - Blank Page Recovery
+    var blankPageRecoveryEnabled: Bool = true
+    var blankPageWaitThresholdSeconds: Int = 30
+    var blankPageFallback1_WaitAndRecheck: Bool = true
+    var blankPageFallback2_ChangeURL: Bool = true
+    var blankPageFallback3_ChangeDNS: Bool = true
+    var blankPageFallback4_ChangeFingerprint: Bool = true
+    var blankPageFallback5_FullSessionReset: Bool = true
+    var blankPageMaxFallbackAttempts: Int = 5
+    var blankPageRecheckIntervalMs: Int = 3000
+
     // MARK: - Error Classification
     var networkErrorAutoRetry: Bool = true
     var sslErrorAutoRetry: Bool = false

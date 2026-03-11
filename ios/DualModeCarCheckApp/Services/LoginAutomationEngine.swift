@@ -170,15 +170,31 @@ class LoginAutomationEngine {
         logger.log("Page title: \"\(pageTitle)\"", category: .webView, level: .debug, sessionId: sessionId)
 
         if let initialScreenshot = await session.captureScreenshot(), BlankScreenshotDetector.isBlank(initialScreenshot) {
-            attempt.logs.append(PPSRLogEntry(message: "BLANK PAGE after load — rotating URL & requeuing", level: .warning))
-            logger.log("BLANK PAGE detected after load for \(attempt.credential.username) on \(session.targetURL.absoluteString)", category: .screenshot, level: .error, sessionId: sessionId)
-            await captureDebugScreenshot(session: session, attempt: attempt, step: "blank_page_load", note: "BLANK PAGE on load — auto-retry with different URL & IP", autoResult: .unknown)
-            attempt.status = .failed
-            attempt.errorMessage = "Blank page on load — auto-retry with different URL & IP"
-            attempt.completedAt = Date()
-            onBlankScreenshot?(session.targetURL.absoluteString)
-            onUnusualFailure?("Blank page for \(attempt.credential.username) on \(session.targetURL.host ?? "unknown") — rotating URL")
-            return .connectionFailure
+            attempt.logs.append(PPSRLogEntry(message: "BLANK PAGE after load — starting multi-step recovery...", level: .warning))
+            logger.log("BLANK PAGE detected after load for \(attempt.credential.username) on \(session.targetURL.absoluteString) — initiating recovery", category: .screenshot, level: .error, sessionId: sessionId)
+
+            let recoveryResult = await BlankPageRecoveryService.shared.attemptRecoveryForLoginSession(
+                session: session,
+                settings: automationSettings,
+                proxyTarget: proxyTarget,
+                sessionId: sessionId,
+                onLog: { [weak self] msg, level in
+                    attempt.logs.append(PPSRLogEntry(message: msg, level: level))
+                    self?.onLog?(msg, level)
+                }
+            )
+
+            if !recoveryResult.recovered {
+                await captureDebugScreenshot(session: session, attempt: attempt, step: "blank_page_load", note: "BLANK PAGE — recovery failed after \(recoveryResult.attemptsUsed) steps: \(recoveryResult.detail)", autoResult: .unknown)
+                attempt.status = .failed
+                attempt.errorMessage = "Blank page — recovery failed: \(recoveryResult.detail)"
+                attempt.completedAt = Date()
+                onBlankScreenshot?(session.targetURL.absoluteString)
+                onUnusualFailure?("Blank page for \(attempt.credential.username) — all recovery steps failed")
+                return .connectionFailure
+            }
+            attempt.logs.append(PPSRLogEntry(message: "BLANK PAGE RECOVERED via \(recoveryResult.stepUsed?.rawValue ?? "unknown"): \(recoveryResult.detail)", level: .success))
+            logger.log("BLANK PAGE RECOVERED for \(attempt.credential.username) via \(recoveryResult.stepUsed?.rawValue ?? "unknown")", category: .automation, level: .success, sessionId: sessionId)
         }
 
         logger.startTimer(key: "\(sessionId)_cookies")
@@ -433,15 +449,30 @@ class LoginAutomationEngine {
             attempt.responseSnapshot = screenshotImage
 
             if let img = screenshotImage, BlankScreenshotDetector.isBlank(img) {
-                attempt.logs.append(PPSRLogEntry(message: "BLANK SCREENSHOT detected on cycle \(cycle) — requeuing with different URL/IP", level: .warning))
-                logger.log("BLANK SCREENSHOT detected for \(attempt.credential.username) on \(session.targetURL.absoluteString)", category: .screenshot, level: .error, sessionId: sessionId)
-                await captureDebugScreenshot(session: session, attempt: attempt, step: "blank_screenshot", note: "BLANK PAGE — auto-retry with different URL & IP", autoResult: .unknown)
-                attempt.status = .failed
-                attempt.errorMessage = "Blank screenshot — auto-retry with different URL & IP"
-                attempt.completedAt = Date()
-                onBlankScreenshot?(session.targetURL.absoluteString)
-                onUnusualFailure?("Blank screenshot for \(attempt.credential.username) on \(session.targetURL.host ?? "") — rotating URL")
-                return .connectionFailure
+                attempt.logs.append(PPSRLogEntry(message: "BLANK SCREENSHOT on cycle \(cycle) — starting recovery...", level: .warning))
+                logger.log("BLANK SCREENSHOT detected for \(attempt.credential.username) on cycle \(cycle)", category: .screenshot, level: .error, sessionId: sessionId)
+
+                let postSubmitRecovery = await BlankPageRecoveryService.shared.attemptRecoveryForLoginSession(
+                    session: session,
+                    settings: automationSettings,
+                    proxyTarget: proxyTarget,
+                    sessionId: sessionId,
+                    onLog: { [weak self] msg, level in
+                        attempt.logs.append(PPSRLogEntry(message: msg, level: level))
+                        self?.onLog?(msg, level)
+                    }
+                )
+
+                if !postSubmitRecovery.recovered {
+                    await captureDebugScreenshot(session: session, attempt: attempt, step: "blank_screenshot", note: "BLANK PAGE — recovery failed: \(postSubmitRecovery.detail)", autoResult: .unknown)
+                    attempt.status = .failed
+                    attempt.errorMessage = "Blank screenshot — recovery failed: \(postSubmitRecovery.detail)"
+                    attempt.completedAt = Date()
+                    onBlankScreenshot?(session.targetURL.absoluteString)
+                    onUnusualFailure?("Blank screenshot for \(attempt.credential.username) — recovery failed")
+                    return .connectionFailure
+                }
+                attempt.logs.append(PPSRLogEntry(message: "BLANK PAGE RECOVERED on cycle \(cycle) via \(postSubmitRecovery.stepUsed?.rawValue ?? "unknown")", level: .success))
             }
 
             let welcomeTextFound = pollResult.welcomeTextFound

@@ -82,6 +82,12 @@ class LoginWebSession: NSObject {
         }
     }
 
+    func applyNewStealthProfile(userAgent: String, userScript: WKUserScript) {
+        webView?.customUserAgent = userAgent
+        webView?.configuration.userContentController.removeAllUserScripts()
+        webView?.configuration.userContentController.addUserScript(userScript)
+    }
+
     func injectFingerprint() async {
         guard stealthEnabled, stealthProfile != nil else { return }
         let js = PPSRStealthService.shared.fingerprintJS()
