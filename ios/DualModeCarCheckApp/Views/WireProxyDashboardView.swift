@@ -17,7 +17,7 @@ struct WireProxyDashboardView: View {
             actionsSection
         }
         .listStyle(.insetGrouped)
-        .navigationTitle("WireProxy Tunnel")
+        .navigationTitle("WireGuard Tunnel")
         .onAppear {
             refreshTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
                 Task { @MainActor in refreshTick += 1 }
@@ -105,8 +105,8 @@ struct WireProxyDashboardView: View {
             }
         } header: {
             HStack {
-                Image(systemName: "shield.lefthalf.filled.trianglebadge.exclamationmark")
-                Text("WireProxy Tunnel")
+                Image(systemName: "lock.shield.fill")
+                Text("WireGuard Tunnel")
                 Spacer()
                 Text(bridge.status.rawValue.uppercased())
                     .font(.system(.caption2, design: .monospaced, weight: .bold))
@@ -410,7 +410,7 @@ struct WireProxyDashboardView: View {
                     HStack(spacing: 8) {
                         Image(systemName: "stop.circle.fill")
                             .foregroundStyle(.red)
-                        Text("Stop WireProxy Tunnel")
+                        Text("Stop WireGuard Tunnel")
                             .font(.subheadline.bold())
                         Spacer()
                     }
@@ -434,7 +434,7 @@ struct WireProxyDashboardView: View {
                     HStack(spacing: 8) {
                         Image(systemName: "play.circle.fill")
                             .foregroundStyle(.green)
-                        Text("Start WireProxy Tunnel")
+                        Text("Start WireGuard Tunnel")
                             .font(.subheadline.bold())
                         Spacer()
                     }
@@ -446,7 +446,7 @@ struct WireProxyDashboardView: View {
                 Text("Actions")
             }
         } footer: {
-            Text("WireProxy creates a userspace WireGuard tunnel that routes all SOCKS5 traffic through the encrypted tunnel. No NetworkExtension required — works in simulator.")
+            Text("Routes all SOCKS5 traffic through an encrypted WireGuard tunnel. No NetworkExtension or VPN profile required.")
         }
     }
 

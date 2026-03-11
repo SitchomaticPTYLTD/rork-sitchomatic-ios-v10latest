@@ -1,38 +1,31 @@
-# Fix WebView IP Leaks & Network Config Issues
+# Combine WireGuard and WireProxy into a single unified mode
 
-## Summary
-The WebViews are currently leaking the real device IP in several scenarios. This plan fixes all the paths where traffic can bypass the proxy/VPN, ensuring WebViews always return a different IP.
+## What's changing
 
----
+WireGuard mode and WireProxy are doing the same thing — tunneling traffic through WireGuard configs. The current setup has two separate toggles and duplicate code paths that make things confusing and fragile. This plan merges them into one clean "WireGuard" mode that always uses WireProxy (the userspace tunnel that actually works).
 
-### **Fix 1: WebView Always Gets a Proxy — Never Bare IP**
-- When WireGuard mode is active but the tunnel isn't connected yet, apply a SOCKS5 fallback proxy to the WebView configuration immediately (instead of just firing a background VPN connect and letting the WebView load unprotected)
-- When OpenVPN mode is active but no tunnel exists, apply the same SOCKS5 fallback
-- If no SOCKS5 fallback is available either, **block the WebView from loading** and return an error to the caller — never silently proceed on real IP
+### Changes
 
-### **Fix 2: Use Correct Target for SOCKS5 Fallback**
-- All fallback paths currently hardcode `.joe` when looking for a SOCKS5 proxy — change these to accept and use the actual target (Joe/Ignition/PPSR) so the correct proxy pool is used
-- Add a `target` parameter to `configureWKWebView`, `buildURLSessionConfiguration`, and `buildProxiedDataStore`
+**1. Remove the separate VPN Tunnel toggle**
+- The `vpnTunnelEnabled` toggle in Device Network Settings will be removed — it relies on a system VPN extension that isn't built
+- All WireGuard traffic will use WireProxy as the single tunnel mechanism
+- The `wireProxyTunnelEnabled` toggle becomes the default behavior when WireGuard mode is active — no separate toggle needed
 
-### **Fix 3: Make `buildProxiedDataStore` Handle All Config Types**
-- Currently only handles SOCKS5 and silently ignores WireGuard/OpenVPN — extend it to apply proxy configurations for all modes (using the same WireProxy/SOCKS5 fallback logic as `configureWKWebView`)
+**2. Simplify DeviceProxyService**
+- When WireGuard mode is active and a WG config is selected, WireProxy starts automatically
+- No more choosing between "WireProxy tunnel" vs "VPN tunnel" — it's just "WireGuard" and it uses WireProxy under the hood
+- The WireProxy dashboard, stats, reconnect, and rotation features all stay as-is
 
-### **Fix 4: Prevent Duplicate VPN Connection Attempts**
-- Add a guard in `VPNTunnelManager.configureAndConnect` that skips if already connecting/connected to the same config
-- Remove the redundant VPN connect triggers from `buildURLSessionConfiguration` and `configureWKWebView` — VPN connection should only be initiated from `nextConfig()` or `DeviceProxyService`
+**3. Simplify NetworkSessionFactory**
+- Remove the dead VPN tunnel check paths in the `.wireguard` case — WireProxy is always the mechanism
+- When `.wireGuardDNS` config is resolved, it always routes through WireProxy's local SOCKS5 proxy
+- Fallback to SOCKS5 proxies still works if WireProxy fails to connect
 
-### **Fix 5: WebView Proxy Pre-flight Verification**
-- Before loading a WebView through a proxy, do a quick connectivity test (SOCKS5 handshake, ~2 second timeout)
-- If the proxy is dead, immediately rotate to the next working proxy before the WebView starts loading
-- Log the result for diagnostics
+**4. Clean up the UI**
+- Device Network Settings: Remove the separate "VPN Tunnel" section
+- The WireProxy status/dashboard remains but is now simply called "WireGuard Tunnel" in the UI
+- One toggle: WireGuard mode on/off. When on, WireProxy starts. When off, it stops.
 
-### **Fix 6: Clean Up WebViewPool Dead Code**
-- Remove the `available` pool array since WebViews are always created fresh (never reused)
-- Simplify to just track `inUse` count for diagnostics
-- Ensure `proxyConfigurations` are explicitly cleared on release
-
-### **Fix 7: Fix WireProxy Handoff Double-Finish**
-- In `WireProxySOCKS5Handler.handoffToWireProxyBridge()`, remove the premature `tunnelConnectionFinished` call — let the bridge manage the connection lifecycle
-
-### **Fix 8: DeviceProxy Respects Connection Mode Preference**
-- Change `resolveNextConfig()` to check the user's unified connection mode preference and select the matching config type first, instead of always prioritizing WireGuard over everything else
+**5. Keep VPNTunnelManager as infrastructure**
+- The VPNTunnelManager code stays in the codebase (it's used for endpoint reachability testing)
+- It just won't be used as a traffic routing mechanism anymore

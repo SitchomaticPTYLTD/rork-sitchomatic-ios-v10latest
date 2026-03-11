@@ -20,7 +20,6 @@ struct DeviceNetworkSettingsView: View {
     private let nordService = NordVPNService.shared
     private let deviceProxy = DeviceProxyService.shared
     private let localProxy = LocalProxyServer.shared
-    private let vpnTunnel = VPNTunnelManager.shared
     private let healthMonitor = ProxyHealthMonitor.shared
     private let wireProxyBridge = WireProxyBridge.shared
     private let logger = DebugLogger.shared
@@ -32,9 +31,8 @@ struct DeviceNetworkSettingsView: View {
             deviceWideBanner
             unifiedIPSection
             if deviceProxy.isEnabled {
-                wireProxyTunnelSection
+                wireGuardTunnelSection
                 localProxySection
-                vpnTunnelSection
             }
             connectionModeSection
             ignitionRegionSection
@@ -321,9 +319,9 @@ struct DeviceNetworkSettingsView: View {
         }
     }
 
-    // MARK: - WireProxy Tunnel (Stage 6)
+    // MARK: - WireGuard Tunnel
 
-    private var wireProxyTunnelSection: some View {
+    private var wireGuardTunnelSection: some View {
         Section {
             Toggle(isOn: Binding(
                 get: { deviceProxy.wireProxyTunnelEnabled },
@@ -334,14 +332,14 @@ struct DeviceNetworkSettingsView: View {
                         Circle()
                             .fill(wireProxyBridge.isActive ? Color.purple.opacity(0.15) : Color.gray.opacity(0.1))
                             .frame(width: 36, height: 36)
-                        Image(systemName: "shield.lefthalf.filled.trianglebadge.exclamationmark")
+                        Image(systemName: "lock.shield.fill")
                             .font(.system(size: 16, weight: .semibold))
                             .foregroundStyle(wireProxyBridge.isActive ? .purple : .secondary)
                     }
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("WireProxy Tunnel")
+                        Text("WireGuard Tunnel")
                             .font(.subheadline.bold())
-                        Text("Userspace WG tunnel (no VPN needed)")
+                        Text("Encrypted WG tunnel via WireProxy")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                     }
@@ -474,7 +472,7 @@ struct DeviceNetworkSettingsView: View {
                         Image(systemName: "chart.bar.xaxis")
                             .font(.system(size: 14, weight: .semibold))
                             .foregroundStyle(.purple)
-                        Text("WireProxy Dashboard")
+                        Text("WireGuard Dashboard")
                             .font(.subheadline.bold())
                         Spacer()
                         Text(wireProxyBridge.status.rawValue)
@@ -485,8 +483,8 @@ struct DeviceNetworkSettingsView: View {
             }
         } header: {
             HStack {
-                Image(systemName: "shield.lefthalf.filled.trianglebadge.exclamationmark")
-                Text("WireProxy Tunnel (Stage 6)")
+                Image(systemName: "lock.shield.fill")
+                Text("WireGuard Tunnel")
                 Spacer()
                 if wireProxyBridge.isActive {
                     Text("ACTIVE")
@@ -505,7 +503,7 @@ struct DeviceNetworkSettingsView: View {
                 }
             }
         } footer: {
-            Text("Userspace WireGuard tunnel routes all traffic through the encrypted WG tunnel without requiring a VPN profile or NetworkExtension. Works in simulator. Uses the active WireGuard config from rotation.")
+            Text("Routes all traffic through an encrypted WireGuard tunnel using the active WG config from rotation. No VPN profile or NetworkExtension required.")
         }
     }
 
@@ -700,236 +698,6 @@ struct DeviceNetworkSettingsView: View {
         if bytes < 1024 * 1024 { return String(format: "%.1f KB", Double(bytes) / 1024) }
         if bytes < 1024 * 1024 * 1024 { return String(format: "%.1f MB", Double(bytes) / (1024 * 1024)) }
         return String(format: "%.2f GB", Double(bytes) / (1024 * 1024 * 1024))
-    }
-
-    // MARK: - VPN Tunnel
-
-    private var vpnTunnelSection: some View {
-        Section {
-            Toggle(isOn: Binding(
-                get: { deviceProxy.vpnTunnelEnabled },
-                set: { deviceProxy.vpnTunnelEnabled = $0 }
-            )) {
-                HStack(spacing: 10) {
-                    ZStack {
-                        Circle()
-                            .fill(vpnTunnel.isConnected ? Color.blue.opacity(0.15) : Color.gray.opacity(0.1))
-                            .frame(width: 36, height: 36)
-                        Image(systemName: "lock.shield.fill")
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundStyle(vpnTunnel.isConnected ? .blue : .secondary)
-                    }
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("VPN Tunnel")
-                            .font(.subheadline.bold())
-                        Text("Device-wide WireGuard tunnel")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            }
-            .tint(.blue)
-
-            if deviceProxy.vpnTunnelEnabled {
-                HStack(spacing: 10) {
-                    Circle()
-                        .fill(vpnTunnelStatusColor)
-                        .frame(width: 8, height: 8)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(vpnTunnel.statusDetail)
-                            .font(.system(.caption, design: .monospaced, weight: .bold))
-                            .foregroundStyle(vpnTunnelStatusColor)
-                        if vpnTunnel.isConnected {
-                            Text("Uptime: \(vpnTunnel.uptimeString)")
-                                .font(.system(.caption2, design: .monospaced))
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    Spacer()
-                    if vpnTunnel.isConnected {
-                        Text("ACTIVE")
-                            .font(.system(.caption2, design: .monospaced, weight: .bold))
-                            .foregroundStyle(.blue)
-                            .padding(.horizontal, 6).padding(.vertical, 3)
-                            .background(Color.blue.opacity(0.1))
-                            .clipShape(Capsule())
-                    }
-                }
-
-                if let configName = vpnTunnel.activeConfigName {
-                    HStack(spacing: 10) {
-                        Image(systemName: "antenna.radiowaves.left.and.right")
-                            .font(.system(size: 12, weight: .bold))
-                            .foregroundStyle(.blue)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Active Config")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                            Text(configName)
-                                .font(.system(.caption, design: .monospaced, weight: .medium))
-                                .lineLimit(1)
-                        }
-                    }
-                }
-
-                if let error = vpnTunnel.lastError {
-                    HStack(spacing: 8) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .font(.caption2)
-                            .foregroundStyle(.orange)
-                        Text(error)
-                            .font(.system(.caption2, design: .monospaced))
-                            .foregroundStyle(.orange)
-                            .lineLimit(2)
-                    }
-                }
-
-                if !vpnTunnel.isSupported {
-                    HStack(spacing: 8) {
-                        Image(systemName: "info.circle.fill")
-                            .font(.caption2)
-                            .foregroundStyle(.yellow)
-                        Text("VPN tunnel requires a real device. Install via Rork App to use.")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                if vpnTunnel.isConnected {
-                    HStack(spacing: 16) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            HStack(spacing: 4) {
-                                Image(systemName: "arrow.down")
-                                    .font(.system(size: 9, weight: .bold))
-                                    .foregroundStyle(.green)
-                                Text("In")
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
-                            }
-                            Text(vpnTunnel.dataInLabel)
-                                .font(.system(.caption, design: .monospaced, weight: .bold))
-                        }
-                        VStack(alignment: .leading, spacing: 2) {
-                            HStack(spacing: 4) {
-                                Image(systemName: "arrow.up")
-                                    .font(.system(size: 9, weight: .bold))
-                                    .foregroundStyle(.blue)
-                                Text("Out")
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
-                            }
-                            Text(vpnTunnel.dataOutLabel)
-                                .font(.system(.caption, design: .monospaced, weight: .bold))
-                        }
-                        Spacer()
-                    }
-                }
-
-                HStack(spacing: 12) {
-                    if vpnTunnel.isConnected {
-                        Button {
-                            vpnTunnel.disconnect(reason: "Manual")
-                        } label: {
-                            Label("Disconnect", systemImage: "stop.circle.fill")
-                                .font(.caption.bold())
-                                .foregroundStyle(.red)
-                        }
-                    }
-
-                    Button {
-                        Task { await vpnTunnel.removeConfiguration() }
-                    } label: {
-                        Label("Remove Config", systemImage: "trash")
-                            .font(.caption.bold())
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                NavigationLink {
-                    VPNStatusDashboardView()
-                } label: {
-                    HStack(spacing: 8) {
-                        Image(systemName: "chart.bar.xaxis")
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(.blue)
-                        Text("VPN Dashboard")
-                            .font(.subheadline.bold())
-                        Spacer()
-                        Text(vpnTunnel.status.rawValue)
-                            .font(.system(.caption2, design: .monospaced))
-                            .foregroundStyle(.tertiary)
-                    }
-                }
-
-                Toggle(isOn: Binding(
-                    get: { vpnTunnel.autoReconnect },
-                    set: { vpnTunnel.autoReconnect = $0 }
-                )) {
-                    HStack(spacing: 8) {
-                        Image(systemName: "arrow.clockwise")
-                            .foregroundStyle(.blue)
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text("Auto-Reconnect")
-                                .font(.subheadline)
-                            Text("Reconnect on disconnect (max \(vpnTunnel.maxReconnectAttempts) attempts)")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                }
-                .tint(.blue)
-
-                Toggle(isOn: Binding(
-                    get: { vpnTunnel.onDemandEnabled },
-                    set: { vpnTunnel.onDemandEnabled = $0 }
-                )) {
-                    HStack(spacing: 8) {
-                        Image(systemName: "wifi")
-                            .foregroundStyle(.blue)
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text("Connect On Demand")
-                                .font(.subheadline)
-                            Text("Auto-connect on WiFi & Cellular")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                }
-                .tint(.blue)
-            }
-        } header: {
-            HStack {
-                Image(systemName: "lock.shield.fill")
-                Text("VPN Tunnel (Stage 3)")
-                Spacer()
-                if vpnTunnel.isConnected {
-                    Text("CONNECTED")
-                        .font(.system(.caption2, design: .monospaced, weight: .bold))
-                        .foregroundStyle(.blue)
-                        .padding(.horizontal, 6).padding(.vertical, 2)
-                        .background(Color.blue.opacity(0.12))
-                        .clipShape(Capsule())
-                } else if vpnTunnel.isReconnecting {
-                    Text("RECONNECTING")
-                        .font(.system(.caption2, design: .monospaced, weight: .bold))
-                        .foregroundStyle(.orange)
-                        .padding(.horizontal, 6).padding(.vertical, 2)
-                        .background(Color.orange.opacity(0.12))
-                        .clipShape(Capsule())
-                }
-            }
-        } footer: {
-            Text("When active, ALL device traffic routes through a WireGuard VPN tunnel. Requires a real device with the Network Extension entitlement. Auto-reconnect retries on failure, on-demand keeps the tunnel always active.")
-        }
-    }
-
-    private var vpnTunnelStatusColor: Color {
-        switch vpnTunnel.status {
-        case .connected: .blue
-        case .connecting, .reasserting, .configuring: .orange
-        case .disconnected, .disconnecting: .secondary
-        case .error, .invalid: .red
-        }
     }
 
     // MARK: - Connection Mode

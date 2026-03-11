@@ -65,22 +65,11 @@ class DeviceProxyService {
     private let wireProxyBridge = WireProxyBridge.shared
     private let logger = DebugLogger.shared
 
-    var wireProxyTunnelEnabled: Bool = false {
+    var wireProxyTunnelEnabled: Bool = true {
         didSet {
             persistSettings()
             if isEnabled {
                 syncWireProxyTunnel()
-            }
-        }
-    }
-
-    var vpnTunnelEnabled: Bool = false {
-        didSet {
-            persistSettings()
-            if isEnabled && vpnTunnelEnabled {
-                activateVPNTunnel()
-            } else if !vpnTunnelEnabled {
-                deactivateVPNTunnel()
             }
         }
     }
@@ -213,7 +202,7 @@ class DeviceProxyService {
             }
         }
 
-        logger.log("DeviceProxy: Unified IP mode ENABLED (localProxy: \(localProxyEnabled), vpnTunnel: \(vpnTunnelEnabled), autoFailover: \(autoFailoverEnabled))", category: .network, level: .info)
+        logger.log("DeviceProxy: Unified IP mode ENABLED (localProxy: \(localProxyEnabled), wireProxy: \(wireProxyTunnelEnabled), autoFailover: \(autoFailoverEnabled))", category: .network, level: .info)
     }
 
     private func deactivateUnifiedMode() {
@@ -227,7 +216,6 @@ class DeviceProxyService {
         isActive = false
         localProxy.stop()
         wireProxyBridge.stop()
-        deactivateVPNTunnel()
         logger.log("DeviceProxy: Unified IP mode DISABLED", category: .network, level: .info)
     }
 
@@ -297,51 +285,14 @@ class DeviceProxyService {
         }
 
         syncLocalProxyUpstream()
-        syncVPNTunnel()
 
         isRotating = false
 
         logger.log("DeviceProxy: rotated to \(activeEndpointLabel ?? "Unknown") (reason: \(reason))", category: .network, level: .info)
     }
 
-    private func activateVPNTunnel() {
-        guard vpnTunnel.isSupported else {
-            logger.log("DeviceProxy: VPN tunnel not supported on this device", category: .vpn, level: .warning)
-            return
-        }
-        Task {
-            await vpnTunnel.loadExistingManager()
-            if case .wireGuardDNS(let wg) = activeConfig {
-                await vpnTunnel.configureAndConnect(with: wg)
-                logger.log("DeviceProxy: VPN tunnel activated device-wide with \(wg.serverName)", category: .vpn, level: .info)
-            } else {
-                syncVPNTunnel()
-            }
-        }
-    }
-
-    private func deactivateVPNTunnel() {
-        if vpnTunnel.isActive {
-            vpnTunnel.disconnect(reason: "Unified mode deactivated")
-        }
-    }
-
-    private func syncVPNTunnel() {
-        guard vpnTunnelEnabled, isEnabled else { return }
-        if case .wireGuardDNS(let wg) = activeConfig {
-            Task {
-                if vpnTunnel.isConnected, vpnTunnel.activeConfigName == wg.fileName {
-                    logger.log("DeviceProxy: VPN tunnel already connected to \(wg.serverName)", category: .vpn, level: .debug)
-                    return
-                }
-                await vpnTunnel.configureAndConnect(with: wg)
-            }
-            logger.log("DeviceProxy: VPN tunnel connecting device-wide to WG \(wg.serverName)", category: .vpn, level: .info)
-        }
-    }
-
     var isVPNActive: Bool {
-        vpnTunnelEnabled && vpnTunnel.isConnected
+        false
     }
 
     private func syncLocalProxyUpstream() {
@@ -444,9 +395,6 @@ class DeviceProxyService {
     }
 
     var effectiveProxyConfig: ProxyConfig? {
-        if vpnTunnel.isConnected {
-            return nil
-        }
         guard isEnabled, isActive, localProxyEnabled, localProxy.isRunning else { return nil }
         switch activeConfig {
         case .socks5:
@@ -548,7 +496,6 @@ class DeviceProxyService {
             "rotateOnBatch": rotateOnBatchStart,
             "rotateOnFingerprint": rotateOnFingerprintDetection,
             "localProxy": localProxyEnabled,
-            "vpnTunnel": vpnTunnelEnabled,
             "wireProxyTunnel": wireProxyTunnelEnabled,
             "autoFailover": autoFailoverEnabled,
             "healthCheckInterval": healthCheckInterval,
@@ -568,7 +515,6 @@ class DeviceProxyService {
         if let batch = dict["rotateOnBatch"] as? Bool { rotateOnBatchStart = batch }
         if let fp = dict["rotateOnFingerprint"] as? Bool { rotateOnFingerprintDetection = fp }
         if let lp = dict["localProxy"] as? Bool { localProxyEnabled = lp }
-        if let vt = dict["vpnTunnel"] as? Bool { vpnTunnelEnabled = vt }
         if let wpt = dict["wireProxyTunnel"] as? Bool { wireProxyTunnelEnabled = wpt }
         if let af = dict["autoFailover"] as? Bool { autoFailoverEnabled = af }
         if let hci = dict["healthCheckInterval"] as? TimeInterval { healthCheckInterval = hci }
