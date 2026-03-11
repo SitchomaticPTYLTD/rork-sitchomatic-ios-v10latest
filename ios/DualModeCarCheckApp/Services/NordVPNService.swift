@@ -92,12 +92,15 @@ class NordVPNService {
     var recommendedServers: [NordVPNServer] = []
     var lastFetched: Date?
     var activeKeyProfile: NordKeyProfile = .nick
+    var hasSelectedProfile: Bool = false
 
     private let accessKeyPersistKey = "nordvpn_access_key_v1"
     private let privateKeyPersistKey = "nordvpn_private_key_v1"
     private let keyProfilePersistKey = "nordvpn_key_profile_v1"
     private let nickPrivateKeyPersistKey = "nordvpn_nick_private_key_v1"
     private let poliPrivateKeyPersistKey = "nordvpn_poli_private_key_v1"
+    private let profileStorageSeedKey = "profile_network_storage_seed_v2"
+    private let profileStorageSeedVersion = "2"
     private let logger = DebugLogger.shared
     private let serverCacheKey = "nordvpn_server_cache_v1"
     private let serverCacheTimestampKey = "nordvpn_server_cache_ts_v1"
@@ -107,25 +110,43 @@ class NordVPNService {
         if let profileRaw = UserDefaults.standard.string(forKey: keyProfilePersistKey),
            let profile = NordKeyProfile(rawValue: profileRaw) {
             activeKeyProfile = profile
+            hasSelectedProfile = true
         }
-        accessKey = activeKeyProfile.hardcodedAccessKey
-        let pkKey = activeKeyProfile == .nick ? nickPrivateKeyPersistKey : poliPrivateKeyPersistKey
-        privateKey = UserDefaults.standard.string(forKey: pkKey) ?? ""
+        accessKey = NordVPNKeyStore.shared.keyForProfile(activeKeyProfile)
+        privateKey = UserDefaults.standard.string(forKey: privateKeyPersistKey(for: activeKeyProfile)) ?? ""
     }
 
-    func switchProfile(_ profile: NordKeyProfile) {
-        let currentPKKey = activeKeyProfile == .nick ? nickPrivateKeyPersistKey : poliPrivateKeyPersistKey
-        if !privateKey.isEmpty {
-            UserDefaults.standard.set(privateKey, forKey: currentPKKey)
+    private func privateKeyPersistKey(for profile: NordKeyProfile) -> String {
+        switch profile {
+        case .nick:
+            nickPrivateKeyPersistKey
+        case .poli:
+            poliPrivateKeyPersistKey
         }
+    }
 
+    private func persistCurrentPrivateKey() {
+        guard !privateKey.isEmpty else { return }
+        UserDefaults.standard.set(privateKey, forKey: privateKeyPersistKey(for: activeKeyProfile))
+        UserDefaults.standard.set(privateKey, forKey: privateKeyPersistKey)
+    }
+
+    private func activateProfile(_ profile: NordKeyProfile, persistSelection: Bool) {
         activeKeyProfile = profile
-        accessKey = profile.hardcodedAccessKey
-        UserDefaults.standard.set(profile.rawValue, forKey: keyProfilePersistKey)
+        accessKey = NordVPNKeyStore.shared.keyForProfile(profile)
+        privateKey = UserDefaults.standard.string(forKey: privateKeyPersistKey(for: profile)) ?? ""
+        if persistSelection {
+            UserDefaults.standard.set(profile.rawValue, forKey: keyProfilePersistKey)
+        }
         UserDefaults.standard.set(accessKey, forKey: accessKeyPersistKey)
+    }
 
-        let newPKKey = profile == .nick ? nickPrivateKeyPersistKey : poliPrivateKeyPersistKey
-        privateKey = UserDefaults.standard.string(forKey: newPKKey) ?? ""
+    func switchProfile(_ profile: NordKeyProfile, triggerAutoPopulate: Bool = true) {
+        guard activeKeyProfile != profile || !hasSelectedProfile else { return }
+
+        persistCurrentPrivateKey()
+        activateProfile(profile, persistSelection: true)
+        hasSelectedProfile = true
 
         recommendedServers.removeAll()
         lastError = nil
@@ -137,20 +158,23 @@ class NordVPNService {
 
         logger.log("NordVPN: switched to \(profile.rawValue) profile — key=\(accessKey.prefix(8))... pk=\(privateKey.isEmpty ? "EMPTY" : "SET") — all configs reloaded", category: .vpn, level: .success)
 
-        Task {
-            await autoPopulateConfigs(forceRefresh: false)
+        if triggerAutoPopulate {
+            Task {
+                await autoPopulateConfigs(forceRefresh: false)
+            }
         }
     }
 
     func setAccessKey(_ key: String) {
         accessKey = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        NordVPNKeyStore.shared.updateKey(accessKey, for: activeKeyProfile)
         UserDefaults.standard.set(accessKey, forKey: accessKeyPersistKey)
     }
 
     func setPrivateKey(_ key: String) {
         privateKey = key.trimmingCharacters(in: .whitespacesAndNewlines)
-        let pkKey = activeKeyProfile == .nick ? nickPrivateKeyPersistKey : poliPrivateKeyPersistKey
-        UserDefaults.standard.set(privateKey, forKey: pkKey)
+        UserDefaults.standard.set(privateKey, forKey: privateKeyPersistKey(for: activeKeyProfile))
+        UserDefaults.standard.set(privateKey, forKey: privateKeyPersistKey)
     }
 
     var hasAccessKey: Bool { !accessKey.isEmpty }
@@ -158,6 +182,8 @@ class NordVPNService {
 
     private let maxRetryAttempts = 3
     private let retryBaseDelay: TimeInterval = 2
+    private let expectedWireGuardConfigCount = 20
+    private let expectedOpenVPNConfigCount = 10
 
     private func isRetryableError(_ error: Error) -> Bool {
         if let urlError = error as? URLError {
@@ -465,6 +491,83 @@ class NordVPNService {
         return await downloadAllTCPConfigs(for: recommendedServers, target: target)
     }
 
+    func ensureProfileNetworkPoolsReady() async {
+        let proxyService = ProxyRotationService.shared
+        let nickCounts = proxyService.storageCounts(for: .nick)
+        let poliCounts = proxyService.storageCounts(for: .poli)
+        let seedVersion = UserDefaults.standard.string(forKey: profileStorageSeedKey)
+
+        let needsRefresh = seedVersion != profileStorageSeedVersion
+            || nickCounts.wireGuard != expectedWireGuardConfigCount
+            || nickCounts.openVPN != expectedOpenVPNConfigCount
+            || poliCounts.wireGuard != expectedWireGuardConfigCount
+            || poliCounts.openVPN != expectedOpenVPNConfigCount
+
+        guard needsRefresh else { return }
+
+        let originalProfile = activeKeyProfile
+        let originalProfileRaw = UserDefaults.standard.string(forKey: keyProfilePersistKey)
+
+        logger.log("NordVPN: rebuilding profile network pools in hard storage", category: .vpn, level: .info)
+
+        for profile in NordKeyProfile.allCases {
+            await rebuildNetworkPool(for: profile)
+        }
+
+        persistCurrentPrivateKey()
+        if let originalProfileRaw, let restoredProfile = NordKeyProfile(rawValue: originalProfileRaw) {
+            activateProfile(restoredProfile, persistSelection: true)
+            hasSelectedProfile = true
+        } else {
+            activateProfile(originalProfile, persistSelection: false)
+            UserDefaults.standard.removeObject(forKey: keyProfilePersistKey)
+            hasSelectedProfile = false
+        }
+
+        ProxyRotationService.shared.reloadForActiveProfile()
+        NetworkSessionFactory.shared.resetRotationIndexes()
+        DeviceProxyService.shared.handleProfileSwitch()
+        UserDefaults.standard.set(profileStorageSeedVersion, forKey: profileStorageSeedKey)
+    }
+
+    private func rebuildNetworkPool(for profile: NordKeyProfile) async {
+        persistCurrentPrivateKey()
+        activateProfile(profile, persistSelection: true)
+
+        let proxyService = ProxyRotationService.shared
+        proxyService.clearUnifiedNetworkConfigs(for: profile)
+        recommendedServers.removeAll()
+        lastError = nil
+        autoPopulateError = nil
+
+        if privateKey.isEmpty {
+            await fetchPrivateKey()
+        }
+
+        guard hasPrivateKey else {
+            autoPopulateError = "Failed to fetch private key for \(profile.rawValue)."
+            logger.log("NordVPN: profile pool rebuild aborted — no private key for \(profile.rawValue)", category: .vpn, level: .error)
+            return
+        }
+
+        await fetchRecommendedServers(limit: expectedWireGuardConfigCount, technology: "wireguard_udp")
+        let wireGuardConfigs = recommendedServers.prefix(expectedWireGuardConfigCount).compactMap { server in
+            generateWireGuardConfig(from: server)
+        }
+        proxyService.replaceUnifiedWGConfigs(Array(wireGuardConfigs), for: profile)
+
+        await fetchRecommendedServers(limit: expectedOpenVPNConfigCount, technology: "openvpn_tcp")
+        var openVPNConfigs: [OpenVPNConfig] = []
+        for server in recommendedServers.prefix(expectedOpenVPNConfigCount) {
+            if let config = await downloadOVPNConfig(from: server, proto: .tcp) {
+                openVPNConfigs.append(config)
+            }
+        }
+        proxyService.replaceUnifiedVPNConfigs(openVPNConfigs, for: profile)
+
+        logger.log("NordVPN: rebuilt \(profile.rawValue) storage — \(wireGuardConfigs.count) WG, \(openVPNConfigs.count) OVPN", category: .vpn, level: .success)
+    }
+
     func generateWireGuardConfig(from server: NordVPNServer) -> WireGuardConfig? {
         guard let publicKey = server.publicKey, !publicKey.isEmpty else { return nil }
         guard hasPrivateKey else { return nil }
@@ -544,8 +647,8 @@ class NordVPNService {
             return
         }
 
-        let wgCount = 20
-        let ovpnCount = 10
+        let wgCount = expectedWireGuardConfigCount
+        let ovpnCount = expectedOpenVPNConfigCount
 
         autoPopulateProgress = "[\(profileAtStart.rawValue)] Fetching WireGuard servers..."
         logger.log("NordVPN: auto-populate starting — \(wgCount) WG + \(ovpnCount) OVPN for \(profileAtStart.rawValue) (key: \(accessKey.prefix(8))...)", category: .vpn, level: .info)

@@ -13,6 +13,8 @@ struct ConsolidatedImportExportView: View {
     @State private var exportDocument: CardExportDocument?
     @State private var showCopiedToast: Bool = false
     @State private var dataSummary: (credentials: Int, cards: Int, urls: Int, proxies: Int, vpns: Int, wgs: Int, dns: Int, blacklist: Int, emails: Int, flows: Int, buttonConfigs: Int)?
+    @State private var nordService = NordVPNService.shared
+    @State private var proxyService = ProxyRotationService.shared
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -36,6 +38,9 @@ struct ConsolidatedImportExportView: View {
         .navigationTitle("Import / Export")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { refreshSummary() }
+        .onChange(of: nordService.activeKeyProfile) { _, _ in refreshSummary() }
+        .onChange(of: proxyService.joeWGConfigs.count) { _, _ in refreshSummary() }
+        .onChange(of: proxyService.joeVPNConfigs.count) { _, _ in refreshSummary() }
         .sheet(isPresented: $showExportSheet) { exportConfigSheet }
         .sheet(isPresented: $showImportSheet) { importConfigSheet }
         .fileExporter(isPresented: $showFileExporter, document: exportDocument, contentType: .plainText, defaultFilename: "full_backup_\(dateStamp()).txt") { result in
@@ -64,23 +69,57 @@ struct ConsolidatedImportExportView: View {
         dataSummary = AppDataExportService.shared.exportDataSummary()
     }
 
+    private var currentProfileCounts: ProfileStorageCounts {
+        proxyService.storageCounts(for: nordService.activeKeyProfile)
+    }
+
+    private var allProfileCounts: ProfileStorageCounts {
+        proxyService.allProfileStorageCounts()
+    }
+
+    private var profileTint: Color {
+        nordService.activeKeyProfile == .nick ? .blue : .purple
+    }
+
     // MARK: - Summary
 
     private var summarySection: some View {
         Section {
             if let s = dataSummary {
-                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
-                    summaryCell("Credentials", count: s.credentials, icon: "person.fill", color: .green)
-                    summaryCell("Cards", count: s.cards, icon: "creditcard.fill", color: .orange)
-                    summaryCell("URLs", count: s.urls, icon: "link", color: .blue)
-                    summaryCell("Proxies", count: s.proxies, icon: "shield.fill", color: .purple)
-                    summaryCell("VPNs", count: s.vpns, icon: "lock.shield.fill", color: .indigo)
-                    summaryCell("WireGuard", count: s.wgs, icon: "network.badge.shield.half.filled", color: .teal)
-                    summaryCell("DNS", count: s.dns, icon: "globe", color: .cyan)
-                    summaryCell("Blacklist", count: s.blacklist, icon: "hand.raised.slash.fill", color: .red)
-                    summaryCell("Emails", count: s.emails, icon: "envelope.fill", color: .mint)
-                    summaryCell("Flows", count: s.flows, icon: "record.circle", color: .pink)
-                    summaryCell("Btn Configs", count: s.buttonConfigs, icon: "target", color: .orange)
+                VStack(alignment: .leading, spacing: 16) {
+                    HStack(spacing: 10) {
+                        Label("Current Profile", systemImage: "person.crop.circle.fill")
+                            .font(.subheadline.weight(.semibold))
+                        Spacer()
+                        Text(nordService.activeKeyProfile.rawValue)
+                            .font(.system(.caption, design: .monospaced, weight: .bold))
+                            .foregroundStyle(profileTint)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(profileTint.opacity(0.14))
+                            .clipShape(Capsule())
+                    }
+
+                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
+                        storageSummaryCell("Current WireGuard", count: currentProfileCounts.wireGuard, icon: "network.badge.shield.half.filled", color: .teal)
+                        storageSummaryCell("Current VPN", count: currentProfileCounts.openVPN, icon: "lock.shield.fill", color: .indigo)
+                        storageSummaryCell("All Profiles WG", count: allProfileCounts.wireGuard, icon: "person.2.fill", color: .cyan)
+                        storageSummaryCell("All Profiles VPN", count: allProfileCounts.openVPN, icon: "externaldrive.fill", color: .orange)
+                    }
+
+                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
+                        summaryCell("Credentials", count: s.credentials, icon: "person.fill", color: .green)
+                        summaryCell("Cards", count: s.cards, icon: "creditcard.fill", color: .orange)
+                        summaryCell("URLs", count: s.urls, icon: "link", color: .blue)
+                        summaryCell("Proxies", count: s.proxies, icon: "shield.fill", color: .purple)
+                        summaryCell("VPNs", count: s.vpns, icon: "lock.shield.fill", color: .indigo)
+                        summaryCell("WireGuard", count: s.wgs, icon: "network.badge.shield.half.filled", color: .teal)
+                        summaryCell("DNS", count: s.dns, icon: "globe", color: .cyan)
+                        summaryCell("Blacklist", count: s.blacklist, icon: "hand.raised.slash.fill", color: .red)
+                        summaryCell("Emails", count: s.emails, icon: "envelope.fill", color: .mint)
+                        summaryCell("Flows", count: s.flows, icon: "record.circle", color: .pink)
+                        summaryCell("Btn Configs", count: s.buttonConfigs, icon: "target", color: .orange)
+                    }
                 }
                 .padding(.vertical, 4)
             } else {
@@ -90,8 +129,29 @@ struct ConsolidatedImportExportView: View {
         } header: {
             Label("Data Overview", systemImage: "chart.bar.fill")
         } footer: {
-            Text("All of the above plus automation settings, app preferences, sort order, and crop regions are included in every export.")
+            Text("The profile badge and current VPN/WireGuard counts reflect the selected Nick or Poli profile. Hard storage totals include both profiles. All of the above plus automation settings, app preferences, sort order, and crop regions are included in every export.")
         }
+    }
+
+    private func storageSummaryCell(_ label: String, count: Int, icon: String, color: Color) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: icon)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(color)
+                .frame(width: 18)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("\(count)")
+                    .font(.system(.headline, design: .monospaced, weight: .bold))
+                    .foregroundStyle(.primary)
+                Text(label)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .background(color.opacity(0.08))
+        .clipShape(.rect(cornerRadius: 12))
     }
 
     private func summaryCell(_ label: String, count: Int, icon: String, color: Color) -> some View {

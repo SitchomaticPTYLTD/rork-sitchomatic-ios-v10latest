@@ -2,8 +2,14 @@ import SwiftUI
 
 struct MainMenuView: View {
     @Binding var activeMode: ActiveAppMode?
+    let requiresProfileSelection: Bool
     @State private var animateIn: Bool = false
     @State private var nordService = NordVPNService.shared
+
+    init(activeMode: Binding<ActiveAppMode?>, requiresProfileSelection: Bool = false) {
+        _activeMode = activeMode
+        self.requiresProfileSelection = requiresProfileSelection
+    }
 
     var body: some View {
         GeometryReader { geo in
@@ -23,6 +29,12 @@ struct MainMenuView: View {
                         .padding(.horizontal, 20)
                         .padding(.bottom, 12)
                         .zIndex(10)
+
+                    if profileSelectionNeeded {
+                        profileSelectionBanner
+                            .padding(.horizontal, 20)
+                            .padding(.bottom, 12)
+                    }
 
                     HStack(spacing: 0) {
                         joeZone(geo: geo)
@@ -74,6 +86,7 @@ struct MainMenuView: View {
 
     private func joeZone(geo: GeometryProxy) -> some View {
         Button {
+            guard canEnterModes else { return }
             withAnimation(.spring(duration: 0.4, bounce: 0.15)) {
                 activeMode = .joe
             }
@@ -119,13 +132,15 @@ struct MainMenuView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .opacity(animateIn ? 1 : 0)
+        .opacity(animateIn ? (canEnterModes ? 1 : 0.35) : 0)
         .offset(x: animateIn ? 0 : -30)
+        .allowsHitTesting(canEnterModes)
         .sensoryFeedback(.impact(weight: .medium), trigger: activeMode == .joe)
     }
 
     private func ignitionZone(geo: GeometryProxy) -> some View {
         Button {
+            guard canEnterModes else { return }
             withAnimation(.spring(duration: 0.4, bounce: 0.15)) {
                 activeMode = .ignition
             }
@@ -172,13 +187,15 @@ struct MainMenuView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .opacity(animateIn ? 1 : 0)
+        .opacity(animateIn ? (canEnterModes ? 1 : 0.35) : 0)
         .offset(x: animateIn ? 0 : 30)
+        .allowsHitTesting(canEnterModes)
         .sensoryFeedback(.impact(weight: .medium), trigger: activeMode == .ignition)
     }
 
     private func ppsrZone(geo: GeometryProxy) -> some View {
         Button {
+            guard canEnterModes else { return }
             withAnimation(.spring(duration: 0.4, bounce: 0.15)) {
                 activeMode = .ppsr
             }
@@ -236,13 +253,15 @@ struct MainMenuView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .opacity(animateIn ? 1 : 0)
+        .opacity(animateIn ? (canEnterModes ? 1 : 0.35) : 0)
         .offset(y: animateIn ? 0 : 30)
+        .allowsHitTesting(canEnterModes)
         .sensoryFeedback(.impact(weight: .medium), trigger: activeMode == .ppsr)
     }
 
     private func settingsAndTestingZone(geo: GeometryProxy) -> some View {
         Button {
+            guard canEnterModes else { return }
             withAnimation(.spring(duration: 0.4, bounce: 0.15)) {
                 activeMode = .settingsAndTesting
             }
@@ -305,13 +324,15 @@ struct MainMenuView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .opacity(animateIn ? 1 : 0)
+        .opacity(animateIn ? (canEnterModes ? 1 : 0.35) : 0)
         .offset(y: animateIn ? 0 : 30)
+        .allowsHitTesting(canEnterModes)
         .sensoryFeedback(.impact(weight: .medium), trigger: activeMode == .settingsAndTesting)
     }
 
     private func splitTestZone(geo: GeometryProxy) -> some View {
         Button {
+            guard canEnterModes else { return }
             withAnimation(.spring(duration: 0.4, bounce: 0.15)) {
                 activeMode = .splitTest
             }
@@ -372,8 +393,9 @@ struct MainMenuView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .opacity(animateIn ? 1 : 0)
+        .opacity(animateIn ? (canEnterModes ? 1 : 0.35) : 0)
         .offset(y: animateIn ? 0 : 20)
+        .allowsHitTesting(canEnterModes)
         .sensoryFeedback(.impact(weight: .heavy), trigger: activeMode == .splitTest)
     }
 
@@ -381,6 +403,7 @@ struct MainMenuView: View {
 
     private func dualFindZone(geo: GeometryProxy) -> some View {
         Button {
+            guard canEnterModes else { return }
             withAnimation(.spring(duration: 0.4, bounce: 0.15)) {
                 activeMode = .dualFind
             }
@@ -430,8 +453,9 @@ struct MainMenuView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .opacity(animateIn ? 1 : 0)
+        .opacity(animateIn ? (canEnterModes ? 1 : 0.35) : 0)
         .offset(x: animateIn ? 0 : 30)
+        .allowsHitTesting(canEnterModes)
         .sensoryFeedback(.impact(weight: .medium), trigger: activeMode == .dualFind)
     }
 
@@ -439,23 +463,23 @@ struct MainMenuView: View {
         HStack(spacing: 0) {
             ForEach(NordKeyProfile.allCases, id: \.self) { profile in
                 Button {
-                    guard nordService.activeKeyProfile != profile else { return }
+                    guard !isProfileActive(profile) else { return }
                     withAnimation(.spring(duration: 0.3, bounce: 0.15)) {
                         nordService.switchProfile(profile)
                     }
                 } label: {
                     HStack(spacing: 6) {
-                        Image(systemName: profile == .nick ? "person.fill" : "person.fill")
+                        Image(systemName: "person.fill")
                             .font(.system(size: 12, weight: .bold))
                         Text(profile.rawValue.uppercased())
                             .font(.system(size: 13, weight: .black, design: .monospaced))
                     }
-                    .foregroundStyle(nordService.activeKeyProfile == profile ? .white : .white.opacity(0.4))
+                    .foregroundStyle(isProfileActive(profile) ? .white : .white.opacity(0.4))
                     .frame(maxWidth: .infinity)
                     .frame(minHeight: 44)
                     .background(
                         Group {
-                            if nordService.activeKeyProfile == profile {
+                            if isProfileActive(profile) {
                                 Capsule()
                                     .fill(
                                         profile == .nick
@@ -478,6 +502,44 @@ struct MainMenuView: View {
         .sensoryFeedback(.impact(weight: .heavy), trigger: nordService.activeKeyProfile)
         .opacity(animateIn ? 1 : 0)
         .offset(y: animateIn ? 0 : -20)
+    }
+
+    private var canEnterModes: Bool {
+        !requiresProfileSelection || nordService.hasSelectedProfile
+    }
+
+    private var profileSelectionNeeded: Bool {
+        requiresProfileSelection && !nordService.hasSelectedProfile
+    }
+
+    private func isProfileActive(_ profile: NordKeyProfile) -> Bool {
+        nordService.hasSelectedProfile && nordService.activeKeyProfile == profile
+    }
+
+    private var profileSelectionBanner: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: "person.crop.circle.badge.exclamationmark")
+                .font(.title3)
+                .foregroundStyle(.yellow)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Choose Nick or Poli to continue")
+                    .font(.headline)
+                    .foregroundStyle(.white)
+                Text("No profile is selected automatically on first launch.")
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.75))
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(14)
+        .background(Color.white.opacity(0.10))
+        .clipShape(.rect(cornerRadius: 16))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16)
+                .strokeBorder(.white.opacity(0.12), lineWidth: 1)
+        )
     }
 }
 

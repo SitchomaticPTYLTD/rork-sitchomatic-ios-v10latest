@@ -46,6 +46,11 @@ nonisolated enum NetworkRegion: String, CaseIterable, Codable, Sendable {
     }
 }
 
+nonisolated struct ProfileStorageCounts: Sendable {
+    let wireGuard: Int
+    let openVPN: Int
+}
+
 @Observable
 @MainActor
 class ProxyRotationService {
@@ -108,6 +113,18 @@ class ProxyRotationService {
     private var activeProfilePrefix: String {
         let profile = UserDefaults.standard.string(forKey: "nordvpn_key_profile_v1") ?? "Nick"
         return profile.lowercased()
+    }
+
+    private func profilePrefix(for profile: NordKeyProfile) -> String {
+        profile.rawValue.lowercased()
+    }
+
+    private func vpnPersistKey(for target: ProxyTarget, profile: NordKeyProfile) -> String {
+        "\(profilePrefix(for: profile))_openvpn_configs_\(target.rawValue)_v1"
+    }
+
+    private func wgPersistKey(for target: ProxyTarget, profile: NordKeyProfile) -> String {
+        "\(profilePrefix(for: profile))_wireguard_configs_\(target.rawValue)_v1"
     }
 
     private var persistKey: String { "\(activeProfilePrefix)_socks5_proxies_joe_v2" }
@@ -243,6 +260,51 @@ class ProxyRotationService {
     var unifiedProxies: [ProxyConfig] { savedProxies }
     var unifiedVPNConfigs: [OpenVPNConfig] { joeVPNConfigs }
     var unifiedWGConfigs: [WireGuardConfig] { joeWGConfigs }
+
+    func storageCounts(for profile: NordKeyProfile) -> ProfileStorageCounts {
+        ProfileStorageCounts(
+            wireGuard: loadPersistedWGConfigs(for: .joe, profile: profile).count,
+            openVPN: loadPersistedVPNConfigs(for: .joe, profile: profile).count
+        )
+    }
+
+    func allProfileStorageCounts() -> ProfileStorageCounts {
+        let nickCounts = storageCounts(for: .nick)
+        let poliCounts = storageCounts(for: .poli)
+        return ProfileStorageCounts(
+            wireGuard: nickCounts.wireGuard + poliCounts.wireGuard,
+            openVPN: nickCounts.openVPN + poliCounts.openVPN
+        )
+    }
+
+    func replaceUnifiedVPNConfigs(_ configs: [OpenVPNConfig], for profile: NordKeyProfile) {
+        persistVPNConfigs(configs, for: .joe, profile: profile)
+        persistVPNConfigs(configs, for: .ignition, profile: profile)
+        persistVPNConfigs(configs, for: .ppsr, profile: profile)
+        if activeProfilePrefix == profilePrefix(for: profile) {
+            joeVPNConfigs = configs
+            ignitionVPNConfigs = configs
+            ppsrVPNConfigs = configs
+            resetRotationIndexes()
+        }
+    }
+
+    func replaceUnifiedWGConfigs(_ configs: [WireGuardConfig], for profile: NordKeyProfile) {
+        persistWGConfigs(configs, for: .joe, profile: profile)
+        persistWGConfigs(configs, for: .ignition, profile: profile)
+        persistWGConfigs(configs, for: .ppsr, profile: profile)
+        if activeProfilePrefix == profilePrefix(for: profile) {
+            joeWGConfigs = configs
+            ignitionWGConfigs = configs
+            ppsrWGConfigs = configs
+            resetRotationIndexes()
+        }
+    }
+
+    func clearUnifiedNetworkConfigs(for profile: NordKeyProfile) {
+        replaceUnifiedWGConfigs([], for: profile)
+        replaceUnifiedVPNConfigs([], for: profile)
+    }
 
     func importUnifiedProxy(_ text: String) -> ImportReport {
         let report = bulkImportSOCKS5(text, forIgnition: false)
@@ -1245,13 +1307,17 @@ class ProxyRotationService {
     }
 
     private func persistVPNConfigs(for target: ProxyTarget) {
-        let key: String
         let configs: [OpenVPNConfig]
         switch target {
-        case .joe: key = joeVPNPersistKey; configs = joeVPNConfigs
-        case .ignition: key = ignitionVPNPersistKey; configs = ignitionVPNConfigs
-        case .ppsr: key = ppsrVPNPersistKey; configs = ppsrVPNConfigs
+        case .joe: configs = joeVPNConfigs
+        case .ignition: configs = ignitionVPNConfigs
+        case .ppsr: configs = ppsrVPNConfigs
         }
+        persistVPNConfigs(configs, for: target, profile: NordVPNService.shared.activeKeyProfile)
+    }
+
+    private func persistVPNConfigs(_ configs: [OpenVPNConfig], for target: ProxyTarget, profile: NordKeyProfile) {
+        let key = vpnPersistKey(for: target, profile: profile)
         do {
             let data = try JSONEncoder().encode(configs)
             UserDefaults.standard.set(data, forKey: key)
@@ -1261,19 +1327,19 @@ class ProxyRotationService {
         }
     }
 
+    private func loadPersistedVPNConfigs(for target: ProxyTarget, profile: NordKeyProfile) -> [OpenVPNConfig] {
+        let key = vpnPersistKey(for: target, profile: profile)
+        guard let data = UserDefaults.standard.data(forKey: key),
+              let configs = try? JSONDecoder().decode([OpenVPNConfig].self, from: data) else {
+            return []
+        }
+        return configs
+    }
+
     private func loadVPNConfigs() {
-        if let data = UserDefaults.standard.data(forKey: joeVPNPersistKey),
-           let configs = try? JSONDecoder().decode([OpenVPNConfig].self, from: data) {
-            joeVPNConfigs = configs
-        }
-        if let data = UserDefaults.standard.data(forKey: ignitionVPNPersistKey),
-           let configs = try? JSONDecoder().decode([OpenVPNConfig].self, from: data) {
-            ignitionVPNConfigs = configs
-        }
-        if let data = UserDefaults.standard.data(forKey: ppsrVPNPersistKey),
-           let configs = try? JSONDecoder().decode([OpenVPNConfig].self, from: data) {
-            ppsrVPNConfigs = configs
-        }
+        joeVPNConfigs = loadPersistedVPNConfigs(for: .joe, profile: NordVPNService.shared.activeKeyProfile)
+        ignitionVPNConfigs = loadPersistedVPNConfigs(for: .ignition, profile: NordVPNService.shared.activeKeyProfile)
+        ppsrVPNConfigs = loadPersistedVPNConfigs(for: .ppsr, profile: NordVPNService.shared.activeKeyProfile)
     }
 
     func wgConfigs(for target: ProxyTarget) -> [WireGuardConfig] {
@@ -1581,13 +1647,17 @@ class ProxyRotationService {
     }
 
     private func persistWGConfigs(for target: ProxyTarget) {
-        let key: String
         let configs: [WireGuardConfig]
         switch target {
-        case .joe: key = joeWGPersistKey; configs = joeWGConfigs
-        case .ignition: key = ignitionWGPersistKey; configs = ignitionWGConfigs
-        case .ppsr: key = ppsrWGPersistKey; configs = ppsrWGConfigs
+        case .joe: configs = joeWGConfigs
+        case .ignition: configs = ignitionWGConfigs
+        case .ppsr: configs = ppsrWGConfigs
         }
+        persistWGConfigs(configs, for: target, profile: NordVPNService.shared.activeKeyProfile)
+    }
+
+    private func persistWGConfigs(_ configs: [WireGuardConfig], for target: ProxyTarget, profile: NordKeyProfile) {
+        let key = wgPersistKey(for: target, profile: profile)
         do {
             let data = try JSONEncoder().encode(configs)
             UserDefaults.standard.set(data, forKey: key)
@@ -1597,19 +1667,19 @@ class ProxyRotationService {
         }
     }
 
+    private func loadPersistedWGConfigs(for target: ProxyTarget, profile: NordKeyProfile) -> [WireGuardConfig] {
+        let key = wgPersistKey(for: target, profile: profile)
+        guard let data = UserDefaults.standard.data(forKey: key),
+              let configs = try? JSONDecoder().decode([WireGuardConfig].self, from: data) else {
+            return []
+        }
+        return configs
+    }
+
     private func loadWGConfigs() {
-        if let data = UserDefaults.standard.data(forKey: joeWGPersistKey),
-           let configs = try? JSONDecoder().decode([WireGuardConfig].self, from: data) {
-            joeWGConfigs = configs
-        }
-        if let data = UserDefaults.standard.data(forKey: ignitionWGPersistKey),
-           let configs = try? JSONDecoder().decode([WireGuardConfig].self, from: data) {
-            ignitionWGConfigs = configs
-        }
-        if let data = UserDefaults.standard.data(forKey: ppsrWGPersistKey),
-           let configs = try? JSONDecoder().decode([WireGuardConfig].self, from: data) {
-            ppsrWGConfigs = configs
-        }
+        joeWGConfigs = loadPersistedWGConfigs(for: .joe, profile: NordVPNService.shared.activeKeyProfile)
+        ignitionWGConfigs = loadPersistedWGConfigs(for: .ignition, profile: NordVPNService.shared.activeKeyProfile)
+        ppsrWGConfigs = loadPersistedWGConfigs(for: .ppsr, profile: NordVPNService.shared.activeKeyProfile)
     }
 
     private func loadProxies() {

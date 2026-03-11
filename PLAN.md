@@ -97,3 +97,49 @@ Previously all proxy configs (SOCKS5, WireGuard, OpenVPN) were shared globally. 
 - `Services/NordLynxConfigGeneratorService.swift` — Profile-scoped private key lookup
 - `Views/MainMenuView.swift` — Added profile switcher capsule at top
 - `Views/DeviceNetworkSettingsView.swift` — Removed profile picker, read-only badge remains
+
+---
+
+# Mandatory Profile Selection + Hard Storage Repopulation
+
+## What's changing
+
+The app now forces a Nick/Poli choice before entering the app the first time, removes the old bundled placeholder WireGuard files, and repopulates hard storage with real profile-scoped pools: 20 WireGuard configs and 10 OpenVPN configs per profile.
+
+### Changes
+
+**1. First launch now requires an explicit profile pick**
+- [x] Added `hasSelectedProfile` state to `NordVPNService`
+- [x] App root shows the Main Menu in locked mode until Nick or Poli is chosen
+- [x] Main menu destinations are dimmed/disabled until a profile is selected
+- [x] Added a launch banner explaining that Nick or Poli must be selected first
+- [x] Profile buttons are only visually active after an explicit selection
+
+**2. Hard storage is now repopulated profile-by-profile**
+- [x] Removed the old six bundled placeholder WireGuard configs from `DefaultSettingsService`
+- [x] Added profile storage rebuild logic in `NordVPNService.ensureProfileNetworkPoolsReady()`
+- [x] Rebuild clears existing WireGuard/OpenVPN hard storage before repopulating
+- [x] Each profile is repopulated with 20 WireGuard configs and 10 OpenVPN configs
+- [x] Rebuild restores the previous selection state when finished, including "no profile selected" on fresh launch
+
+**3. WireProxy stays profile-scoped**
+- [x] Active in-memory WG/OVPN pools still reload from the selected Nick/Poli profile only
+- [x] Device proxy and WireProxy are reset after storage rebuilds and profile switches
+- [x] WireProxy therefore only rotates through WireGuard files belonging to the currently selected profile
+
+**4. Settings / Import-Export now show profile context**
+- [x] Added current profile display to Settings & Testing → About
+- [x] Added current profile badge to Import / Export
+- [x] Added current-profile hard storage counts for WireGuard/OpenVPN
+- [x] Added all-profile hard storage totals so both profile pools are visible at a glance
+- [x] Adjusted Import / Export summary counts so the main VPN/WireGuard tiles reflect the active profile pool instead of duplicated synced targets
+
+### Files changed
+- `DualModeCarCheckAppApp.swift` — First-launch profile gating, startup repopulation flow
+- `Views/MainMenuView.swift` — Locked-first-launch behavior, explicit profile banner, inactive state until selected
+- `Services/NordVPNService.swift` — Explicit profile selection state, per-profile hard-storage rebuild, 20 WG + 10 OVPN repopulation
+- `Services/ProxyRotationService.swift` — Profile-scoped hard-storage replacement/count helpers
+- `Services/DefaultSettingsService.swift` — Removed old placeholder bundled WireGuard seeding
+- `Views/SettingsAndTestingView.swift` — Added current profile display
+- `Views/ConsolidatedImportExportView.swift` — Added current profile + current/all-profile storage counts
+- `Services/AppDataExportService.swift` — Summary counts now reflect the active profile pool

@@ -3,6 +3,7 @@ import SwiftUI
 struct SettingsAndTestingView: View {
     @State private var showCopiedToast: Bool = false
     @State private var shareFileURL: URL?
+    @State private var nordService = NordVPNService.shared
     @AppStorage("introVideoEnabled") private var introVideoEnabled: Bool = false
     @AppStorage("activeAppMode") private var activeModeRaw: String = ""
     private let proxyService = ProxyRotationService.shared
@@ -279,6 +280,10 @@ struct SettingsAndTestingView: View {
 
             Section {
                 LabeledContent("Version", value: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?")
+                LabeledContent("Profile") {
+                    Text(nordService.hasSelectedProfile ? nordService.activeKeyProfile.rawValue : "Not Selected")
+                        .foregroundStyle(nordService.activeKeyProfile == .nick ? .blue : .purple)
+                }
                 LabeledContent("Engine", value: "WKWebView Live")
                 LabeledContent("Storage", value: "Unlimited · Local + iCloud")
                 LabeledContent("Connection") {

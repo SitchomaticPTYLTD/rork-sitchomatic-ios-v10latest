@@ -6,6 +6,7 @@ struct DualModeCarCheckAppApp: App {
     @AppStorage("introVideoEnabled") private var introVideoEnabled: Bool = false
     @State private var introFinished: Bool = false
     @State private var nordInitialized: Bool = false
+    @State private var nordService = NordVPNService.shared
 
     private var activeMode: ActiveAppMode? {
         ActiveAppMode(rawValue: activeModeRaw)
@@ -17,6 +18,21 @@ struct DualModeCarCheckAppApp: App {
                 if introVideoEnabled && !introFinished {
                     IntroVideoView(isFinished: $introFinished)
                         .transition(.opacity)
+                } else if !nordService.hasSelectedProfile {
+                    MainMenuView(
+                        activeMode: Binding(
+                            get: { activeMode },
+                            set: { newMode in
+                                if let m = newMode {
+                                    activeModeRaw = m.rawValue
+                                } else {
+                                    activeModeRaw = ""
+                                }
+                            }
+                        ),
+                        requiresProfileSelection: true
+                    )
+                    .transition(.opacity)
                 } else if let mode = activeMode {
                     Group {
                         switch mode {
@@ -94,16 +110,19 @@ struct DualModeCarCheckAppApp: App {
                         DebugLogger.shared.log("App launched — restored state from vault", category: .persistence, level: .success)
                     }
                     DefaultSettingsService.shared.applyDefaultsIfNeeded()
-                    let nord = NordVPNService.shared
-                    if !nord.hasAccessKey {
-                        nord.setAccessKey(NordVPNKeyStore.defaultNickKey)
+                    let nord = nordService
+                    await nord.ensureProfileNetworkPoolsReady()
+                    if !nord.hasSelectedProfile {
+                        activeModeRaw = ""
                     }
                     if nord.isTokenExpired {
                         nord.lastError = "NordVPN access token needs to be refreshed before fetching a private key."
                     }
                     vault.saveFullState()
 
-                    await nord.autoPopulateConfigs(forceRefresh: false)
+                    if nord.hasSelectedProfile {
+                        await nord.autoPopulateConfigs(forceRefresh: false)
+                    }
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in
