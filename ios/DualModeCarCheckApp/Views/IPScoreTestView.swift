@@ -560,9 +560,9 @@ struct IPScoreTestView: View {
         wkConfig.websiteDataStore = .nonPersistent()
 
         if deviceProxy.isEnabled, let config = deviceProxy.activeConfig {
-            networkFactory.configureWKWebView(config: wkConfig, networkConfig: config)
+            networkFactory.configureWKWebView(config: wkConfig, networkConfig: config, target: .joe)
         } else {
-            networkFactory.configureWKWebView(config: wkConfig, networkConfig: session.networkConfig)
+            networkFactory.configureWKWebView(config: wkConfig, networkConfig: session.networkConfig, target: .joe)
         }
 
         let webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 414, height: 896), configuration: wkConfig)

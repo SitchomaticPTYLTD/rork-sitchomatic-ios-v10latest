@@ -138,6 +138,9 @@ class WireProxySOCKS5Handler {
             return
         }
 
+        isCancelled = true
+        cancelTimeout()
+
         bridge.handleSOCKS5Connection(
             id: id,
             clientConnection: clientConnection,

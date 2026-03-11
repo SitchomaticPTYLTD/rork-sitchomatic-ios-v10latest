@@ -166,6 +166,11 @@ class VPNTunnelManager {
             return
         }
 
+        if (status == .connecting || status == .connected) && activeConfigName == wgConfig.fileName {
+            logger.log("VPNTunnel: skipping connect — already \(status.rawValue) to \(wgConfig.fileName)", category: .vpn, level: .debug)
+            return
+        }
+
         status = .configuring
         activeConfigName = wgConfig.fileName
         activeConfig = wgConfig

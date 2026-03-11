@@ -48,14 +48,16 @@ class LoginSiteWebSession: NSObject {
     var lastHTTPStatusCode: Int?
     var targetURL: URL
     var networkConfig: ActiveNetworkConfig = .direct
+    var proxyTarget: ProxyRotationService.ProxyTarget = .joe
     private var stealthProfile: PPSRStealthService.SessionProfile?
     private(set) var lastFingerprintScore: FingerprintValidationService.FingerprintScore?
     var onFingerprintLog: ((String, PPSRLogEntry.Level) -> Void)?
     private let logger = DebugLogger.shared
 
-    init(targetURL: URL, networkConfig: ActiveNetworkConfig = .direct) {
+    init(targetURL: URL, networkConfig: ActiveNetworkConfig = .direct, proxyTarget: ProxyRotationService.ProxyTarget = .joe) {
         self.targetURL = targetURL
         self.networkConfig = networkConfig
+        self.proxyTarget = proxyTarget
         super.init()
     }
 
@@ -77,8 +79,11 @@ class LoginSiteWebSession: NSObject {
         config.preferences.javaScriptCanOpenWindowsAutomatically = true
         config.defaultWebpagePreferences.allowsContentJavaScript = true
 
-        NetworkSessionFactory.shared.configureWKWebView(config: config, networkConfig: networkConfig)
-        logger.log("LoginSiteWebSession: setUp with network=\(networkConfig.label)", category: .network, level: .debug)
+        let proxyApplied = NetworkSessionFactory.shared.configureWKWebView(config: config, networkConfig: networkConfig, target: proxyTarget)
+        if !proxyApplied {
+            logger.log("LoginSiteWebSession: BLOCKED — no proxy available for \(proxyTarget.rawValue), refusing to create WebView on real IP", category: .network, level: .error)
+        }
+        logger.log("LoginSiteWebSession: setUp with network=\(networkConfig.label) target=\(proxyTarget.rawValue)", category: .network, level: .debug)
 
         if stealthEnabled {
             let stealth = PPSRStealthService.shared

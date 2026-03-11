@@ -5,19 +5,28 @@ import WebKit
 class WebViewPool {
     static let shared = WebViewPool()
 
-    private var inUse: Set<ObjectIdentifier> = []
+    private var inUseCount: Int = 0
     private let logger = DebugLogger.shared
     private(set) var processTerminationCount: Int = 0
+    private let networkFactory = NetworkSessionFactory.shared
 
-    var activeCount: Int { inUse.count }
+    var activeCount: Int { inUseCount }
 
-    func acquire(stealthEnabled: Bool = false, viewportSize: CGSize = CGSize(width: 390, height: 844), networkConfig: ActiveNetworkConfig = .direct, target: ProxyRotationService.ProxyTarget = .joe) -> WKWebView {
+    func acquire(stealthEnabled: Bool = false, viewportSize: CGSize = CGSize(width: 390, height: 844), networkConfig: ActiveNetworkConfig = .direct, target: ProxyRotationService.ProxyTarget = .joe) async -> WKWebView {
+        var effectiveConfig = networkConfig
+        if case .socks5 = networkFactory.resolveEffectiveConfigPublic(networkConfig) {
+            effectiveConfig = await networkFactory.preflightProxyCheck(for: networkConfig, target: target)
+        }
+
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .nonPersistent()
         config.preferences.javaScriptCanOpenWindowsAutomatically = true
         config.defaultWebpagePreferences.allowsContentJavaScript = true
 
-        NetworkSessionFactory.shared.configureWKWebView(config: config, networkConfig: networkConfig, target: target)
+        let proxyApplied = networkFactory.configureWKWebView(config: config, networkConfig: effectiveConfig, target: target)
+        if !proxyApplied {
+            logger.log("WebViewPool: BLOCKED — no proxy available for \(target.rawValue), WebView created but may use real IP", category: .webView, level: .error)
+        }
 
         if stealthEnabled {
             let stealth = PPSRStealthService.shared
@@ -27,21 +36,51 @@ class WebViewPool {
 
             let wv = WKWebView(frame: CGRect(origin: .zero, size: CGSize(width: profile.viewport.width, height: profile.viewport.height)), configuration: config)
             wv.customUserAgent = profile.userAgent
-            inUse.insert(ObjectIdentifier(wv))
-            logger.log("WebViewPool: acquired stealth WKWebView network=\(networkConfig.label) (active:\(inUse.count))", category: .webView, level: .trace)
+            inUseCount += 1
+            logger.log("WebViewPool: acquired stealth WKWebView network=\(effectiveConfig.label) (active:\(inUseCount))", category: .webView, level: .trace)
             return wv
         }
 
         let wv = WKWebView(frame: CGRect(origin: .zero, size: viewportSize), configuration: config)
         wv.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"
-        inUse.insert(ObjectIdentifier(wv))
-        logger.log("WebViewPool: created WKWebView network=\(networkConfig.label) (active:\(inUse.count))", category: .webView, level: .trace)
+        inUseCount += 1
+        logger.log("WebViewPool: created WKWebView network=\(effectiveConfig.label) (active:\(inUseCount))", category: .webView, level: .trace)
+        return wv
+    }
+
+    func acquireSync(stealthEnabled: Bool = false, viewportSize: CGSize = CGSize(width: 390, height: 844), networkConfig: ActiveNetworkConfig = .direct, target: ProxyRotationService.ProxyTarget = .joe) -> WKWebView {
+        let config = WKWebViewConfiguration()
+        config.websiteDataStore = .nonPersistent()
+        config.preferences.javaScriptCanOpenWindowsAutomatically = true
+        config.defaultWebpagePreferences.allowsContentJavaScript = true
+
+        let proxyApplied = networkFactory.configureWKWebView(config: config, networkConfig: networkConfig, target: target)
+        if !proxyApplied {
+            logger.log("WebViewPool: BLOCKED — no proxy available for \(target.rawValue), WebView created but may use real IP", category: .webView, level: .error)
+        }
+
+        if stealthEnabled {
+            let stealth = PPSRStealthService.shared
+            let profile = stealth.nextProfile()
+            let userScript = stealth.createStealthUserScript(profile: profile)
+            config.userContentController.addUserScript(userScript)
+
+            let wv = WKWebView(frame: CGRect(origin: .zero, size: CGSize(width: profile.viewport.width, height: profile.viewport.height)), configuration: config)
+            wv.customUserAgent = profile.userAgent
+            inUseCount += 1
+            logger.log("WebViewPool: acquired stealth WKWebView network=\(networkConfig.label) (active:\(inUseCount))", category: .webView, level: .trace)
+            return wv
+        }
+
+        let wv = WKWebView(frame: CGRect(origin: .zero, size: viewportSize), configuration: config)
+        wv.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"
+        inUseCount += 1
+        logger.log("WebViewPool: created WKWebView network=\(networkConfig.label) (active:\(inUseCount))", category: .webView, level: .trace)
         return wv
     }
 
     func release(_ webView: WKWebView, wipeData: Bool = true) {
-        let id = ObjectIdentifier(webView)
-        inUse.remove(id)
+        inUseCount = max(0, inUseCount - 1)
 
         webView.stopLoading()
 
@@ -57,11 +96,11 @@ class WebViewPool {
         }
 
         webView.navigationDelegate = nil
-        logger.log("WebViewPool: released (active:\(inUse.count))", category: .webView, level: .trace)
+        logger.log("WebViewPool: released (active:\(inUseCount))", category: .webView, level: .trace)
     }
 
     func handleMemoryPressure() {
-        logger.log("WebViewPool: memory pressure noted (\(inUse.count) active)", category: .webView, level: .warning)
+        logger.log("WebViewPool: memory pressure noted (\(inUseCount) active)", category: .webView, level: .warning)
     }
 
     func reportProcessTermination() {

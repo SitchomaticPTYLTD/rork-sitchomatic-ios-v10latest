@@ -128,7 +128,7 @@ class NetworkSessionFactory {
         }
     }
 
-    func buildURLSessionConfiguration(for config: ActiveNetworkConfig, target: ProxyRotationService.ProxyTarget = .joe) -> URLSessionConfiguration {
+    func buildURLSessionConfiguration(for config: ActiveNetworkConfig, target: ProxyRotationService.ProxyTarget) -> URLSessionConfiguration {
         let sessionConfig = URLSessionConfiguration.ephemeral
         sessionConfig.timeoutIntervalForRequest = TimeoutResolver.resolveRequestTimeout(30)
         sessionConfig.timeoutIntervalForResource = TimeoutResolver.resolveResourceTimeout(60)
@@ -142,7 +142,8 @@ class NetworkSessionFactory {
         return sessionConfig
     }
 
-    func configureWKWebView(config wkConfig: WKWebViewConfiguration, networkConfig: ActiveNetworkConfig, target: ProxyRotationService.ProxyTarget = .joe) {
+    @discardableResult
+    func configureWKWebView(config wkConfig: WKWebViewConfiguration, networkConfig: ActiveNetworkConfig, target: ProxyRotationService.ProxyTarget = .joe) -> Bool {
         let dataStore = wkConfig.websiteDataStore
         let resolvedConfig = resolveEffectiveConfig(networkConfig)
 
@@ -151,43 +152,55 @@ class NetworkSessionFactory {
             applySOCKS5ToDataStore(dataStore, proxy: proxy)
             wkConfig.websiteDataStore = dataStore
             logger.log("WKWebView SOCKS5 ProxyConfiguration applied: \(proxy.displayString) (original: \(networkConfig.label))", category: .proxy, level: .info)
+            return true
 
         case .wireGuardDNS(let wg):
             if vpnTunnel.isConnected {
                 logger.log("WKWebView WG: \(wg.displayString) — device-wide VPN tunnel active, all WebView traffic routed via tunnel", category: .vpn, level: .info)
+                return true
             } else if wireProxyBridge.isActive, localProxy.isRunning, localProxy.wireProxyMode {
                 let localConfig = localProxy.localProxyConfig
                 applySOCKS5ToDataStore(dataStore, proxy: localConfig)
                 wkConfig.websiteDataStore = dataStore
                 logger.log("WKWebView WG: \(wg.displayString) — routed via WireProxy local proxy 127.0.0.1:\(localConfig.port)", category: .vpn, level: .info)
+                return true
             } else {
                 logger.log("WKWebView WG: \(wg.displayString) — no tunnel active, applying SOCKS5 fallback for IP protection", category: .vpn, level: .warning)
                 if let fallbackProxy = proxyService.nextWorkingProxy(for: target) {
                     applySOCKS5ToDataStore(dataStore, proxy: fallbackProxy)
                     wkConfig.websiteDataStore = dataStore
                     logger.log("WKWebView WG: SOCKS5 fallback \(fallbackProxy.displayString) applied to WebView", category: .proxy, level: .info)
+                    return true
                 } else {
-                    logger.log("WKWebView WG: ⚠️ NO SOCKS5 fallback available for \(target.rawValue) — WebView will use REAL IP", category: .vpn, level: .error)
+                    logger.log("WKWebView WG: BLOCKED — no proxy available for \(target.rawValue), refusing to load on real IP", category: .vpn, level: .error)
+                    return false
                 }
             }
 
         case .openVPNProxy(let ovpn):
             if vpnTunnel.isConnected {
                 logger.log("WKWebView OVPN: \(ovpn.displayString) — device-wide VPN tunnel active, all WebView traffic routed via tunnel", category: .vpn, level: .info)
+                return true
             } else {
                 logger.log("WKWebView OVPN: \(ovpn.displayString) — no VPN tunnel, applying SOCKS5 fallback for IP protection", category: .vpn, level: .warning)
                 if let fallbackProxy = proxyService.nextWorkingProxy(for: target) {
                     applySOCKS5ToDataStore(dataStore, proxy: fallbackProxy)
                     wkConfig.websiteDataStore = dataStore
                     logger.log("WKWebView OVPN: SOCKS5 fallback \(fallbackProxy.displayString) applied to WebView", category: .proxy, level: .info)
+                    return true
                 } else {
-                    logger.log("WKWebView OVPN: ⚠️ NO SOCKS5 fallback available for \(target.rawValue) — WebView will use REAL IP", category: .vpn, level: .error)
+                    logger.log("WKWebView OVPN: BLOCKED — no proxy available for \(target.rawValue), refusing to load on real IP", category: .vpn, level: .error)
+                    return false
                 }
             }
 
         case .direct:
-            break
+            return true
         }
+    }
+
+    func resolveEffectiveConfigPublic(_ config: ActiveNetworkConfig) -> ActiveNetworkConfig {
+        resolveEffectiveConfig(config)
     }
 
     private func resolveEffectiveConfig(_ config: ActiveNetworkConfig) -> ActiveNetworkConfig {
@@ -222,7 +235,7 @@ class NetworkSessionFactory {
         }
     }
 
-    func buildProxiedDataStore(for networkConfig: ActiveNetworkConfig, target: ProxyRotationService.ProxyTarget = .joe) -> WKWebsiteDataStore {
+    func buildProxiedDataStore(for networkConfig: ActiveNetworkConfig, target: ProxyRotationService.ProxyTarget) -> WKWebsiteDataStore {
         let dataStore = WKWebsiteDataStore.nonPersistent()
         let resolvedConfig = resolveEffectiveConfig(networkConfig)
 
@@ -262,7 +275,7 @@ class NetworkSessionFactory {
         return dataStore
     }
 
-    func buildURLSessionProxyConfiguration(for config: ActiveNetworkConfig, target: ProxyRotationService.ProxyTarget = .joe) -> URLSessionConfiguration {
+    func buildURLSessionProxyConfiguration(for config: ActiveNetworkConfig, target: ProxyRotationService.ProxyTarget) -> URLSessionConfiguration {
         let sessionConfig = buildURLSessionConfiguration(for: config, target: target)
         let resolvedConfig = resolveEffectiveConfig(config)
         if case .socks5(let proxy) = resolvedConfig {
@@ -389,6 +402,10 @@ class NetworkSessionFactory {
 
     private func triggerVPNConnectOnce(with wg: WireGuardConfig) {
         guard !vpnConnectInFlight, !vpnTunnel.isConnected, !vpnTunnel.isActive else { return }
+        if let activeName = vpnTunnel.activeConfigName, activeName == wg.fileName {
+            logger.log("NetworkFactory: skipping VPN connect — already targeting \(wg.fileName)", category: .vpn, level: .debug)
+            return
+        }
         vpnConnectInFlight = true
         Task {
             await vpnTunnel.configureAndConnect(with: wg)

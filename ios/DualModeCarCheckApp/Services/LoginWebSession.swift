@@ -31,7 +31,10 @@ class LoginWebSession: NSObject {
         config.preferences.javaScriptCanOpenWindowsAutomatically = true
         config.defaultWebpagePreferences.allowsContentJavaScript = true
 
-        NetworkSessionFactory.shared.configureWKWebView(config: config, networkConfig: networkConfig)
+        let proxyApplied = NetworkSessionFactory.shared.configureWKWebView(config: config, networkConfig: networkConfig, target: .ppsr)
+        if !proxyApplied {
+            logger.log("LoginWebSession: BLOCKED — no proxy available for PPSR, refusing to create WebView on real IP", category: .network, level: .error)
+        }
 
         if stealthEnabled {
             let stealth = PPSRStealthService.shared
