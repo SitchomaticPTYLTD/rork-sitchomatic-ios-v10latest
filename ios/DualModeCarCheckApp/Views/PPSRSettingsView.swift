@@ -20,8 +20,6 @@ struct PPSRSettingsView: View {
 
     var body: some View {
         List {
-            networksLinkSection
-            noticesSection
             batchPresetsSection
             automationSection
             autoRetrySection
@@ -33,13 +31,10 @@ struct PPSRSettingsView: View {
             debugSection
             exportHistorySection
             iCloudSection
-            configExportImportSection
-            appearanceSection
-            introVideoSection
-            aboutSection
+            settingsAndTestingLinkSection
         }
         .listStyle(.insetGrouped)
-        .navigationTitle("Advanced Settings")
+        .navigationTitle("PPSR Settings")
         .sheet(isPresented: $showEmailImport) { emailImportSheet }
         .sheet(isPresented: $showCropEditor) { cropEditorSheet }
         .alert("Save Preset", isPresented: $showPresetNamePrompt) {
@@ -56,35 +51,34 @@ struct PPSRSettingsView: View {
         .sheet(isPresented: $showSchedulePicker) { schedulePickerSheet }
     }
 
-    private var networksLinkSection: some View {
+    private var settingsAndTestingLinkSection: some View {
         Section {
-            NavigationLink {
-                DeviceNetworkSettingsView()
+            Button {
+                UserDefaults.standard.set(ActiveAppMode.settingsAndTesting.rawValue, forKey: "activeAppMode")
             } label: {
                 HStack(spacing: 12) {
                     ZStack {
                         Circle()
                             .fill(Color.blue.opacity(0.12))
                             .frame(width: 40, height: 40)
-                        Image(systemName: "network.badge.shield.half.filled")
+                        Image(systemName: "gearshape.2.fill")
                             .font(.body)
                             .foregroundStyle(.blue)
                     }
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Device Network Settings").font(.subheadline.bold())
-                        Text("Proxy, VPN, WireGuard, DNS — all modes")
+                        Text("Settings & Testing").font(.subheadline.bold())
+                        Text("Network, Super Test, IP Score, Nord Config, Debug, Import/Export")
                             .font(.caption2).foregroundStyle(.secondary)
                     }
                     Spacer()
-                    Text(proxyService.unifiedConnectionMode.label)
-                        .font(.system(.caption2, design: .monospaced, weight: .bold))
-                        .foregroundStyle(.blue)
-                        .padding(.horizontal, 6).padding(.vertical, 3)
-                        .background(Color.blue.opacity(0.12)).clipShape(Capsule())
+                    Image(systemName: "arrow.forward.circle.fill")
+                        .font(.title3).foregroundStyle(.blue)
                 }
             }
+        } header: {
+            Label("Global", systemImage: "globe")
         } footer: {
-            Text("Network configs are device-wide. Changes apply to Joe, Ignition & PPSR.")
+            Text("Device-wide settings, testing tools, diagnostics, and data management.")
         }
     }
 
@@ -395,40 +389,7 @@ struct PPSRSettingsView: View {
 
 
 
-    private var noticesSection: some View {
-        Section {
-            NavigationLink {
-                NoticesView()
-            } label: {
-                HStack(spacing: 12) {
-                    ZStack {
-                        Circle()
-                            .fill(Color.orange.opacity(0.12))
-                            .frame(width: 40, height: 40)
-                        Image(systemName: "exclamationmark.bubble.fill")
-                            .font(.body)
-                            .foregroundStyle(.orange)
-                    }
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Notices").font(.subheadline.bold())
-                        Text("Failure log & auto-retry history")
-                            .font(.caption2).foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    let count = NoticesService.shared.unreadCount
-                    if count > 0 {
-                        Text("\(count)")
-                            .font(.system(.caption2, design: .monospaced, weight: .bold))
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 7).padding(.vertical, 3)
-                            .background(Color.orange, in: Capsule())
-                    }
-                }
-            }
-        } footer: {
-            Text("Unusual failures are logged here instead of interrupting testing. Auto-retry handles them automatically.")
-        }
-    }
+
 
     private var iCloudSection: some View {
         Section {
@@ -501,81 +462,9 @@ struct PPSRSettingsView: View {
         }
     }
 
-    private var appearanceSection: some View {
-        Section {
-            Picker(selection: $vm.appearanceMode) {
-                ForEach(AppAppearanceMode.allCases, id: \.self) { mode in
-                    Label(mode.rawValue, systemImage: mode.icon).tag(mode)
-                }
-            } label: {
-                HStack(spacing: 10) { Image(systemName: "paintbrush.fill").foregroundStyle(.purple); Text("Appearance") }
-            }
-        } header: {
-            Text("Appearance")
-        }
-    }
-
-    private var introVideoSection: some View {
-        Section {
-            Toggle(isOn: $introVideoEnabled) {
-                HStack(spacing: 10) {
-                    Image(systemName: "film.fill").foregroundStyle(.pink)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Intro Video").font(.body)
-                        Text("Play intro video on app launch").font(.caption2).foregroundStyle(.secondary)
-                    }
-                }
-            }
-            .tint(.pink)
-            .sensoryFeedback(.impact(weight: .light), trigger: introVideoEnabled)
-        } header: {
-            Text("Startup")
-        } footer: {
-            Text(introVideoEnabled ? "Intro video will play each time you open the app." : "Intro video is disabled. Enable to show it on launch.")
-        }
-    }
-
-    private var configExportImportSection: some View {
-        Section {
-            NavigationLink {
-                ConsolidatedImportExportView()
-            } label: {
-                HStack(spacing: 12) {
-                    Image(systemName: "arrow.up.arrow.down.circle.fill")
-                        .font(.title3).foregroundStyle(.blue)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Import / Export").font(.subheadline.bold())
-                        Text("Full backup & restore of all data").font(.caption2).foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
-                }
-            }
-        } header: {
-            Text("Configuration Backup")
-        } footer: {
-            Text("Comprehensive backup covering all settings, credentials, cards, URLs, proxies, VPN, DNS, blacklist, emails, recorded flows, and button configs.")
-        }
-    }
 
 
 
-    private var aboutSection: some View {
-        Section {
-            LabeledContent("Version", value: "9.0.0")
-            LabeledContent("Engine", value: "WKWebView Live")
-            LabeledContent("Storage", value: "Unlimited · Local + iCloud")
-            LabeledContent("Stealth") { Text(vm.stealthEnabled ? "Ultra Stealth" : "Standard").foregroundStyle(vm.stealthEnabled ? .purple : .secondary) }
-            LabeledContent("Connection") {
-                Text(proxyService.unifiedConnectionMode.label)
-                    .foregroundStyle(proxyService.unifiedConnectionMode == .proxy ? .blue : .cyan)
-            }
-            LabeledContent("Mode") { Text("Live — Real Transactions").foregroundStyle(.orange) }
-            Button(role: .destructive) { vm.clearAll() } label: { Label("Clear Session History", systemImage: "trash") }
-        } header: {
-            Text("About")
-        }
-    }
 
     private var cropEditorSheet: some View {
         NavigationStack {

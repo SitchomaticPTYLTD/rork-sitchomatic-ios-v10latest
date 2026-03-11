@@ -54,6 +54,8 @@ struct DualModeCarCheckAppApp: App {
                             IPScoreTestView()
                         case .dualFind:
                             DualFindContainerView()
+                        case .settingsAndTesting:
+                            SettingsAndTestingView()
                         }
                     }
                     .transition(.asymmetric(
