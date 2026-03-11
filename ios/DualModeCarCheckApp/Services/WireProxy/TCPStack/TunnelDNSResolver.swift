@@ -2,8 +2,7 @@ import Foundation
 
 @MainActor
 class TunnelDNSResolver {
-    private var dnsServerIP: UInt32 = 0
-    private var fallbackDNSIP: UInt32 = 0
+    private var dnsServers: [UInt32] = []
     private var cache: [String: (ip: UInt32, expiry: Date)] = [:]
     private let cacheTTL: TimeInterval = 300
     private let queryTimeoutSeconds: TimeInterval = 8
@@ -17,18 +16,19 @@ class TunnelDNSResolver {
 
     func configure(dnsServer: String, sourceIP: UInt32) {
         self.sourceIP = sourceIP
-        self.fallbackDNSIP = IPv4Packet.ipFromString("1.1.1.1") ?? 0x01010101
-        if let ip = IPv4Packet.ipFromString(dnsServer) {
-            self.dnsServerIP = ip
-            if ip == fallbackDNSIP {
-                self.fallbackDNSIP = IPv4Packet.ipFromString("8.8.8.8") ?? 0x08080808
-            }
-            logger.log("TunnelDNS: configured with server \(dnsServer)", category: .vpn, level: .info)
-        } else {
-            self.dnsServerIP = fallbackDNSIP
-            self.fallbackDNSIP = IPv4Packet.ipFromString("8.8.8.8") ?? 0x08080808
-            logger.log("TunnelDNS: invalid DNS server '\(dnsServer)', using 1.1.1.1", category: .vpn, level: .warning)
+
+        let cloudflare = IPv4Packet.ipFromString("1.1.1.1") ?? 0x01010101
+        let google = IPv4Packet.ipFromString("8.8.8.8") ?? 0x08080808
+
+        var servers: [UInt32] = [cloudflare, google]
+
+        if let tunnelIP = IPv4Packet.ipFromString(dnsServer), tunnelIP != cloudflare, tunnelIP != google {
+            servers.append(tunnelIP)
         }
+
+        self.dnsServers = servers
+        let serverNames = servers.map { formatDNSIP($0) }.joined(separator: " → ")
+        logger.log("TunnelDNS: configured chain: \(serverNames)", category: .vpn, level: .info)
     }
 
     func resolve(_ hostname: String) async -> UInt32? {
@@ -56,28 +56,57 @@ class TunnelDNSResolver {
     private func performResolve(_ hostname: String) async -> UInt32? {
         cache.removeValue(forKey: hostname)
 
-        for attempt in 0..<maxRetries {
-            if attempt > 0 {
-                try? await Task.sleep(for: .milliseconds(500 * attempt))
+        for (serverIndex, server) in dnsServers.enumerated() {
+            for attempt in 0..<maxRetries {
+                if attempt > 0 {
+                    try? await Task.sleep(for: .milliseconds(300 * attempt))
+                }
+                if let result = await sendDNSQuery(hostname: hostname, dnsServer: server) {
+                    return result
+                }
             }
-            if let result = await sendDNSQuery(hostname: hostname, dnsServer: dnsServerIP) {
-                return result
-            }
-        }
-
-        logger.log("TunnelDNS: primary DNS failed for \(hostname) after \(maxRetries) attempts, trying fallback", category: .vpn, level: .warning)
-
-        for attempt in 0..<maxRetries {
-            if attempt > 0 {
-                try? await Task.sleep(for: .milliseconds(500 * attempt))
-            }
-            if let result = await sendDNSQuery(hostname: hostname, dnsServer: fallbackDNSIP) {
-                return result
+            if serverIndex < dnsServers.count - 1 {
+                logger.log("TunnelDNS: \(formatDNSIP(server)) failed for \(hostname), trying next", category: .vpn, level: .warning)
             }
         }
 
-        logger.log("TunnelDNS: all DNS attempts exhausted for \(hostname)", category: .vpn, level: .error)
+        if let systemResult = await systemDNSResolve(hostname) {
+            logger.log("TunnelDNS: system DNS resolved \(hostname) → \(formatDNSIP(systemResult))", category: .vpn, level: .info)
+            cache[hostname] = (ip: systemResult, expiry: Date().addingTimeInterval(cacheTTL))
+            return systemResult
+        }
+
+        logger.log("TunnelDNS: all DNS tiers exhausted for \(hostname)", category: .vpn, level: .error)
         return nil
+    }
+
+    private func systemDNSResolve(_ hostname: String) async -> UInt32? {
+        return await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let host = CFHostCreateWithName(nil, hostname as CFString).takeRetainedValue()
+                var resolved = DarwinBoolean(false)
+                CFHostStartInfoResolution(host, .addresses, nil)
+                guard let addresses = CFHostGetAddressing(host, &resolved)?.takeUnretainedValue() as? [Data],
+                      resolved.boolValue else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+                for addrData in addresses {
+                    if addrData.count >= MemoryLayout<sockaddr_in>.size {
+                        let result: UInt32? = addrData.withUnsafeBytes { ptr in
+                            guard let sa = ptr.baseAddress?.assumingMemoryBound(to: sockaddr.self),
+                                  sa.pointee.sa_family == AF_INET else { return nil }
+                            return ptr.baseAddress!.assumingMemoryBound(to: sockaddr_in.self).pointee.sin_addr.s_addr.bigEndian
+                        }
+                        if let ip = result {
+                            continuation.resume(returning: ip)
+                            return
+                        }
+                    }
+                }
+                continuation.resume(returning: nil)
+            }
+        }
     }
 
     private func sendDNSQuery(hostname: String, dnsServer: UInt32) async -> UInt32? {
