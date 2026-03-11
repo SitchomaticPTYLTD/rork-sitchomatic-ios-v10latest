@@ -30,10 +30,10 @@ class PPSRAutomationViewModel {
     var connectionStatus: ConnectionStatus = .disconnected
     var lastDiagnostics: String = ""
     var activeTestCount: Int = 0
-    var debugMode: Bool = false
+    var debugMode: Bool = true
     var debugScreenshots: [PPSRDebugScreenshot] = []
     var appearanceMode: AppAppearanceMode = .dark
-    var useEmailRotation: Bool = false
+    var useEmailRotation: Bool = true
     var stealthEnabled: Bool = true
     var retrySubmitOnFail: Bool = false
     var screenshotCropRect: CGRect = .zero

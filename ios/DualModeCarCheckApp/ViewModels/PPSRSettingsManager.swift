@@ -5,9 +5,9 @@ import SwiftUI
 class PPSRSettingsManager {
     var testEmail: String = "dev@test.ppsr.gov.au"
     var maxConcurrency: Int = 8
-    var debugMode: Bool = false
+    var debugMode: Bool = true
     var appearanceMode: AppAppearanceMode = .dark
-    var useEmailRotation: Bool = false
+    var useEmailRotation: Bool = true
     var stealthEnabled: Bool = true
     var retrySubmitOnFail: Bool = false
     var screenshotCropRect: CGRect = .zero
