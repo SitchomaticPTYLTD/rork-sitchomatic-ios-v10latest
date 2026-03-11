@@ -21,6 +21,9 @@ struct SuperTestView: View {
                 }
                 if let report = service.lastReport, !service.isRunning {
                     reportSummaryCard(report)
+                    if !report.diagnostics.isEmpty {
+                        diagnosticsSection(report.diagnostics)
+                    }
                 }
                 if !service.results.isEmpty {
                     resultsList
@@ -635,6 +638,158 @@ struct SuperTestView: View {
         case .success: .green
         case .warning: .orange
         case .error: .red
+        }
+    }
+
+    // MARK: - Diagnostics & Auto-Repair
+
+    private func diagnosticsSection(_ findings: [DiagnosticFinding]) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                Image(systemName: "stethoscope")
+                    .font(.subheadline)
+                    .foregroundStyle(.blue)
+                Text("Diagnostics")
+                    .font(.headline)
+                Spacer()
+
+                let autoFixCount = findings.filter { $0.autoFixAvailable }.count
+                if autoFixCount > 0 && !service.isAutoRepairing {
+                    Button {
+                        service.runAutoRepair()
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "wrench.and.screwdriver.fill")
+                                .font(.caption2)
+                            Text("Auto-Repair (\(autoFixCount))")
+                                .font(.caption.bold())
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Color.blue.opacity(0.15))
+                        .foregroundStyle(.blue)
+                        .clipShape(Capsule())
+                    }
+                    .sensoryFeedback(.impact(weight: .medium), trigger: service.isAutoRepairing)
+                }
+
+                if service.isAutoRepairing {
+                    HStack(spacing: 4) {
+                        ProgressView()
+                            .controlSize(.mini)
+                        Text("Repairing...")
+                            .font(.caption.bold())
+                            .foregroundStyle(.blue)
+                    }
+                }
+            }
+
+            ForEach(findings) { finding in
+                diagnosticCard(finding)
+            }
+
+            if !service.autoRepairLog.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "wrench.and.screwdriver")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Text("Repair Log")
+                            .font(.caption.bold())
+                    }
+
+                    VStack(alignment: .leading, spacing: 3) {
+                        ForEach(Array(service.autoRepairLog.enumerated()), id: \.offset) { _, entry in
+                            Text(entry)
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundStyle(entry.contains("\u{2713}") ? .green : (entry.contains("\u{2717}") ? .red : .secondary))
+                        }
+                    }
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.black.opacity(0.85))
+                    .clipShape(.rect(cornerRadius: 8))
+                }
+            }
+        }
+    }
+
+    private func diagnosticCard(_ finding: DiagnosticFinding) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Image(systemName: diagnosticIcon(finding.severity))
+                    .font(.subheadline)
+                    .foregroundStyle(diagnosticColor(finding.severity))
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(finding.title)
+                        .font(.system(.caption, weight: .bold))
+                    if finding.autoFixAvailable {
+                        HStack(spacing: 3) {
+                            Image(systemName: "wrench.fill")
+                                .font(.system(size: 8))
+                            Text("Auto-fixable")
+                                .font(.system(size: 9, weight: .semibold))
+                        }
+                        .foregroundStyle(.blue)
+                    }
+                }
+
+                Spacer()
+
+                Text(finding.severity.rawValue.uppercased())
+                    .font(.system(size: 9, weight: .black, design: .monospaced))
+                    .foregroundStyle(diagnosticColor(finding.severity))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .background(diagnosticColor(finding.severity).opacity(0.12))
+                    .clipShape(Capsule())
+            }
+
+            Text(finding.explanation)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if let fix = finding.fixAction {
+                HStack(spacing: 4) {
+                    Image(systemName: "lightbulb.fill")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.yellow)
+                    Text(fix)
+                        .font(.system(.caption2, weight: .semibold))
+                        .foregroundStyle(.primary)
+                }
+                .padding(8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.yellow.opacity(0.08))
+                .clipShape(.rect(cornerRadius: 6))
+            }
+        }
+        .padding(12)
+        .background(diagnosticColor(finding.severity).opacity(0.04))
+        .clipShape(.rect(cornerRadius: 12))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(diagnosticColor(finding.severity).opacity(0.2), lineWidth: 1)
+        )
+    }
+
+    private func diagnosticIcon(_ severity: DiagnosticSeverity) -> String {
+        switch severity {
+        case .critical: "exclamationmark.triangle.fill"
+        case .warning: "exclamationmark.circle.fill"
+        case .info: "info.circle.fill"
+        case .success: "checkmark.seal.fill"
+        }
+    }
+
+    private func diagnosticColor(_ severity: DiagnosticSeverity) -> Color {
+        switch severity {
+        case .critical: .red
+        case .warning: .orange
+        case .info: .blue
+        case .success: .green
         }
     }
 }

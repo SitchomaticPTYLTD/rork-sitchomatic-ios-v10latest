@@ -351,8 +351,35 @@ class DeviceProxyService {
                 logger.log("DeviceProxy: WireProxy tunnel active for \(wg.serverName)", category: .vpn, level: .success)
             } else {
                 localProxy.enableWireProxyMode(false)
-                logger.log("DeviceProxy: WireProxy tunnel failed for \(wg.serverName)", category: .vpn, level: .error)
+                logger.log("DeviceProxy: WireProxy tunnel failed for \(wg.serverName) — retrying with next config", category: .vpn, level: .error)
+                await retryWireProxyWithNextConfig(failedServer: wg.serverName)
             }
+        }
+    }
+
+    private func retryWireProxyWithNextConfig(failedServer: String) async {
+        let targets: [ProxyRotationService.ProxyTarget] = [.joe, .ignition, .ppsr]
+        var allWG: [WireGuardConfig] = []
+        for t in targets { allWG.append(contentsOf: proxyService.wgConfigs(for: t).filter { $0.isEnabled }) }
+        let unique = Array(Dictionary(grouping: allWG, by: \.uniqueKey).compactMapValues(\.first).values)
+        let candidates = unique.filter { $0.serverName != failedServer }
+        guard !candidates.isEmpty else {
+            logger.log("DeviceProxy: no alternative WG configs for retry", category: .vpn, level: .error)
+            return
+        }
+        let nextWG = candidates[wgIndex % candidates.count]
+        wgIndex += 1
+        activeConfig = .wireGuardDNS(nextWG)
+        activeEndpointLabel = "WG: \(nextWG.fileName)"
+        activeConnectionType = "WireGuard"
+
+        await wireProxyBridge.start(with: nextWG)
+        if wireProxyBridge.isActive {
+            localProxy.enableWireProxyMode(true)
+            logger.log("DeviceProxy: WireProxy retry succeeded with \(nextWG.serverName)", category: .vpn, level: .success)
+        } else {
+            localProxy.enableWireProxyMode(false)
+            logger.log("DeviceProxy: WireProxy retry also failed for \(nextWG.serverName)", category: .vpn, level: .error)
         }
     }
 

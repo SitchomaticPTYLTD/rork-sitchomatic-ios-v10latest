@@ -6,13 +6,14 @@ class TunnelDNSResolver {
     private var fallbackDNSIP: UInt32 = 0
     private var cache: [String: (ip: UInt32, expiry: Date)] = [:]
     private let cacheTTL: TimeInterval = 300
-    private let queryTimeoutSeconds: TimeInterval = 5
-    private let maxRetries: Int = 2
+    private let queryTimeoutSeconds: TimeInterval = 8
+    private let maxRetries: Int = 3
     private let logger = DebugLogger.shared
     private var pendingQueries: [UInt16: (String, CheckedContinuation<UInt32?, Never>)] = [:]
     var sendPacketHandler: ((Data) -> Void)?
     private var sourceIP: UInt32 = 0
     private var nextQueryID: UInt16 = 1
+    private var inflightHostnames: [String: Task<UInt32?, Never>] = [:]
 
     func configure(dnsServer: String, sourceIP: UInt32) {
         self.sourceIP = sourceIP
@@ -39,11 +40,25 @@ class TunnelDNSResolver {
             return cached.ip
         }
 
+        if let existingTask = inflightHostnames[hostname] {
+            return await existingTask.value
+        }
+
+        let task = Task<UInt32?, Never> { @MainActor in
+            return await self.performResolve(hostname)
+        }
+        inflightHostnames[hostname] = task
+        let result = await task.value
+        inflightHostnames.removeValue(forKey: hostname)
+        return result
+    }
+
+    private func performResolve(_ hostname: String) async -> UInt32? {
         cache.removeValue(forKey: hostname)
 
         for attempt in 0..<maxRetries {
             if attempt > 0 {
-                try? await Task.sleep(for: .milliseconds(300 * attempt))
+                try? await Task.sleep(for: .milliseconds(500 * attempt))
             }
             if let result = await sendDNSQuery(hostname: hostname, dnsServer: dnsServerIP) {
                 return result
@@ -54,7 +69,7 @@ class TunnelDNSResolver {
 
         for attempt in 0..<maxRetries {
             if attempt > 0 {
-                try? await Task.sleep(for: .milliseconds(300 * attempt))
+                try? await Task.sleep(for: .milliseconds(500 * attempt))
             }
             if let result = await sendDNSQuery(hostname: hostname, dnsServer: fallbackDNSIP) {
                 return result
@@ -68,6 +83,7 @@ class TunnelDNSResolver {
     private func sendDNSQuery(hostname: String, dnsServer: UInt32) async -> UInt32? {
         let queryID = nextQueryID
         nextQueryID = nextQueryID &+ 1
+        if nextQueryID == 0 { nextQueryID = 1 }
 
         let dnsQuery = buildDNSQuery(id: queryID, hostname: hostname)
         let udpPacket = buildUDPPacket(
@@ -89,10 +105,14 @@ class TunnelDNSResolver {
             pendingQueries[queryID] = (hostname, continuation)
             sendPacketHandler?(ipPacket)
 
-            Task { @MainActor in
-                try? await Task.sleep(for: .seconds(self.queryTimeoutSeconds))
+            let capturedTimeout = self.queryTimeoutSeconds
+            let capturedHostname = hostname
+            let capturedDNSServer = dnsServer
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .seconds(capturedTimeout))
+                guard let self else { return }
                 if let pending = self.pendingQueries.removeValue(forKey: queryID) {
-                    self.logger.log("TunnelDNS: timeout resolving \(hostname) via \(self.formatDNSIP(dnsServer)) after \(Int(self.queryTimeoutSeconds))s", category: .vpn, level: .warning)
+                    self.logger.log("TunnelDNS: timeout resolving \(capturedHostname) via \(self.formatDNSIP(capturedDNSServer)) after \(Int(capturedTimeout))s", category: .vpn, level: .warning)
                     pending.1.resume(returning: nil)
                 }
             }
@@ -138,6 +158,11 @@ class TunnelDNSResolver {
 
     func clearCache() {
         cache.removeAll()
+        for (queryID, pending) in pendingQueries {
+            pending.1.resume(returning: nil)
+            pendingQueries.removeValue(forKey: queryID)
+        }
+        inflightHostnames.removeAll()
     }
 
     var cacheSize: Int { cache.count }

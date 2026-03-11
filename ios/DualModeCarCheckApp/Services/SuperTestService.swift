@@ -113,6 +113,33 @@ nonisolated struct SuperTestItemResult: Identifiable, Sendable {
     }
 }
 
+nonisolated enum DiagnosticSeverity: String, Sendable {
+    case critical
+    case warning
+    case info
+    case success
+}
+
+nonisolated struct DiagnosticFinding: Identifiable, Sendable {
+    let id: UUID
+    let severity: DiagnosticSeverity
+    let title: String
+    let explanation: String
+    let fixAction: String?
+    let autoFixAvailable: Bool
+    let category: SuperTestPhase
+
+    init(severity: DiagnosticSeverity, title: String, explanation: String, fixAction: String? = nil, autoFixAvailable: Bool = false, category: SuperTestPhase) {
+        self.id = UUID()
+        self.severity = severity
+        self.title = title
+        self.explanation = explanation
+        self.fixAction = fixAction
+        self.autoFixAvailable = autoFixAvailable
+        self.category = category
+    }
+}
+
 nonisolated struct SuperTestReport: Sendable {
     let results: [SuperTestItemResult]
     let fingerprintScore: Int?
@@ -124,6 +151,7 @@ nonisolated struct SuperTestReport: Sendable {
     let totalEnabled: Int
     let duration: TimeInterval
     let timestamp: Date
+    let diagnostics: [DiagnosticFinding]
 
     var passRate: Double {
         guard totalTested > 0 else { return 0 }
@@ -140,6 +168,10 @@ nonisolated struct SuperTestReport: Sendable {
         let secs = Int(duration) % 60
         return "\(mins)m \(secs)s"
     }
+
+    var criticalCount: Int { diagnostics.filter { $0.severity == .critical }.count }
+    var warningCount: Int { diagnostics.filter { $0.severity == .warning }.count }
+    var autoFixableCount: Int { diagnostics.filter { $0.autoFixAvailable }.count }
 }
 
 @Observable
@@ -158,6 +190,9 @@ class SuperTestService {
     var phaseProgress: [SuperTestPhase: (total: Int, done: Int)] = [:]
 
     var selectedConnectionTypes: Set<SuperTestConnectionType> = Set(SuperTestConnectionType.allCases)
+    var diagnosticFindings: [DiagnosticFinding] = []
+    var autoRepairLog: [String] = []
+    var isAutoRepairing: Bool = false
 
     private var testTask: Task<Void, Never>?
 
@@ -309,6 +344,8 @@ class SuperTestService {
         let disabledCount = countDisabledItems()
         let enabledCount = countEnabledItems()
 
+        diagnosticFindings = generateDiagnostics()
+
         lastReport = SuperTestReport(
             results: results,
             fingerprintScore: fpScore,
@@ -319,7 +356,8 @@ class SuperTestService {
             totalDisabled: disabledCount,
             totalEnabled: enabledCount,
             duration: duration,
-            timestamp: Date()
+            timestamp: Date(),
+            diagnostics: diagnosticFindings
         )
 
         currentPhase = .complete
@@ -327,8 +365,9 @@ class SuperTestService {
         currentItem = ""
         isRunning = false
 
-        addLog("SUPER TEST COMPLETE — \(totalPassed)/\(totalTested) passed, \(totalFailed) failed, \(disabledCount) auto-disabled, \(enabledCount) auto-enabled in \(lastReport!.formattedDuration)", level: .success)
-        logger.endSession("supertest", category: .superTest, message: "SUPER TEST COMPLETE: \(totalPassed)/\(totalTested) passed, \(totalFailed) failed", level: totalFailed == 0 ? .success : .warning)
+        let diagSummary = diagnosticFindings.isEmpty ? "no issues" : "\(diagnosticFindings.filter { $0.severity == .critical }.count) critical, \(diagnosticFindings.filter { $0.severity == .warning }.count) warnings, \(diagnosticFindings.filter { $0.autoFixAvailable }.count) auto-fixable"
+        addLog("SUPER TEST COMPLETE — \(totalPassed)/\(totalTested) passed, \(totalFailed) failed, \(disabledCount) auto-disabled — Diagnostics: \(diagSummary)", level: .success)
+        logger.endSession("supertest", category: .superTest, message: "SUPER TEST COMPLETE: \(totalPassed)/\(totalTested) passed, \(totalFailed) failed, diag: \(diagSummary)", level: totalFailed == 0 ? .success : .warning)
     }
 
     private func countDisabledItems() -> Int {
@@ -1168,5 +1207,288 @@ class SuperTestService {
         var shuffled = urls
         shuffled.shuffle()
         return Array(shuffled.prefix(count))
+    }
+
+    // MARK: - Smart Diagnostics Engine
+
+    private func generateDiagnostics() -> [DiagnosticFinding] {
+        var findings: [DiagnosticFinding] = []
+
+        let wireProxyResults = results.filter { $0.category == .wireproxyWebView }
+        let wireProxyFailed = wireProxyResults.filter { !$0.passed }
+        if !wireProxyResults.isEmpty && wireProxyFailed.count == wireProxyResults.count {
+            let tunnelStatus = wireProxyResults.first(where: { $0.name.contains("Tunnel Status") })
+            if tunnelStatus?.passed == false {
+                findings.append(DiagnosticFinding(
+                    severity: .critical,
+                    title: "WireProxy Tunnel Not Established",
+                    explanation: "The WireGuard tunnel failed to connect. All WebView traffic through WireProxy will fail. This usually means the WireGuard private key is invalid, the server endpoint is unreachable, or the handshake timed out.",
+                    fixAction: "Restart WireProxy tunnel with a different server",
+                    autoFixAvailable: true,
+                    category: .wireproxyWebView
+                ))
+            } else {
+                findings.append(DiagnosticFinding(
+                    severity: .critical,
+                    title: "WireProxy DNS Resolution Failing",
+                    explanation: "The tunnel is established but DNS queries through it are failing. This means the DNS server configured in the WireGuard config (usually NordVPN's 103.86.96.100) is not responding through the tunnel. Traffic cannot resolve hostnames.",
+                    fixAction: "Rotate to a different WireGuard server",
+                    autoFixAvailable: true,
+                    category: .wireproxyWebView
+                ))
+            }
+        } else if wireProxyFailed.count == 1 && wireProxyResults.count == 3 {
+            findings.append(DiagnosticFinding(
+                severity: .warning,
+                title: "WireProxy Partially Working",
+                explanation: "Some WireProxy tests passed but \(wireProxyFailed.first?.name ?? "one test") failed. The tunnel may be slow or the DNS cache needs warming up. This is usually transient.",
+                fixAction: nil,
+                autoFixAvailable: false,
+                category: .wireproxyWebView
+            ))
+        }
+
+        let dnsResults = results.filter { $0.category == .dnsServers }
+        let dnsFailed = dnsResults.filter { !$0.passed }
+        if !dnsResults.isEmpty {
+            if dnsFailed.count == dnsResults.count {
+                findings.append(DiagnosticFinding(
+                    severity: .critical,
+                    title: "All DNS Servers Failed",
+                    explanation: "No DNS-over-HTTPS providers responded. This means the device may not have internet access, or all DoH endpoints are blocked. PPSR VIN lookups will fail without working DNS.",
+                    fixAction: "Check internet connection and try adding new DoH providers",
+                    autoFixAvailable: false,
+                    category: .dnsServers
+                ))
+            } else if dnsFailed.count > dnsResults.count / 2 {
+                findings.append(DiagnosticFinding(
+                    severity: .warning,
+                    title: "Majority of DNS Servers Failed",
+                    explanation: "\(dnsFailed.count) of \(dnsResults.count) DNS providers failed. Only \(dnsResults.count - dnsFailed.count) are working. Failed providers have been auto-disabled. Consider adding backup DNS providers.",
+                    fixAction: nil,
+                    autoFixAvailable: false,
+                    category: .dnsServers
+                ))
+            }
+        }
+
+        let proxyResults = results.filter { $0.category == .socks5Proxies }
+        let proxyFailed = proxyResults.filter { !$0.passed }
+        if !proxyResults.isEmpty && proxyFailed.count == proxyResults.count {
+            findings.append(DiagnosticFinding(
+                severity: .critical,
+                title: "All SOCKS5 Proxies Failed",
+                explanation: "No SOCKS5 proxy could establish a connection and return an IP. This means either all proxies are down, credentials are wrong, or the proxy servers are blocking connections. WebView sessions in proxy mode will fall back to direct (IP exposed).",
+                fixAction: "Switch to WireGuard mode which doesn't need SOCKS5 proxies",
+                autoFixAvailable: true,
+                category: .socks5Proxies
+            ))
+        } else if !proxyResults.isEmpty && proxyFailed.count > 0 {
+            let failRate = Double(proxyFailed.count) / Double(proxyResults.count) * 100
+            if failRate > 50 {
+                findings.append(DiagnosticFinding(
+                    severity: .warning,
+                    title: "High Proxy Failure Rate (\(Int(failRate))%)",
+                    explanation: "\(proxyFailed.count) of \(proxyResults.count) proxies failed. Failed proxies have been marked as down. The remaining \(proxyResults.count - proxyFailed.count) working proxies will be used for rotation.",
+                    fixAction: nil,
+                    autoFixAvailable: false,
+                    category: .socks5Proxies
+                ))
+            }
+        }
+
+        let wgResults = results.filter { $0.category == .wireguardProfiles }
+        let wgFailed = wgResults.filter { !$0.passed }
+        if !wgResults.isEmpty {
+            if wgFailed.count == wgResults.count {
+                findings.append(DiagnosticFinding(
+                    severity: .critical,
+                    title: "All WireGuard Endpoints Unreachable",
+                    explanation: "None of the \(wgResults.count) WireGuard servers responded to handshake probes. This could mean: (1) The NordVPN private key is expired or invalid, (2) NordVPN is blocking this IP, or (3) UDP port 51820 is blocked by the network.",
+                    fixAction: "Re-fetch NordVPN credentials and repopulate configs",
+                    autoFixAvailable: true,
+                    category: .wireguardProfiles
+                ))
+            } else if wgFailed.count > wgResults.count / 2 {
+                findings.append(DiagnosticFinding(
+                    severity: .warning,
+                    title: "Many WireGuard Endpoints Failing (\(wgFailed.count)/\(wgResults.count))",
+                    explanation: "More than half of WireGuard endpoints failed. \(wgResults.count - wgFailed.count) are still working. Failed endpoints have been auto-disabled and won't be selected for tunneling.",
+                    fixAction: nil,
+                    autoFixAvailable: false,
+                    category: .wireguardProfiles
+                ))
+            }
+        }
+
+        let vpnResults = results.filter { $0.category == .openvpnProfiles }
+        let vpnFailed = vpnResults.filter { !$0.passed }
+        if !vpnResults.isEmpty && vpnFailed.count == vpnResults.count {
+            findings.append(DiagnosticFinding(
+                severity: .critical,
+                title: "All OpenVPN Endpoints Unreachable",
+                explanation: "None of the \(vpnResults.count) OpenVPN servers responded. The .ovpn config files may be outdated, or TCP port 443 is blocked. OpenVPN mode will not work.",
+                fixAction: "Repopulate OpenVPN configs from NordVPN",
+                autoFixAvailable: true,
+                category: .openvpnProfiles
+            ))
+        }
+
+        let joeResults = results.filter { $0.category == .joeURLs }
+        let joeFailed = joeResults.filter { !$0.passed }
+        if !joeResults.isEmpty && joeFailed.count == joeResults.count {
+            findings.append(DiagnosticFinding(
+                severity: .critical,
+                title: "All Joe Fortune URLs Unreachable",
+                explanation: "None of the tested Joe Fortune URLs responded with HTTP 2xx/3xx. The domains may be geo-blocked, the site could be down, or your network/proxy is blocking them.",
+                fixAction: "Check if you need to switch to AU region or try a different proxy",
+                autoFixAvailable: false,
+                category: .joeURLs
+            ))
+        }
+
+        let ignResults = results.filter { $0.category == .ignitionURLs }
+        let ignFailed = ignResults.filter { !$0.passed }
+        if !ignResults.isEmpty && ignFailed.count == ignResults.count {
+            findings.append(DiagnosticFinding(
+                severity: .critical,
+                title: "All Ignition URLs Unreachable",
+                explanation: "None of the tested Ignition URLs responded. Make sure region is set to AU for Ignition and verify your proxy/VPN can reach Australian servers.",
+                fixAction: "Verify region is set to AU",
+                autoFixAvailable: false,
+                category: .ignitionURLs
+            ))
+        }
+
+        let fpResults = results.filter { $0.category == .fingerprint }
+        let fpFailed = fpResults.filter { !$0.passed }
+        if !fpFailed.isEmpty {
+            let scores = fpResults.compactMap { $0.latencyMs }
+            let maxScore = scores.max() ?? 0
+            findings.append(DiagnosticFinding(
+                severity: .warning,
+                title: "Fingerprint Detection Score Too High (\(maxScore))",
+                explanation: "Your WebView fingerprint score exceeds the safe threshold. This means automation detection services may flag your sessions. The anti-bot patches may need updating, or the WebView configuration needs adjusting.",
+                fixAction: nil,
+                autoFixAvailable: false,
+                category: .fingerprint
+            ))
+        }
+
+        if findings.isEmpty && !results.isEmpty {
+            findings.append(DiagnosticFinding(
+                severity: .success,
+                title: "All Systems Healthy",
+                explanation: "All tested components are working correctly. No issues detected.",
+                fixAction: nil,
+                autoFixAvailable: false,
+                category: .complete
+            ))
+        }
+
+        return findings
+    }
+
+    // MARK: - Auto-Repair
+
+    func runAutoRepair() {
+        guard !isAutoRepairing, let report = lastReport else { return }
+        isAutoRepairing = true
+        autoRepairLog.removeAll()
+
+        let fixable = report.diagnostics.filter { $0.autoFixAvailable }
+        guard !fixable.isEmpty else {
+            autoRepairLog.append("No auto-fixable issues found")
+            isAutoRepairing = false
+            return
+        }
+
+        addLog("AUTO-REPAIR — Starting repair for \(fixable.count) issues", level: .info)
+
+        Task {
+            for finding in fixable {
+                if Task.isCancelled { break }
+
+                switch finding.category {
+                case .wireproxyWebView:
+                    await repairWireProxy(finding)
+                case .socks5Proxies:
+                    await repairProxyMode(finding)
+                case .wireguardProfiles:
+                    await repairWireGuardConfigs(finding)
+                case .openvpnProfiles:
+                    await repairOpenVPNConfigs(finding)
+                default:
+                    autoRepairLog.append("[\(finding.category.rawValue)] No automatic repair available")
+                }
+            }
+
+            addLog("AUTO-REPAIR — Completed \(autoRepairLog.count) actions", level: .success)
+            isAutoRepairing = false
+        }
+    }
+
+    private func repairWireProxy(_ finding: DiagnosticFinding) async {
+        autoRepairLog.append("[WireProxy] Stopping current tunnel...")
+        deviceProxy.stopWireProxy()
+        try? await Task.sleep(for: .seconds(1))
+
+        autoRepairLog.append("[WireProxy] Rotating to next WireGuard config...")
+        deviceProxy.rotateWireProxyConfig()
+        try? await Task.sleep(for: .seconds(5))
+
+        if wireProxyBridge.isActive {
+            autoRepairLog.append("[WireProxy] ✓ Tunnel re-established successfully")
+            addLog("AUTO-REPAIR: WireProxy tunnel re-established", level: .success)
+        } else {
+            autoRepairLog.append("[WireProxy] ✗ Tunnel still failing — try switching to a different connection mode")
+            addLog("AUTO-REPAIR: WireProxy repair failed — tunnel won't establish", level: .error)
+        }
+    }
+
+    private func repairProxyMode(_ finding: DiagnosticFinding) async {
+        autoRepairLog.append("[Proxies] All SOCKS5 proxies failed — switching to WireGuard mode...")
+        proxyService.setUnifiedConnectionMode(.wireguard)
+        try? await Task.sleep(for: .seconds(1))
+
+        if deviceProxy.ipRoutingMode == .appWideUnited {
+            deviceProxy.rotateNow(reason: "Auto-repair: switched to WireGuard")
+            try? await Task.sleep(for: .seconds(4))
+        }
+
+        autoRepairLog.append("[Proxies] ✓ Switched to WireGuard mode")
+        addLog("AUTO-REPAIR: Switched from Proxy to WireGuard mode", level: .success)
+    }
+
+    private func repairWireGuardConfigs(_ finding: DiagnosticFinding) async {
+        autoRepairLog.append("[WireGuard] Requesting config repopulation from NordVPN...")
+        let nordVPN = NordVPNService.shared
+        await nordVPN.autoPopulateConfigs(forceRefresh: true)
+        try? await Task.sleep(for: .seconds(2))
+
+        let newWGCount = proxyService.joeWGConfigs.count + proxyService.ignitionWGConfigs.count + proxyService.ppsrWGConfigs.count
+        if newWGCount > 0 {
+            autoRepairLog.append("[WireGuard] ✓ Repopulated \(newWGCount) WireGuard configs")
+            addLog("AUTO-REPAIR: Repopulated \(newWGCount) WireGuard configs", level: .success)
+        } else {
+            autoRepairLog.append("[WireGuard] ✗ Repopulation failed — check NordVPN credentials")
+            addLog("AUTO-REPAIR: WireGuard repopulation failed", level: .error)
+        }
+    }
+
+    private func repairOpenVPNConfigs(_ finding: DiagnosticFinding) async {
+        autoRepairLog.append("[OpenVPN] Requesting config repopulation from NordVPN...")
+        let nordVPN = NordVPNService.shared
+        await nordVPN.autoPopulateConfigs(forceRefresh: true)
+        try? await Task.sleep(for: .seconds(2))
+
+        let newVPNCount = proxyService.joeVPNConfigs.count + proxyService.ignitionVPNConfigs.count + proxyService.ppsrVPNConfigs.count
+        if newVPNCount > 0 {
+            autoRepairLog.append("[OpenVPN] ✓ Repopulated \(newVPNCount) OpenVPN configs")
+            addLog("AUTO-REPAIR: Repopulated \(newVPNCount) OpenVPN configs", level: .success)
+        } else {
+            autoRepairLog.append("[OpenVPN] ✗ Repopulation failed — check NordVPN credentials")
+            addLog("AUTO-REPAIR: OpenVPN repopulation failed", level: .error)
+        }
     }
 }
