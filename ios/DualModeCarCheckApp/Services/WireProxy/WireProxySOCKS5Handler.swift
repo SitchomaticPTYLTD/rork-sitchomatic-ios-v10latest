@@ -146,8 +146,6 @@ class WireProxySOCKS5Handler {
             queue: queue,
             server: server
         )
-
-        server.tunnelConnectionFinished(id: id)
     }
 
     private func sendSOCKS5Error(_ rep: UInt8) {

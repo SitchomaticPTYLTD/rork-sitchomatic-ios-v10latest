@@ -465,42 +465,80 @@ class DeviceProxyService {
 
     private func resolveNextConfig() -> ActiveNetworkConfig {
         let targets: [ProxyRotationService.ProxyTarget] = [.joe, .ignition, .ppsr]
+        let preferredMode = proxyService.unifiedConnectionMode
 
-        var allWG: [WireGuardConfig] = []
-        for t in targets { allWG.append(contentsOf: proxyService.wgConfigs(for: t).filter { $0.isEnabled }) }
-        let uniqueWG = Array(Dictionary(grouping: allWG, by: \.uniqueKey).compactMapValues(\.first).values)
-        if !uniqueWG.isEmpty {
-            let config = uniqueWG[wgIndex % uniqueWG.count]
-            wgIndex += 1
-            return .wireGuardDNS(config)
-        }
+        let allWG = collectUniqueWG(targets: targets)
+        let allOVPN = collectUniqueOVPN(targets: targets)
+        let allProxies = collectUniqueProxies(targets: targets)
 
-        var allOVPN: [OpenVPNConfig] = []
-        for t in targets { allOVPN.append(contentsOf: proxyService.vpnConfigs(for: t).filter { $0.isEnabled }) }
-        let uniqueOVPN = Array(Dictionary(grouping: allOVPN, by: \.uniqueKey).compactMapValues(\.first).values)
-        if !uniqueOVPN.isEmpty {
-            let config = uniqueOVPN[ovpnIndex % uniqueOVPN.count]
-            ovpnIndex += 1
-            return .openVPNProxy(config)
-        }
+        switch preferredMode {
+        case .wireguard:
+            if let result = nextFromWG(allWG) { return result }
+            if let result = nextFromOVPN(allOVPN) { return result }
+            if let result = nextFromSOCKS5(allProxies) { return result }
 
-        var allProxies: [ProxyConfig] = []
-        for t in targets { allProxies.append(contentsOf: proxyService.proxies(for: t)) }
-        let uniqueProxies = Array(Dictionary(grouping: allProxies, by: \.id).compactMapValues(\.first).values)
-        let workingProxies = uniqueProxies.filter { $0.isWorking || $0.lastTested == nil }
-        if !workingProxies.isEmpty {
-            let proxy = workingProxies[socks5Index % workingProxies.count]
-            socks5Index += 1
-            return .socks5(proxy)
-        }
+        case .openvpn:
+            if let result = nextFromOVPN(allOVPN) { return result }
+            if let result = nextFromWG(allWG) { return result }
+            if let result = nextFromSOCKS5(allProxies) { return result }
 
-        if !uniqueProxies.isEmpty {
-            let proxy = uniqueProxies[socks5Index % uniqueProxies.count]
-            socks5Index += 1
-            return .socks5(proxy)
+        case .proxy:
+            if let result = nextFromSOCKS5(allProxies) { return result }
+            if let result = nextFromWG(allWG) { return result }
+            if let result = nextFromOVPN(allOVPN) { return result }
+
+        case .dns:
+            if let result = nextFromSOCKS5(allProxies) { return result }
+            if let result = nextFromWG(allWG) { return result }
+            if let result = nextFromOVPN(allOVPN) { return result }
         }
 
         return .direct
+    }
+
+    private func collectUniqueWG(targets: [ProxyRotationService.ProxyTarget]) -> [WireGuardConfig] {
+        var all: [WireGuardConfig] = []
+        for t in targets { all.append(contentsOf: proxyService.wgConfigs(for: t).filter { $0.isEnabled }) }
+        return Array(Dictionary(grouping: all, by: \.uniqueKey).compactMapValues(\.first).values)
+    }
+
+    private func collectUniqueOVPN(targets: [ProxyRotationService.ProxyTarget]) -> [OpenVPNConfig] {
+        var all: [OpenVPNConfig] = []
+        for t in targets { all.append(contentsOf: proxyService.vpnConfigs(for: t).filter { $0.isEnabled }) }
+        return Array(Dictionary(grouping: all, by: \.uniqueKey).compactMapValues(\.first).values)
+    }
+
+    private func collectUniqueProxies(targets: [ProxyRotationService.ProxyTarget]) -> [ProxyConfig] {
+        var all: [ProxyConfig] = []
+        for t in targets { all.append(contentsOf: proxyService.proxies(for: t)) }
+        return Array(Dictionary(grouping: all, by: \.id).compactMapValues(\.first).values)
+    }
+
+    private func nextFromWG(_ configs: [WireGuardConfig]) -> ActiveNetworkConfig? {
+        guard !configs.isEmpty else { return nil }
+        let config = configs[wgIndex % configs.count]
+        wgIndex += 1
+        return .wireGuardDNS(config)
+    }
+
+    private func nextFromOVPN(_ configs: [OpenVPNConfig]) -> ActiveNetworkConfig? {
+        guard !configs.isEmpty else { return nil }
+        let config = configs[ovpnIndex % configs.count]
+        ovpnIndex += 1
+        return .openVPNProxy(config)
+    }
+
+    private func nextFromSOCKS5(_ proxies: [ProxyConfig]) -> ActiveNetworkConfig? {
+        let working = proxies.filter { $0.isWorking || $0.lastTested == nil }
+        if !working.isEmpty {
+            let proxy = working[socks5Index % working.count]
+            socks5Index += 1
+            return .socks5(proxy)
+        }
+        guard !proxies.isEmpty else { return nil }
+        let proxy = proxies[socks5Index % proxies.count]
+        socks5Index += 1
+        return .socks5(proxy)
     }
 
     private func persistSettings() {

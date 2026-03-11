@@ -49,6 +49,8 @@ class NetworkSessionFactory {
     private let vpnTunnel = VPNTunnelManager.shared
     private let wireProxyBridge = WireProxyBridge.shared
 
+    private var vpnConnectInFlight: Bool = false
+
     func nextConfig(for target: ProxyRotationService.ProxyTarget) -> ActiveNetworkConfig {
         if vpnTunnel.isConnected {
             logger.log("NetworkFactory: device-wide VPN tunnel active — all traffic routed via VPN for \(target.rawValue)", category: .vpn, level: .debug)
@@ -95,9 +97,7 @@ class NetworkSessionFactory {
             }
             if let wg = nextWGConfig(for: target) {
                 logger.log("NetworkFactory: assigned WG \(wg.displayString) for \(target.rawValue) — triggering VPN tunnel connect", category: .vpn, level: .debug)
-                Task {
-                    await vpnTunnel.configureAndConnect(with: wg)
-                }
+                triggerVPNConnectOnce(with: wg)
                 return .wireGuardDNS(wg)
             }
             logger.log("NetworkFactory: no enabled WG config for \(target.rawValue) — falling back to OpenVPN", category: .vpn, level: .warning)
@@ -128,7 +128,7 @@ class NetworkSessionFactory {
         }
     }
 
-    func buildURLSessionConfiguration(for config: ActiveNetworkConfig) -> URLSessionConfiguration {
+    func buildURLSessionConfiguration(for config: ActiveNetworkConfig, target: ProxyRotationService.ProxyTarget = .joe) -> URLSessionConfiguration {
         let sessionConfig = URLSessionConfiguration.ephemeral
         sessionConfig.timeoutIntervalForRequest = TimeoutResolver.resolveRequestTimeout(30)
         sessionConfig.timeoutIntervalForResource = TimeoutResolver.resolveResourceTimeout(60)
@@ -136,95 +136,19 @@ class NetworkSessionFactory {
         sessionConfig.httpShouldSetCookies = false
         sessionConfig.httpCookieAcceptPolicy = .never
 
-        switch config {
-        case .direct:
-            break
-
-        case .socks5(let proxy):
-            var proxyDict: [String: Any] = [
-                "SOCKSEnable": 1,
-                "SOCKSProxy": proxy.host,
-                "SOCKSPort": proxy.port,
-            ]
-            if let u = proxy.username { proxyDict["SOCKSUser"] = u }
-            if let p = proxy.password { proxyDict["SOCKSPassword"] = p }
-            sessionConfig.connectionProxyDictionary = proxyDict
-            logger.log("URLSession configured with SOCKS5: \(proxy.displayString)", category: .proxy, level: .trace)
-
-        case .wireGuardDNS(let wg):
-            if vpnTunnel.isConnected {
-                logger.log("URLSession WG: device-wide VPN active via \(wg.displayString) — traffic routed through tunnel", category: .vpn, level: .info)
-            } else if wireProxyBridge.isActive, localProxy.isRunning, localProxy.wireProxyMode {
-                let localConfig = localProxy.localProxyConfig
-                var proxyDict: [String: Any] = [
-                    "SOCKSEnable": 1,
-                    "SOCKSProxy": localConfig.host,
-                    "SOCKSPort": localConfig.port,
-                ]
-                if let u = localConfig.username { proxyDict["SOCKSUser"] = u }
-                if let p = localConfig.password { proxyDict["SOCKSPassword"] = p }
-                sessionConfig.connectionProxyDictionary = proxyDict
-                logger.log("URLSession WG: routed via WireProxy local proxy 127.0.0.1:\(localConfig.port)", category: .vpn, level: .info)
-            } else {
-                logger.log("URLSession WG: \(wg.displayString) — no active tunnel, triggering VPN connect and falling back to SOCKS5", category: .vpn, level: .warning)
-                Task {
-                    await vpnTunnel.configureAndConnect(with: wg)
-                }
-                if let fallbackProxy = proxyService.nextWorkingProxy(for: .joe) {
-                    var proxyDict: [String: Any] = [
-                        "SOCKSEnable": 1,
-                        "SOCKSProxy": fallbackProxy.host,
-                        "SOCKSPort": fallbackProxy.port,
-                    ]
-                    if let u = fallbackProxy.username { proxyDict["SOCKSUser"] = u }
-                    if let p = fallbackProxy.password { proxyDict["SOCKSPassword"] = p }
-                    sessionConfig.connectionProxyDictionary = proxyDict
-                    logger.log("URLSession WG: SOCKS5 fallback \(fallbackProxy.displayString) while VPN connecting", category: .proxy, level: .info)
-                } else {
-                    logger.log("URLSession WG: no SOCKS5 fallback available — traffic will use real IP until VPN connects", category: .vpn, level: .error)
-                }
-            }
-
-        case .openVPNProxy(let ovpn):
-            if vpnTunnel.isConnected {
-                logger.log("URLSession OVPN: device-wide VPN active — traffic routed through tunnel for \(ovpn.displayString)", category: .vpn, level: .info)
-            } else {
-                logger.log("URLSession OVPN: \(ovpn.remoteHost):\(ovpn.remotePort) (\(ovpn.proto)) — no active tunnel, falling back to SOCKS5", category: .vpn, level: .warning)
-                if let fallbackProxy = proxyService.nextWorkingProxy(for: .joe) {
-                    var proxyDict: [String: Any] = [
-                        "SOCKSEnable": 1,
-                        "SOCKSProxy": fallbackProxy.host,
-                        "SOCKSPort": fallbackProxy.port,
-                    ]
-                    if let u = fallbackProxy.username { proxyDict["SOCKSUser"] = u }
-                    if let p = fallbackProxy.password { proxyDict["SOCKSPassword"] = p }
-                    sessionConfig.connectionProxyDictionary = proxyDict
-                    logger.log("URLSession OVPN: SOCKS5 fallback \(fallbackProxy.displayString) while no VPN tunnel", category: .proxy, level: .info)
-                } else {
-                    logger.log("URLSession OVPN: no SOCKS5 fallback available — traffic will use real IP", category: .vpn, level: .error)
-                }
-            }
-        }
+        let resolvedConfig = resolveEffectiveConfig(config)
+        applySOCKS5ToURLSession(sessionConfig, config: resolvedConfig, target: target)
 
         return sessionConfig
     }
 
-    func configureWKWebView(config wkConfig: WKWebViewConfiguration, networkConfig: ActiveNetworkConfig) {
+    func configureWKWebView(config wkConfig: WKWebViewConfiguration, networkConfig: ActiveNetworkConfig, target: ProxyRotationService.ProxyTarget = .joe) {
         let dataStore = wkConfig.websiteDataStore
-
         let resolvedConfig = resolveEffectiveConfig(networkConfig)
 
         switch resolvedConfig {
         case .socks5(let proxy):
-            let endpoint = NWEndpoint.hostPort(
-                host: NWEndpoint.Host(proxy.host),
-                port: NWEndpoint.Port(integerLiteral: UInt16(proxy.port))
-            )
-            let proxyConfig = ProxyConfiguration(socksv5Proxy: endpoint)
-            if let u = proxy.username, let p = proxy.password {
-                proxyConfig.applyCredential(username: u, password: p)
-            }
-            dataStore.proxyConfigurations = [proxyConfig]
+            applySOCKS5ToDataStore(dataStore, proxy: proxy)
             wkConfig.websiteDataStore = dataStore
             logger.log("WKWebView SOCKS5 ProxyConfiguration applied: \(proxy.displayString) (original: \(networkConfig.label))", category: .proxy, level: .info)
 
@@ -233,18 +157,17 @@ class NetworkSessionFactory {
                 logger.log("WKWebView WG: \(wg.displayString) — device-wide VPN tunnel active, all WebView traffic routed via tunnel", category: .vpn, level: .info)
             } else if wireProxyBridge.isActive, localProxy.isRunning, localProxy.wireProxyMode {
                 let localConfig = localProxy.localProxyConfig
-                let endpoint = NWEndpoint.hostPort(
-                    host: NWEndpoint.Host(localConfig.host),
-                    port: NWEndpoint.Port(integerLiteral: UInt16(localConfig.port))
-                )
-                let proxyConfig = ProxyConfiguration(socksv5Proxy: endpoint)
-                dataStore.proxyConfigurations = [proxyConfig]
+                applySOCKS5ToDataStore(dataStore, proxy: localConfig)
                 wkConfig.websiteDataStore = dataStore
                 logger.log("WKWebView WG: \(wg.displayString) — routed via WireProxy local proxy 127.0.0.1:\(localConfig.port)", category: .vpn, level: .info)
             } else {
-                logger.log("WKWebView WG: \(wg.displayString) — no tunnel active, triggering device-wide VPN connect", category: .vpn, level: .warning)
-                Task {
-                    await vpnTunnel.configureAndConnect(with: wg)
+                logger.log("WKWebView WG: \(wg.displayString) — no tunnel active, applying SOCKS5 fallback for IP protection", category: .vpn, level: .warning)
+                if let fallbackProxy = proxyService.nextWorkingProxy(for: target) {
+                    applySOCKS5ToDataStore(dataStore, proxy: fallbackProxy)
+                    wkConfig.websiteDataStore = dataStore
+                    logger.log("WKWebView WG: SOCKS5 fallback \(fallbackProxy.displayString) applied to WebView", category: .proxy, level: .info)
+                } else {
+                    logger.log("WKWebView WG: ⚠️ NO SOCKS5 fallback available for \(target.rawValue) — WebView will use REAL IP", category: .vpn, level: .error)
                 }
             }
 
@@ -252,19 +175,13 @@ class NetworkSessionFactory {
             if vpnTunnel.isConnected {
                 logger.log("WKWebView OVPN: \(ovpn.displayString) — device-wide VPN tunnel active, all WebView traffic routed via tunnel", category: .vpn, level: .info)
             } else {
-                logger.log("WKWebView OVPN: \(ovpn.displayString) — no VPN tunnel, falling back to SOCKS5 for WebView", category: .vpn, level: .warning)
-                if let fallbackProxy = proxyService.nextWorkingProxy(for: .joe) {
-                    let endpoint = NWEndpoint.hostPort(
-                        host: NWEndpoint.Host(fallbackProxy.host),
-                        port: NWEndpoint.Port(integerLiteral: UInt16(fallbackProxy.port))
-                    )
-                    let proxyConfig = ProxyConfiguration(socksv5Proxy: endpoint)
-                    if let u = fallbackProxy.username, let p = fallbackProxy.password {
-                        proxyConfig.applyCredential(username: u, password: p)
-                    }
-                    dataStore.proxyConfigurations = [proxyConfig]
+                logger.log("WKWebView OVPN: \(ovpn.displayString) — no VPN tunnel, applying SOCKS5 fallback for IP protection", category: .vpn, level: .warning)
+                if let fallbackProxy = proxyService.nextWorkingProxy(for: target) {
+                    applySOCKS5ToDataStore(dataStore, proxy: fallbackProxy)
                     wkConfig.websiteDataStore = dataStore
-                    logger.log("WKWebView OVPN: SOCKS5 fallback \(fallbackProxy.displayString)", category: .proxy, level: .info)
+                    logger.log("WKWebView OVPN: SOCKS5 fallback \(fallbackProxy.displayString) applied to WebView", category: .proxy, level: .info)
+                } else {
+                    logger.log("WKWebView OVPN: ⚠️ NO SOCKS5 fallback available for \(target.rawValue) — WebView will use REAL IP", category: .vpn, level: .error)
                 }
             }
 
@@ -305,29 +222,50 @@ class NetworkSessionFactory {
         }
     }
 
-    func buildProxiedDataStore(for networkConfig: ActiveNetworkConfig) -> WKWebsiteDataStore {
+    func buildProxiedDataStore(for networkConfig: ActiveNetworkConfig, target: ProxyRotationService.ProxyTarget = .joe) -> WKWebsiteDataStore {
         let dataStore = WKWebsiteDataStore.nonPersistent()
-        switch networkConfig {
+        let resolvedConfig = resolveEffectiveConfig(networkConfig)
+
+        switch resolvedConfig {
         case .socks5(let proxy):
-            let endpoint = NWEndpoint.hostPort(
-                host: NWEndpoint.Host(proxy.host),
-                port: NWEndpoint.Port(integerLiteral: UInt16(proxy.port))
-            )
-            let proxyConfig = ProxyConfiguration(socksv5Proxy: endpoint)
-            if let u = proxy.username, let p = proxy.password {
-                proxyConfig.applyCredential(username: u, password: p)
-            }
-            dataStore.proxyConfigurations = [proxyConfig]
+            applySOCKS5ToDataStore(dataStore, proxy: proxy)
             logger.log("DataStore SOCKS5 proxy applied: \(proxy.displayString)", category: .proxy, level: .debug)
-        default:
+
+        case .wireGuardDNS(let wg):
+            if vpnTunnel.isConnected {
+                logger.log("DataStore WG: \(wg.displayString) — VPN tunnel active, traffic routed via tunnel", category: .vpn, level: .debug)
+            } else if wireProxyBridge.isActive, localProxy.isRunning, localProxy.wireProxyMode {
+                let localConfig = localProxy.localProxyConfig
+                applySOCKS5ToDataStore(dataStore, proxy: localConfig)
+                logger.log("DataStore WG: routed via WireProxy 127.0.0.1:\(localConfig.port)", category: .vpn, level: .debug)
+            } else if let fallbackProxy = proxyService.nextWorkingProxy(for: target) {
+                applySOCKS5ToDataStore(dataStore, proxy: fallbackProxy)
+                logger.log("DataStore WG: SOCKS5 fallback \(fallbackProxy.displayString) applied", category: .proxy, level: .info)
+            } else {
+                logger.log("DataStore WG: ⚠️ no proxy available — unprotected", category: .vpn, level: .error)
+            }
+
+        case .openVPNProxy(let ovpn):
+            if vpnTunnel.isConnected {
+                logger.log("DataStore OVPN: \(ovpn.displayString) — VPN tunnel active", category: .vpn, level: .debug)
+            } else if let fallbackProxy = proxyService.nextWorkingProxy(for: target) {
+                applySOCKS5ToDataStore(dataStore, proxy: fallbackProxy)
+                logger.log("DataStore OVPN: SOCKS5 fallback \(fallbackProxy.displayString) applied", category: .proxy, level: .info)
+            } else {
+                logger.log("DataStore OVPN: ⚠️ no proxy available — unprotected", category: .vpn, level: .error)
+            }
+
+        case .direct:
             break
         }
+
         return dataStore
     }
 
-    func buildURLSessionProxyConfiguration(for config: ActiveNetworkConfig) -> URLSessionConfiguration {
-        let sessionConfig = buildURLSessionConfiguration(for: config)
-        if case .socks5(let proxy) = config {
+    func buildURLSessionProxyConfiguration(for config: ActiveNetworkConfig, target: ProxyRotationService.ProxyTarget = .joe) -> URLSessionConfiguration {
+        let sessionConfig = buildURLSessionConfiguration(for: config, target: target)
+        let resolvedConfig = resolveEffectiveConfig(config)
+        if case .socks5(let proxy) = resolvedConfig {
             let endpoint = NWEndpoint.hostPort(
                 host: NWEndpoint.Host(proxy.host),
                 port: NWEndpoint.Port(integerLiteral: UInt16(proxy.port))
@@ -341,6 +279,32 @@ class NetworkSessionFactory {
         return sessionConfig
     }
 
+    func preflightProxyCheck(for config: ActiveNetworkConfig, target: ProxyRotationService.ProxyTarget) async -> ActiveNetworkConfig {
+        let resolved = resolveEffectiveConfig(config)
+        guard case .socks5(let proxy) = resolved else { return config }
+
+        let alive = await quickSOCKS5Handshake(host: proxy.host, port: UInt16(proxy.port))
+        if alive {
+            logger.log("Preflight: proxy \(proxy.displayString) is alive", category: .proxy, level: .debug)
+            return config
+        }
+
+        logger.log("Preflight: proxy \(proxy.displayString) DEAD — rotating to next for \(target.rawValue)", category: .proxy, level: .warning)
+        proxyService.markProxyFailed(proxy)
+
+        if let replacement = proxyService.nextWorkingProxy(for: target) {
+            let replacementAlive = await quickSOCKS5Handshake(host: replacement.host, port: UInt16(replacement.port))
+            if replacementAlive {
+                logger.log("Preflight: replacement proxy \(replacement.displayString) is alive", category: .proxy, level: .info)
+                return .socks5(replacement)
+            }
+            proxyService.markProxyFailed(replacement)
+        }
+
+        logger.log("Preflight: no working proxy found for \(target.rawValue) — returning original config", category: .proxy, level: .error)
+        return config
+    }
+
     func resetRotationIndexes() {
         joeWGIndex = 0
         ignitionWGIndex = 0
@@ -348,6 +312,146 @@ class NetworkSessionFactory {
         joeOVPNIndex = 0
         ignitionOVPNIndex = 0
         ppsrOVPNIndex = 0
+    }
+
+    // MARK: - Private Helpers
+
+    private func applySOCKS5ToDataStore(_ dataStore: WKWebsiteDataStore, proxy: ProxyConfig) {
+        let endpoint = NWEndpoint.hostPort(
+            host: NWEndpoint.Host(proxy.host),
+            port: NWEndpoint.Port(integerLiteral: UInt16(proxy.port))
+        )
+        let proxyConfig = ProxyConfiguration(socksv5Proxy: endpoint)
+        if let u = proxy.username, let p = proxy.password {
+            proxyConfig.applyCredential(username: u, password: p)
+        }
+        dataStore.proxyConfigurations = [proxyConfig]
+    }
+
+    private func applySOCKS5ToURLSession(_ sessionConfig: URLSessionConfiguration, config: ActiveNetworkConfig, target: ProxyRotationService.ProxyTarget) {
+        switch config {
+        case .direct:
+            break
+
+        case .socks5(let proxy):
+            var proxyDict: [String: Any] = [
+                "SOCKSEnable": 1,
+                "SOCKSProxy": proxy.host,
+                "SOCKSPort": proxy.port,
+            ]
+            if let u = proxy.username { proxyDict["SOCKSUser"] = u }
+            if let p = proxy.password { proxyDict["SOCKSPassword"] = p }
+            sessionConfig.connectionProxyDictionary = proxyDict
+            logger.log("URLSession configured with SOCKS5: \(proxy.displayString)", category: .proxy, level: .trace)
+
+        case .wireGuardDNS(let wg):
+            if vpnTunnel.isConnected {
+                logger.log("URLSession WG: device-wide VPN active via \(wg.displayString) — traffic routed through tunnel", category: .vpn, level: .info)
+            } else if wireProxyBridge.isActive, localProxy.isRunning, localProxy.wireProxyMode {
+                let localConfig = localProxy.localProxyConfig
+                applySOCKS5Dict(to: sessionConfig, proxy: localConfig)
+                logger.log("URLSession WG: routed via WireProxy local proxy 127.0.0.1:\(localConfig.port)", category: .vpn, level: .info)
+            } else {
+                logger.log("URLSession WG: \(wg.displayString) — no active tunnel, applying SOCKS5 fallback", category: .vpn, level: .warning)
+                if let fallbackProxy = proxyService.nextWorkingProxy(for: target) {
+                    applySOCKS5Dict(to: sessionConfig, proxy: fallbackProxy)
+                    logger.log("URLSession WG: SOCKS5 fallback \(fallbackProxy.displayString) for \(target.rawValue)", category: .proxy, level: .info)
+                } else {
+                    logger.log("URLSession WG: ⚠️ no SOCKS5 fallback for \(target.rawValue) — traffic will use real IP", category: .vpn, level: .error)
+                }
+            }
+
+        case .openVPNProxy(let ovpn):
+            if vpnTunnel.isConnected {
+                logger.log("URLSession OVPN: device-wide VPN active — traffic routed through tunnel for \(ovpn.displayString)", category: .vpn, level: .info)
+            } else {
+                logger.log("URLSession OVPN: \(ovpn.remoteHost):\(ovpn.remotePort) — no active tunnel, applying SOCKS5 fallback", category: .vpn, level: .warning)
+                if let fallbackProxy = proxyService.nextWorkingProxy(for: target) {
+                    applySOCKS5Dict(to: sessionConfig, proxy: fallbackProxy)
+                    logger.log("URLSession OVPN: SOCKS5 fallback \(fallbackProxy.displayString) for \(target.rawValue)", category: .proxy, level: .info)
+                } else {
+                    logger.log("URLSession OVPN: ⚠️ no SOCKS5 fallback for \(target.rawValue) — traffic will use real IP", category: .vpn, level: .error)
+                }
+            }
+        }
+    }
+
+    private func applySOCKS5Dict(to sessionConfig: URLSessionConfiguration, proxy: ProxyConfig) {
+        var proxyDict: [String: Any] = [
+            "SOCKSEnable": 1,
+            "SOCKSProxy": proxy.host,
+            "SOCKSPort": proxy.port,
+        ]
+        if let u = proxy.username { proxyDict["SOCKSUser"] = u }
+        if let p = proxy.password { proxyDict["SOCKSPassword"] = p }
+        sessionConfig.connectionProxyDictionary = proxyDict
+    }
+
+    private func triggerVPNConnectOnce(with wg: WireGuardConfig) {
+        guard !vpnConnectInFlight, !vpnTunnel.isConnected, !vpnTunnel.isActive else { return }
+        vpnConnectInFlight = true
+        Task {
+            await vpnTunnel.configureAndConnect(with: wg)
+            vpnConnectInFlight = false
+        }
+    }
+
+    nonisolated private func quickSOCKS5Handshake(host: String, port: UInt16) async -> Bool {
+        await withCheckedContinuation { continuation in
+            let endpoint = NWEndpoint.hostPort(host: NWEndpoint.Host(host), port: NWEndpoint.Port(integerLiteral: port))
+            let connection = NWConnection(to: endpoint, using: .tcp)
+            let queue = DispatchQueue(label: "preflight-socks5")
+            var completed = false
+
+            let timeoutWork = DispatchWorkItem { [weak connection] in
+                guard !completed else { return }
+                completed = true
+                connection?.cancel()
+                continuation.resume(returning: false)
+            }
+            queue.asyncAfter(deadline: .now() + 2.5, execute: timeoutWork)
+
+            connection.stateUpdateHandler = { state in
+                switch state {
+                case .ready:
+                    let greeting = Data([0x05, 0x01, 0x00])
+                    connection.send(content: greeting, completion: .contentProcessed { sendError in
+                        if sendError != nil {
+                            guard !completed else { return }
+                            completed = true
+                            timeoutWork.cancel()
+                            connection.cancel()
+                            continuation.resume(returning: false)
+                            return
+                        }
+                        connection.receive(minimumIncompleteLength: 2, maximumLength: 2) { data, _, _, recvError in
+                            guard !completed else { return }
+                            completed = true
+                            timeoutWork.cancel()
+                            connection.cancel()
+                            if recvError != nil {
+                                continuation.resume(returning: false)
+                                return
+                            }
+                            guard let data, data.count >= 2, data[0] == 0x05 else {
+                                continuation.resume(returning: false)
+                                return
+                            }
+                            continuation.resume(returning: true)
+                        }
+                    })
+                case .failed:
+                    guard !completed else { return }
+                    completed = true
+                    timeoutWork.cancel()
+                    connection.cancel()
+                    continuation.resume(returning: false)
+                default:
+                    break
+                }
+            }
+            connection.start(queue: queue)
+        }
     }
 
     // MARK: - WireGuard Rotation
@@ -393,6 +497,4 @@ class NetworkSessionFactory {
 
         return configs[index]
     }
-
-
 }
