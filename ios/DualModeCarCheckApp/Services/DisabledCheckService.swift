@@ -147,9 +147,22 @@ class DisabledCheckService {
                 try? await Task.sleep(for: .milliseconds(Int.random(in: 400...800)))
                 pageContent = await session.getPageContent()
                 let contentLower = pageContent.lowercased()
-                if contentLower.contains("currently disabled") || contentLower.contains("account is currently disabled") {
-                    session.tearDown(wipeAll: true)
-                    return DisabledCheckResult(email: email, isDisabled: true, responseText: "Account is currently disabled")
+                let disabledPhrases = [
+                    "currently disabled", "account is currently disabled",
+                    "account has been disabled", "has been disabled",
+                    "account is disabled", "your account has been disabled",
+                    "account has been suspended", "has been suspended",
+                    "account has been blocked", "has been blocked",
+                    "account has been deactivated", "permanently banned",
+                    "account is closed", "self-excluded",
+                    "contact customer service", "your account is locked",
+                    "account is restricted"
+                ]
+                for phrase in disabledPhrases {
+                    if contentLower.contains(phrase) {
+                        session.tearDown(wipeAll: true)
+                        return DisabledCheckResult(email: email, isDisabled: true, responseText: "Account disabled: \(phrase)")
+                    }
                 }
                 if contentLower.contains("information was correct") || contentLower.contains("email will be sent") {
                     session.tearDown(wipeAll: true)

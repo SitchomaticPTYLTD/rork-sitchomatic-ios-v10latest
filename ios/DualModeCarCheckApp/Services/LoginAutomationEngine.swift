@@ -704,10 +704,14 @@ class LoginAutomationEngine {
         let strongDisabledTerms: [(String, Int)] = [
             ("account has been disabled", 60), ("account has been suspended", 60),
             ("account has been blocked", 60), ("account has been deactivated", 60),
+            ("your account has been disabled", 65), ("your account is disabled", 60),
+            ("has been disabled", 55), ("has been suspended", 55),
+            ("has been blocked", 55), ("has been deactivated", 55),
             ("your account is locked", 55), ("account is restricted", 50),
-            ("permanently banned", 60),
-            ("blacklisted", 50), ("contact support", 15),
+            ("permanently banned", 60), ("permanently disabled", 60),
+            ("blacklisted", 50), ("contact customer service", 30), ("contact support", 15),
             ("account is closed", 55), ("self-excluded", 40),
+            ("please, contact customer", 35), ("contact customer", 25),
         ]
         for (term, weight) in strongDisabledTerms {
             if contentLower.contains(term) {
@@ -845,11 +849,23 @@ class LoginAutomationEngine {
         }
         attempt.responseSnapshot = img
 
+        var finalAutoResult = autoResult
+        let ocrDisabledCheck = await visionML.detectDisabledAccount(in: img)
+        if ocrDisabledCheck.type != .none {
+            logger.log("OCR DISABLED DETECTION on screenshot: \(ocrDisabledCheck.type.rawValue) — '\(ocrDisabledCheck.matchedText ?? "unknown")'" , category: .evaluation, level: .critical)
+            finalAutoResult = .fail
+        }
+
         let compressed: UIImage
         if let jpegData = img.jpegData(compressionQuality: 0.4), let ci = UIImage(data: jpegData) {
             compressed = ci
         } else {
             compressed = img
+        }
+
+        var noteExtra = ""
+        if ocrDisabledCheck.type != .none {
+            noteExtra = " | OCR_DISABLED: \(ocrDisabledCheck.type.rawValue) '\(ocrDisabledCheck.matchedText ?? "")'"
         }
 
         let screenshot = PPSRDebugScreenshot(
@@ -859,8 +875,8 @@ class LoginAutomationEngine {
             vin: "",
             email: attempt.credential.username,
             image: compressed,
-            note: "Cycle \(cycle)/\(maxCycles) | Welcome!: \(welcomeTextFound ? "YES" : "NO") | Redirect: \(redirected ? "YES" : "NO") | \(evaluationReason) | URL: \(currentURL)",
-            autoDetectedResult: autoResult
+            note: "Cycle \(cycle)/\(maxCycles) | Welcome!: \(welcomeTextFound ? "YES" : "NO") | Redirect: \(redirected ? "YES" : "NO") | \(evaluationReason) | URL: \(currentURL)\(noteExtra)",
+            autoDetectedResult: finalAutoResult
         )
         attempt.screenshotIds.append(screenshot.id)
         onScreenshot?(screenshot)

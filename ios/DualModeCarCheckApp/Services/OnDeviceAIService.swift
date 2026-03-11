@@ -210,7 +210,14 @@ class OnDeviceAIService {
 
         let success = lower.contains("successful") || lower.contains("\"loginsuccessful\": true") || contentLower.contains("welcome")
         let hasError = lower.contains("error") || contentLower.contains("incorrect") || contentLower.contains("invalid")
-        let disabled = lower.contains("disabled") || lower.contains("blocked") || contentLower.contains("suspended")
+        let disabledPhrases = [
+            "disabled", "blocked", "suspended", "banned", "locked",
+            "deactivated", "restricted", "closed", "self-excluded",
+            "account has been disabled", "has been disabled",
+            "contact customer service", "contact support",
+            "permanently banned", "blacklisted",
+        ]
+        let disabled = disabledPhrases.contains { contentLower.contains($0) || lower.contains($0) }
 
         let suggestedAction: String
         if success { suggestedAction = "login_success" }

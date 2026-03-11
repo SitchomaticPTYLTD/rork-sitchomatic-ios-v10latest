@@ -43,8 +43,17 @@ class TrueDetectionService {
         var passwordSelector: String = "#login-password"
         var submitSelector: String = "#login-submit"
         var successMarkers: [String] = ["balance", "wallet", "my account", "logout"]
-        var terminalKeywords: [String] = ["temporarily disabled", "account is disabled"]
-        var errorBannerSelectors: [String] = [".error-banner", ".alert-danger"]
+        var terminalKeywords: [String] = [
+            "temporarily disabled", "account is disabled",
+            "account has been disabled", "has been disabled",
+            "account has been suspended", "has been suspended",
+            "account has been blocked", "has been blocked",
+            "account has been deactivated", "permanently banned",
+            "account is closed", "self-excluded",
+            "contact customer service", "contact support",
+            "your account is locked", "account is restricted"
+        ]
+        var errorBannerSelectors: [String] = [".error-banner", ".alert-danger", ".alert-error", ".error-message", ".login-error", ".form-error", ".notification-error", ".message-error", "[class*='error']", "[class*='alert']", "[class*='disabled']", "[role='alert']"]
     }
 
     private var cooldownAccounts: [String: Date] = [:]

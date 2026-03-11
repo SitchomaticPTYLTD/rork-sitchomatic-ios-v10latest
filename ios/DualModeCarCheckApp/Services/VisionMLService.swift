@@ -280,6 +280,12 @@ class VisionMLService {
         return nil
     }
 
+    nonisolated enum DisabledDetectionType: String, Sendable {
+        case permDisabled
+        case tempDisabled
+        case none
+    }
+
     func detectSuccessIndicators(in image: UIImage) async -> (welcomeFound: Bool, errorFound: Bool, context: String?) {
         let allText = await recognizeAllText(in: image)
 
@@ -309,6 +315,76 @@ class VisionMLService {
         }
 
         return (welcomeFound, errorFound, context)
+    }
+
+    func detectDisabledAccount(in image: UIImage) async -> (type: DisabledDetectionType, matchedText: String?, allOCRText: String) {
+        let allText = await recognizeAllText(in: image)
+        let fullText = allText.map { $0.text }.joined(separator: " ")
+        let fullLower = fullText.lowercased()
+
+        let permDisabledPhrases = [
+            "account has been disabled", "your account has been disabled",
+            "account is disabled", "has been disabled",
+            "account has been suspended", "has been suspended",
+            "account has been blocked", "has been blocked",
+            "account has been deactivated", "has been deactivated",
+            "permanently banned", "permanently disabled",
+            "account is closed", "self-excluded",
+            "account is locked", "your account is locked",
+            "account is restricted", "blacklisted",
+            "contact customer service", "please, contact customer",
+        ]
+
+        let tempDisabledPhrases = [
+            "temporarily disabled", "temporarily suspended",
+            "temporarily blocked", "temporarily locked",
+            "too many attempts", "too many login attempts",
+            "too many failed", "try again later",
+            "try again in", "account temporarily",
+            "locked for", "wait before",
+            "exceeded login attempts", "login attempts exceeded",
+            "multiple failed attempts",
+        ]
+
+        for phrase in tempDisabledPhrases {
+            if fullLower.contains(phrase) {
+                let matchedLine = allText.first { $0.text.lowercased().contains(phrase) }?.text ?? phrase
+                logger.log("VisionML: TEMP DISABLED detected via OCR — '\(phrase)'", category: .automation, level: .critical)
+                return (.tempDisabled, matchedLine, fullText)
+            }
+        }
+
+        for phrase in permDisabledPhrases {
+            if fullLower.contains(phrase) {
+                let matchedLine = allText.first { $0.text.lowercased().contains(phrase) }?.text ?? phrase
+                logger.log("VisionML: PERM DISABLED detected via OCR — '\(phrase)'", category: .automation, level: .critical)
+                return (.permDisabled, matchedLine, fullText)
+            }
+        }
+
+        var disabledScore = 0
+        let weakSignals: [(String, Int)] = [
+            ("disabled", 30), ("suspended", 30), ("blocked", 25),
+            ("banned", 30), ("locked", 20), ("restricted", 20),
+            ("deactivated", 30), ("contact support", 15),
+            ("contact customer", 20),
+        ]
+        var matchedWeak: String?
+        for (term, weight) in weakSignals {
+            if fullLower.contains(term) {
+                disabledScore += weight
+                if matchedWeak == nil {
+                    matchedWeak = allText.first { $0.text.lowercased().contains(term) }?.text
+                }
+            }
+        }
+
+        if disabledScore >= 40 {
+            logger.log("VisionML: PERM DISABLED detected via weak signal scoring (\(disabledScore))", category: .automation, level: .critical)
+            return (.permDisabled, matchedWeak, fullText)
+        }
+
+        return (.none, nil, fullText)
     }
 
     func detectRectangularRegions(in image: UIImage) async -> [CGRect] {

@@ -525,13 +525,22 @@ class LoginSiteWebSession: NSObject {
     func trueDetectionCheckTerminalError() async -> (isTerminal: Bool, keyword: String?) {
         let pageContent = await getPageContent()
         let contentLower = pageContent.lowercased()
-        let terminalKeywords = ["temporarily disabled", "account is disabled"]
+        let terminalKeywords = [
+            "temporarily disabled", "account is disabled",
+            "account has been disabled", "has been disabled",
+            "account has been suspended", "has been suspended",
+            "account has been blocked", "has been blocked",
+            "account has been deactivated", "permanently banned",
+            "account is closed", "self-excluded",
+            "contact customer service", "contact support",
+            "your account is locked", "account is restricted"
+        ]
         for keyword in terminalKeywords {
             if contentLower.contains(keyword) {
                 return (true, keyword)
             }
         }
-        let bannerSelectors = [".error-banner", ".alert-danger"]
+        let bannerSelectors = [".error-banner", ".alert-danger", ".alert-error", ".error-message", ".login-error", ".form-error", ".notification-error", ".message-error", "[class*='error']", "[class*='alert']", "[class*='disabled']", "[role='alert']"]
         for selector in bannerSelectors {
             let escaped = selector.replacingOccurrences(of: "'", with: "\\'")
             let js = "(function(){var el=document.querySelector('\(escaped)');if(!el||el.offsetParent===null)return'NONE';return'BANNER:'+el.textContent.trim().substring(0,200);})();"
@@ -1319,6 +1328,35 @@ class LoginSiteWebSession: NSObject {
             }
 
             let contentLower = pageText.lowercased()
+
+            let disabledBannerTerms = [
+                "account has been disabled", "your account has been disabled",
+                "has been disabled", "account is disabled",
+                "account has been suspended", "has been suspended",
+                "account has been blocked", "has been blocked",
+                "account has been deactivated", "permanently banned",
+                "account is closed", "self-excluded",
+                "contact customer service", "your account is locked",
+                "account is restricted", "permanently disabled"
+            ]
+            for term in disabledBannerTerms {
+                if contentLower.contains(term) && contentChanged {
+                    let context = pageText.components(separatedBy: .newlines)
+                        .first { $0.lowercased().contains(term) } ?? term
+                    return RapidPollResult(
+                        welcomeTextFound: false,
+                        welcomeContext: nil,
+                        welcomeScreenshot: nil,
+                        redirectedToHomepage: false,
+                        finalURL: lastURL,
+                        finalPageContent: lastContent,
+                        navigationDetected: navDetected,
+                        anyContentChange: contentChanged,
+                        errorBannerDetected: true,
+                        errorBannerText: context.trimmingCharacters(in: .whitespacesAndNewlines)
+                    )
+                }
+            }
 
             let errorBannerTerms = ["error", "error!", "login error", "an error occurred", "error occurred"]
             for term in errorBannerTerms {
