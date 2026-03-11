@@ -190,6 +190,13 @@ class DebugLogger {
     private var pendingEntries: [DebugLogEntry] = []
     private var flushTask: Task<Void, Never>?
     private var persistTask: Task<Void, Never>?
+    private var diskFlushTask: Task<Void, Never>?
+    private(set) var totalEntriesLogged: Int = 0
+    private(set) var totalEntriesEvicted: Int = 0
+    private let logArchiveDirectory: URL = {
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        return docs.appendingPathComponent("LogArchive", isDirectory: true)
+    }()
 
     private(set) var cachedErrorCount: Int = 0
     private(set) var cachedWarningCount: Int = 0
@@ -226,6 +233,10 @@ class DebugLogger {
             lastError = nil
             backoffMs = 1000
         }
+    }
+
+    init() {
+        try? FileManager.default.createDirectory(at: logArchiveDirectory, withIntermediateDirectories: true)
     }
 
     var filteredEntries: [DebugLogEntry] {
@@ -304,13 +315,16 @@ class DebugLogger {
         }
 
         entries.insert(contentsOf: batch.reversed(), at: 0)
+        totalEntriesLogged += batch.count
         if entries.count > maxEntries {
-            let overflow = entries.suffix(from: maxEntries)
+            let overflow = Array(entries.suffix(from: maxEntries))
             for entry in overflow {
                 if entry.level >= .error { cachedErrorCount = max(0, cachedErrorCount - 1) }
                 if entry.level == .warning { cachedWarningCount = max(0, cachedWarningCount - 1) }
                 if entry.level >= .critical { cachedCriticalCount = max(0, cachedCriticalCount - 1) }
             }
+            totalEntriesEvicted += overflow.count
+            scheduleDiskFlush(entries: overflow)
             entries.removeLast(entries.count - maxEntries)
         }
 
@@ -560,6 +574,74 @@ class DebugLogger {
         return (nsError.code, nsError.domain, userMessage, isRetryable)
     }
 
+    private func scheduleDiskFlush(entries evicted: [DebugLogEntry]) {
+        guard diskFlushTask == nil else { return }
+        let toFlush = evicted
+        let archiveDir = logArchiveDirectory
+        diskFlushTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(3))
+            let lines = toFlush.map(\.exportLine).joined(separator: "\n")
+            let fileName = "log_\(DateFormatters.fileStamp.string(from: Date())).txt"
+            let fileURL = archiveDir.appendingPathComponent(fileName)
+            if FileManager.default.fileExists(atPath: fileURL.path()) {
+                if let handle = try? FileHandle(forWritingTo: fileURL) {
+                    handle.seekToEndOfFile()
+                    if let data = ("\n" + lines).data(using: .utf8) {
+                        handle.write(data)
+                    }
+                    handle.closeFile()
+                }
+            } else {
+                try? lines.write(to: fileURL, atomically: true, encoding: .utf8)
+            }
+            self?.pruneArchiveFiles(in: archiveDir)
+            self?.diskFlushTask = nil
+        }
+    }
+
+    private func pruneArchiveFiles(in directory: URL) {
+        let fm = FileManager.default
+        guard let files = try? fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.contentModificationDateKey]) else { return }
+        let logFiles = files.filter { $0.pathExtension == "txt" }.sorted { a, b in
+            let aDate = (try? a.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
+            let bDate = (try? b.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
+            return aDate < bDate
+        }
+        let maxArchiveFiles = 20
+        if logFiles.count > maxArchiveFiles {
+            for file in logFiles.prefix(logFiles.count - maxArchiveFiles) {
+                try? fm.removeItem(at: file)
+            }
+        }
+    }
+
+    func loadArchivedLogFiles() -> [URL] {
+        let fm = FileManager.default
+        guard let files = try? fm.contentsOfDirectory(at: logArchiveDirectory, includingPropertiesForKeys: [.contentModificationDateKey]) else { return [] }
+        return files.filter { $0.pathExtension == "txt" }.sorted { a, b in
+            let aDate = (try? a.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
+            let bDate = (try? b.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
+            return aDate > bDate
+        }
+    }
+
+    func loadArchivedEntries(from url: URL, limit: Int = 500) -> String {
+        (try? String(contentsOf: url, encoding: .utf8).components(separatedBy: "\n").suffix(limit).joined(separator: "\n")) ?? ""
+    }
+
+    var archiveFileCount: Int {
+        loadArchivedLogFiles().count
+    }
+
+    func flushAllToDisk() {
+        flushPendingEntries()
+        let allLines = entries.reversed().map(\.exportLine).joined(separator: "\n")
+        let fileName = "log_flush_\(DateFormatters.fileStamp.string(from: Date())).txt"
+        let fileURL = logArchiveDirectory.appendingPathComponent(fileName)
+        try? allLines.write(to: fileURL, atomically: true, encoding: .utf8)
+        pruneArchiveFiles(in: logArchiveDirectory)
+    }
+
     private func persistCriticalEntries() {
         let criticals = Array(entries.filter { $0.level >= .error }.prefix(200))
         if let data = try? JSONEncoder().encode(criticals) {
@@ -682,5 +764,19 @@ class DebugLogger {
             let btn = cal.loginButton?.cssSelector ?? "none"
             return "  - \(host): email=\(email) pass=\(pass) btn=\(btn) confidence=\(String(format: "%.0f%%", cal.confidence * 100)) success=\(cal.successCount) fail=\(cal.failCount)"
         }.joined(separator: "\n")
+    }
+
+    func handleMemoryPressure() {
+        let beforeCount = entries.count
+        let keepCount = min(1000, maxEntries / 5)
+        if entries.count > keepCount {
+            let evicted = Array(entries.suffix(from: keepCount))
+            scheduleDiskFlush(entries: evicted)
+            entries.removeLast(entries.count - keepCount)
+            cachedErrorCount = entries.filter { $0.level >= .error }.count
+            cachedWarningCount = entries.filter { $0.level == .warning }.count
+            cachedCriticalCount = entries.filter { $0.level >= .critical }.count
+            log("Memory pressure: evicted \(beforeCount - keepCount) log entries to disk", category: .system, level: .warning)
+        }
     }
 }

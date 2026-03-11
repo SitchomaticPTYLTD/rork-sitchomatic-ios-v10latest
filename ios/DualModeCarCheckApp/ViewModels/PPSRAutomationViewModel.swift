@@ -116,10 +116,7 @@ class PPSRAutomationViewModel {
     init() {
         engine.onScreenshot = { [weak self] screenshot in
             guard let self else { return }
-            self.debugScreenshots.insert(screenshot, at: 0)
-            if self.debugScreenshots.count > 2000 {
-                self.debugScreenshots = Array(self.debugScreenshots.prefix(2000))
-            }
+            self.addScreenshot(screenshot)
         }
         engine.onConnectionFailure = { [weak self] detail in
             self?.notifications.sendConnectionFailure(detail: detail)
@@ -548,10 +545,36 @@ class PPSRAutomationViewModel {
         persistCards()
     }
 
+    private let maxInMemoryScreenshots: Int = 200
+
+    func addScreenshot(_ screenshot: PPSRDebugScreenshot) {
+        debugScreenshots.insert(screenshot, at: 0)
+        if debugScreenshots.count > maxInMemoryScreenshots {
+            let overflow = Array(debugScreenshots.suffix(from: maxInMemoryScreenshots))
+            for ss in overflow {
+                ScreenshotCacheService.shared.store(ss.image, forKey: ss.id)
+            }
+            debugScreenshots.removeLast(debugScreenshots.count - maxInMemoryScreenshots)
+        }
+    }
+
     func clearDebugScreenshots() {
         let count = debugScreenshots.count
         debugScreenshots.removeAll()
         log("Cleared \(count) debug screenshots")
+    }
+
+    func handleMemoryPressure() {
+        let before = debugScreenshots.count
+        let keep = min(50, maxInMemoryScreenshots / 4)
+        if debugScreenshots.count > keep {
+            let overflow = Array(debugScreenshots.suffix(from: keep))
+            for ss in overflow {
+                ScreenshotCacheService.shared.store(ss.image, forKey: ss.id)
+            }
+            debugScreenshots.removeLast(debugScreenshots.count - keep)
+            log("Memory pressure: flushed \(before - keep) screenshots to disk cache", level: .warning)
+        }
     }
 
     func correctResult(for screenshot: PPSRDebugScreenshot, override: UserResultOverride) {

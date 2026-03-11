@@ -1,180 +1,141 @@
-# 3-Stage VPN & Proxy Overhaul — Make Every WebView Show the VPN IP
+# Architecture, Performance & Stability Improvements
 
-## Problem
-Currently, WireGuard and OpenVPN configs are assigned to WebViews but **no actual VPN tunnel is established**. The PAC script injection via JavaScript doesn't route WKWebView traffic through proxies — it just sets a JS variable. Every WebView still shows your real IP.
+## Overview
 
----
-
-## Stage 1 — Fix SOCKS5 Proxy Routing (Immediate Impact) ✅ COMPLETE
-
-**What changed:**
-- [x] `LoginWebSession` now accepts `networkConfig` and applies it via `NetworkSessionFactory.configureWKWebView()`
-- [x] `PPSRAutomationEngine` passes network config (unified or per-target) to every PPSR session
-- [x] `PPSRAutomationViewModel` test connection uses proper network config
-- [x] `WebViewPool.acquire()` accepts `networkConfig` parameter and applies `ProxyConfiguration`
-- [x] `NetworkSessionFactory.configureWKWebView()` now resolves effective config — routes WG/OVPN through local proxy when available
-- [x] `DeviceProxyService.effectiveProxyConfig` returns local proxy config for ALL config types (WG, OVPN, SOCKS5) not just SOCKS5
-- [x] Every WKWebView uses `WKWebsiteDataStore.proxyConfigurations` with proper SOCKS5 routing
-- [x] Unified mode applies the same proxy to every WebView simultaneously
-- [x] Fallback chain: VPN tunnel → local proxy → direct SOCKS5 → direct connection
+Moderate refactoring focused on code organization, memory management, and stability — keeping the same overall structure but fixing the most impactful issues.
 
 ---
 
-## Stage 2 — On-Device Local Proxy Server (Wireproxy Concept) ✅ COMPLETE
+## Phase 1: Memory & Performance Fixes (High Impact, Low Risk) ✅ COMPLETE
 
-**What changed:**
-- [x] `ProxyHealthMonitor` — periodic upstream SOCKS5 health checks with configurable intervals, auto-failover when upstream dies after N consecutive failures
-- [x] `ProxyConnectionPool` — connection pooling with idle timeout, TTL eviction, hit/miss tracking, and automatic cleanup of stale connections
-- [x] Enhanced `LocalProxyServer` — connection limits (max 50 concurrent), per-connection tracking with target host/port/state/bytes, peak connections, error categorization (connection/handshake/relay), upload/download bandwidth split, uptime tracking, throughput calculation, health monitor integration
-- [x] Enhanced `LocalProxyConnection` — connection timeout support, error type categorization, upload vs download byte tracking, per-connection state reporting to server, timeout auto-cancel
-- [x] `DeviceProxyService` enhanced — auto-failover integration (triggers rotation when health monitor detects dead upstream), configurable health check interval and max failures, failover counter, settings persistence for new health/failover options
-- [x] `ProxyStatusDashboardView` — real-time monitoring dashboard with server overview (uptime, throughput, peak connections), health monitor stats (latency, success rate, consecutive failures, failover count), connection pool metrics (utilization, hit rate, evictions), active connections list, error breakdown by type, bandwidth split, health log, recent hosts
-- [x] Updated `DeviceNetworkSettingsView` — wireproxy branding, health status inline display, error breakdown, failover count, auto-failover toggle, navigation link to Proxy Dashboard
+### Screenshot Memory Management
 
-**Features delivered:**
-- Single unified proxy endpoint for the entire app (`localhost:18080`)
-- Upstream proxy rotation happens transparently — change the upstream, all WebViews immediately use the new IP
-- Connection pooling with keep-alive management (20 pool slots, 60s idle timeout, 5min TTL)
-- Automatic health monitoring — checks upstream every 30s, auto-rotates after 3 consecutive failures
-- Support for proxy chaining (local → upstream SOCKS5 → internet)
-- Real-time status dashboard showing active connections, bytes transferred, upstream health, error breakdown
-- Connection limits prevent resource exhaustion (max 50 concurrent)
-- Per-connection timeout (30s) prevents hung connections
+- [x] Cap in-memory debug screenshots at 200 (down from 2000) with older ones saved to disk automatically
+- [x] Add memory pressure observer that flushes screenshots to disk when the system warns about memory
+- [x] Screenshots on disk are loaded lazily only when the user scrolls to them in the debug view
 
----
+### Debug Logger Eviction
 
-## Stage 3 — Device-Wide VPN Tunnel (NetworkExtension) ✅ COMPLETE
+- [x] Cap in-memory log entries at 5,000 with automatic rotation (oldest entries dropped)
+- [x] Add a "flush to disk" method that writes logs to the vault before evicting
+- [x] Add a disk-based log viewer for historical entries beyond the in-memory window
 
-**What changed:**
-- [x] Enhanced `VPNTunnelManager` — auto-reconnect with exponential backoff (configurable delay, max attempts), connection statistics tracking (total connections, reconnects, errors, rotations, longest session), data in/out polling via provider messages, on-demand connect rules (WiFi + Cellular), kill switch option, connection event history with timestamps, endpoint reachability testing via UDP, rotation/failover-specific connect methods
-- [x] `WireGuardTunnelService` — batch endpoint reachability testing with latency measurement, best endpoint selection (lowest latency), config validation (key lengths, port range, MTU range), WG-Quick config regeneration from parsed config, reachable count and average latency tracking
-- [x] `VPNStatusDashboardView` — real-time tunnel status with uptime counter, data in/out display, connection statistics grid (connections, reconnects, errors, rotations, longest session, disconnects), auto-reconnect and on-demand toggles, endpoint testing with latency results and best endpoint highlight, connect-to-best-endpoint action, connection history log with event types (connected, disconnected, error, reconnect, rotation, failover)
-- [x] Updated `DeviceNetworkSettingsView` VPN section — data in/out display when connected, VPN Dashboard navigation link, auto-reconnect toggle with attempt count, connect-on-demand toggle, reconnecting status badge in header
-- [x] `DeviceProxyService` — VPN disconnect calls updated with reason tracking
-- [x] Network Extension entitlement added — `com.apple.developer.networking.networkextension` with `packet-tunnel-provider` capability
-- [x] App Groups entitlement maintained for data sharing between app and extension
+### WebView Memory Optimization
 
-**Features delivered:**
-- True device-wide VPN via `NETunnelProviderManager` — when active, ALL traffic routes through WireGuard tunnel
-- Auto-reconnect with exponential backoff — retries up to 3 times with increasing delay on disconnect
-- Connect-on-demand rules — auto-connect on WiFi and Cellular network changes
-- Connection statistics — tracks total connections, reconnects, errors, rotations, longest session duration
-- Data transfer monitoring — polls tunnel extension for bytes in/out
-- Endpoint reachability testing — tests all WireGuard endpoints via UDP with latency measurement
-- Best endpoint selection — automatically connects to the lowest-latency reachable endpoint
-- Config validation — validates WireGuard config keys, ports, MTU before connecting
-- Connection event history — logs every connect, disconnect, error, reconnect, rotation, failover event
-- VPN Status Dashboard — dedicated view with all tunnel metrics, endpoint testing, and history
-- Rotation and failover support — dedicated methods for rotation (scheduled) and failover (upstream dead) connects
-- Simulator detection — shows placeholder message on simulator, full functionality on real devices
-- Fallback chain: VPN tunnel → local wireproxy → direct SOCKS5 → direct connection
-
-**Note:** The Packet Tunnel Provider extension target requires provisioning from Apple Developer portal. The app detects simulator vs real device and falls back to Stage 2 (wireproxy) or Stage 1 (direct SOCKS5) automatically.
-
----
-
-## Stage 4 — WireGuard Crypto Foundation + Noise Handshake + Encrypted Transport ✅ COMPLETE
-
-**What changed:**
-- [x] `Blake2s` — pure Swift BLAKE2s hash implementation per RFC 7693, 32-byte output, keyed hash support, no external dependencies
-- [x] `WireGuardCrypto` — HMAC-BLAKE2s, KDF1/KDF2/KDF3 (WireGuard's custom key derivation), MAC computation (16-byte), TAI64N timestamp generation, Curve25519 DH via CryptoKit, ChaCha20-Poly1305 AEAD encrypt/decrypt, ephemeral keypair generation, base64 key parsing, hash mixing, WireGuard construction/identifier constants
-- [x] `NoiseHandshake` — full Noise_IKpsk2 handshake initiator: builds 148-byte Message 1 (ephemeral DH, encrypted static key, encrypted TAI64N timestamp, mac1/mac2), parses 92-byte Message 2 (responder ephemeral, AEAD verification, PSK mixing), derives transport session keys (sending_key, receiving_key, sender_index, receiver_index)
-- [x] `WireGuardTransport` — WireGuard session lifecycle manager: UDP connection via NWConnection, handshake initiation and response parsing, encrypted transport packets (type 4) with counter-based nonces, bidirectional packet send/receive, persistent keepalive timer, 120s rekey timer, cookie reply handling, session statistics (packets/bytes sent/received, handshake count), anti-replay via monotonic nonce tracking
+- [x] Add `WKWebView` content process termination handler to gracefully recover from WebKit crashes
+- [x] Respond to `didReceiveMemoryWarning` by releasing idle WebView pool entries
+- [x] Track per-session memory footprint and warn when approaching limits
 
 **Files created:**
-- `Services/WireProxy/Crypto/Blake2s.swift` — Pure Swift BLAKE2s (RFC 7693)
-- `Services/WireProxy/Crypto/WireGuardCrypto.swift` — WG-specific crypto wrappers
-- `Services/WireProxy/Handshake/NoiseHandshake.swift` — Noise_IKpsk2 state machine
-- `Services/WireProxy/Transport/WireGuardTransport.swift` — Encrypted UDP session
-
-**Features delivered:**
-- Pure Swift BLAKE2s hash — no Go bridge, no external C libraries, ~150 lines implementing RFC 7693
-- Full WireGuard Noise_IKpsk2 handshake as initiator — generates Message 1, parses Message 2, derives transport keys
-- CryptoKit integration — Curve25519 for DH, ChaCha20-Poly1305 for AEAD (hardware-accelerated on Apple silicon)
-- Encrypted UDP transport — send/receive IP packets through WireGuard tunnel over UDP
-- Session management — keepalive, rekey after 120s, cookie handling, connection statistics
-- Configurable from existing WireGuardConfig — uses private key, peer public key, PSK, endpoint from parsed .conf files
-- 100% userspace — works in simulator, no NetworkExtension required
-
-**Remaining stages:**
-- ~~Stage 6: Full Integration, UI & Rotation (wire everything into DeviceProxyService)~~ ✅ Done
-
----
-
-## Stage 5 — Userspace TCP/IP Stack + WireProxy SOCKS5 Bridge ✅ COMPLETE
-
-**What changed:**
-- [x] `IPv4Packet` — full IPv4 packet parser and builder: header parsing (version, IHL, DSCP, total length, identification, flags, fragment offset, TTL, protocol, checksum, src/dst address), packet construction with automatic IP checksum, IP address string↔UInt32 conversion, protocol detection (TCP/UDP)
-- [x] `TCPSegment` — TCP segment parser and builder: header parsing (src/dst port, sequence/ack numbers, data offset, flags, window size, checksum, urgent pointer), segment construction with TCP pseudo-header checksum over IPv4, flag definitions (SYN/ACK/FIN/RST/PSH/URG) as OptionSet
-- [x] `TCPSessionManager` — userspace TCP state machine: full TCP lifecycle (CLOSED→SYN_SENT→ESTABLISHED→FIN_WAIT1→FIN_WAIT2→TIME_WAIT→CLOSED), per-session tracking (local seq/ack, remote window size, send/receive buffers), MSS-based segmentation (1360 byte chunks), automatic ACK generation, FIN/RST handling, retransmit counting, idle session cleanup (120s timeout), port allocation (30000-60000 range)
-- [x] `TunnelDNSResolver` — DNS resolution through WireGuard tunnel: constructs DNS query packets (type A, class IN), sends as UDP over IP through tunnel, parses DNS responses (skips question section, extracts A records), 5-minute TTL cache, query timeout (5s), supports direct IP passthrough
-- [x] `WireProxyBridge` — main orchestrator connecting SOCKS5 to WireGuard: manages WireGuardSession lifecycle, routes incoming decrypted IP packets to TCPSessionManager (TCP) or TunnelDNSResolver (UDP/DNS), configures from WireGuardConfig (interface address, DNS, private key, peer key, endpoint), connection tracking, statistics (sessions created/active, DNS queries, bytes up/down, connections served/failed)
-- [x] `WireProxyTunnelConnection` — per-connection handler: receives SOCKS5 target from handler, resolves hostname via TunnelDNSResolver, creates TCP session through tunnel, bridges SOCKS5 client ↔ TCP session (client reads → tunnel sends, tunnel receives → client writes), connection timeout (30s), proper cleanup on close/error
-- [x] `WireProxySOCKS5Handler` — SOCKS5 handshake for tunnel mode: performs SOCKS5 greeting and CONNECT request parsing (IPv4/domain/IPv6), extracts target host:port, hands off to WireProxyBridge for tunnel routing, replaces upstream SOCKS5/direct connections when wireproxy mode is active
-- [x] Enhanced `LocalProxyServer` — wireproxy mode toggle: when `wireProxyMode=true`, new connections are handled by `WireProxySOCKS5Handler` instead of `LocalProxyConnection`, tunnel connection tracking alongside regular connections, `enableWireProxyMode()` method for clean mode switching
-- [x] Enhanced `DeviceProxyService` — wireproxy tunnel integration: `wireProxyTunnelEnabled` setting (persisted), `syncWireProxyTunnel()` starts/stops WireProxyBridge based on active WireGuard config, `effectiveProxyConfig` returns local proxy when wireproxy tunnel is active, `isWireProxyActive`/`wireProxyStatus`/`wireProxyStats` computed properties for UI
-
-**Files created:**
-- `Services/WireProxy/TCPStack/IPPacket.swift` — IPv4 packet parser/builder with checksum
-- `Services/WireProxy/TCPStack/TCPPacket.swift` — TCP segment parser/builder with pseudo-header checksum
-- `Services/WireProxy/TCPStack/TCPSessionManager.swift` — Userspace TCP state machine
-- `Services/WireProxy/TCPStack/TunnelDNSResolver.swift` — DNS resolution through WG tunnel
-- `Services/WireProxy/WireProxyBridge.swift` — Main SOCKS5-to-WireGuard orchestrator
-- `Services/WireProxy/WireProxyTunnelConnection.swift` — Per-connection tunnel handler
-- `Services/WireProxy/WireProxySOCKS5Handler.swift` — SOCKS5 handshake for tunnel mode
+- `Utilities/MemoryPressureMonitor.swift` — Centralized memory pressure observer with handler registration
+- `Utilities/AppAlertManager.swift` — Unified error surfacing with severity levels and retry actions
+- `Utilities/TaskBag.swift` — Task lifecycle manager that cancels all tasks on dealloc
 
 **Files modified:**
-- `Services/LocalProxyServer.swift` — Added wireproxy mode, tunnel connection tracking
-- `Services/DeviceProxyService.swift` — Added wireproxy tunnel enable/disable, bridge integration
-
-**Features delivered:**
-- Pure Swift userspace TCP/IP stack — parses and constructs IPv4 + TCP packets without any system networking
-- Full TCP state machine — SYN→SYN-ACK→ESTABLISHED→FIN handshake, data transfer with ACK, RST support
-- MSS segmentation — breaks large writes into 1360-byte TCP segments for tunnel MTU compatibility
-- DNS through tunnel — hostname resolution via UDP DNS queries sent through the WireGuard tunnel, with 5-min cache
-- SOCKS5-to-WireGuard bridge — accepts SOCKS5 CONNECT requests, resolves hostnames, establishes virtual TCP connections through the encrypted WG tunnel, relays data bidirectionally
-- Seamless mode switching — LocalProxyServer transparently switches between direct/upstream SOCKS5 and wireproxy tunnel mode
-- DeviceProxyService integration — `wireProxyTunnelEnabled` toggle activates the full stack: WG handshake → tunnel established → SOCKS5 server routes through tunnel
-- 100% userspace, works in simulator — no NetworkExtension, no kernel TUN device, pure Swift
-- Fallback chain: WireProxy tunnel → VPN tunnel → local proxy → direct SOCKS5 → direct connection
+- `Services/DebugLogger.swift` — Added disk flush on eviction, log archive directory, pruning, `handleMemoryPressure()`
+- `Services/WebViewPool.swift` — Added `handleMemoryPressure()`, `reportProcessTermination()`, process crash counter
+- `Services/ScreenshotCacheService.swift` — Existing disk cache used by new overflow logic
+- `ViewModels/LoginViewModel.swift` — Screenshot cap at 200 with disk overflow, `handleMemoryPressure()`
+- `ViewModels/PPSRAutomationViewModel.swift` — Screenshot cap at 200 with disk overflow, `handleMemoryPressure()`
+- `DualModeCarCheckAppApp.swift` — Memory pressure monitor wired up at app launch
 
 ---
 
-## Stage 6 — Full Integration, UI & Rotation ✅ COMPLETE
+## Phase 2: ViewModel Decomposition (Architecture)
 
-**What changed:**
-- [x] `WireProxyDashboardView` — dedicated real-time dashboard for the WireProxy tunnel: tunnel status overview with uptime/connection counters, WireGuard session metrics (handshake count, packets sent/received, bytes, last handshake time), DNS & bridge stats (queries, cache hits, cache size, hit rate), TCP session manager stats (active/total/connections/failed, success rate), local proxy integration view (routing mode, listening address, connection counts), actions (start/stop/reconnect tunnel, rotate config)
-- [x] `DeviceNetworkSettingsView` — new WireProxy Tunnel section (Stage 6): toggle for userspace WG tunnel, live status indicator with uptime, bandwidth up/down/DNS stats, WG session summary (status, handshake count, packet counts), error display, reconnect/rotate config buttons, navigation link to WireProxy Dashboard
-- [x] Enhanced `DeviceProxyService` — `reconnectWireProxy()` method (stops bridge, re-syncs tunnel), `rotateWireProxyConfig()` method (stops bridge, resolves next WG config, starts new tunnel), rotation-aware `performRotation()` (stops active wireproxy tunnel before rotating, then re-syncs)
-- [x] Enhanced `NetworkSessionFactory` — wireproxy-aware priority in `nextConfig()` (WireProxy tunnel active → local proxy takes priority over VPN tunnel), wireproxy-aware `resolveEffectiveConfig()` for WKWebView routing
+### Split LoginViewModel (~1000+ lines → 4 focused pieces)
 
-**Files created:**
-- `Views/WireProxyDashboardView.swift` — WireProxy tunnel monitoring dashboard
+- [ ] **LoginCredentialManager** — handles credential CRUD, import/export, persistence
+- [ ] **LoginBatchController** — batch automation state (running, paused, stopping, progress, retry logic)
+- [ ] **LoginSettingsManager** — settings persistence, automation settings sync, appearance mode
+- [ ] **LoginViewModel** — remains as the coordinator, holds references to the above and bridges them to views
 
-**Files modified:**
-- `Views/DeviceNetworkSettingsView.swift` — Added WireProxy Tunnel section with full status/controls
-- `Services/DeviceProxyService.swift` — Added reconnect, rotate, rotation-aware tunnel lifecycle
-- `Services/NetworkSessionFactory.swift` — WireProxy priority in config resolution chain
+### Split PPSRAutomationViewModel (same pattern)
 
-**Features delivered:**
-- WireProxy Dashboard — dedicated view showing tunnel status, WG session metrics, DNS/TCP stats, local proxy integration, start/stop/reconnect/rotate actions
-- Inline tunnel controls — toggle, status, bandwidth, WG session summary directly in Network Settings
-- Rotation-aware tunnel lifecycle — when rotation fires, active wireproxy tunnel is cleanly stopped and restarted with the new WG config
-- Manual reconnect — restart tunnel with current config without full rotation
-- Manual rotate — pick next WG config and establish new tunnel
-- NetworkSessionFactory wireproxy priority — when wireproxy is active, all traffic routes through `127.0.0.1:18080 → WG tunnel` before checking VPN tunnel or direct SOCKS5
-- Complete fallback chain: WireProxy tunnel → VPN tunnel → local proxy (upstream SOCKS5) → direct SOCKS5 → direct connection
-- 100% userspace — entire stack works in simulator, no provisioning required
+- [ ] **PPSRCardManager** — card CRUD, sorting, BIN lookup
+- [ ] **PPSRBatchController** — batch state, pause/resume, auto-retry
+- [ ] **PPSRSettingsManager** — settings, email rotation, diagnostic config
+- [ ] **PPSRAutomationViewModel** — coordinator
+
+### Extract Shared Batch Logic
+
+- [ ] Create a shared **BatchExecutionController** protocol/base that both Login and PPSR batch controllers conform to
+- [ ] Eliminates the ~60% duplicate code for pause/resume, auto-retry with backoff, progress tracking, and batch result handling
 
 ---
 
-## Summary
+## Phase 3: Task Lifecycle & Stability — Foundations ✅ COMPLETE
 
-| Stage | What It Does | Works In Simulator? | Status |
-|-------|-------------|-------------------|--------|
-| 1 | Fix SOCKS5 → WebView routing with proper iOS API | ✅ Yes | ✅ Complete |
-| 2 | Local proxy server (wireproxy) for unified app-wide routing | ✅ Yes | ✅ Complete |
-| 3 | Device-wide VPN tunnel via NetworkExtension | ❌ Real device only | ✅ Complete |
-| 4 | WireGuard crypto + Noise handshake + encrypted UDP transport | ✅ Yes | ✅ Complete |
-| 5 | Userspace TCP/IP stack + WireProxy SOCKS5 bridge | ✅ Yes | ✅ Complete |
-| 6 | Full integration, UI & rotation | ✅ Yes | ✅ Complete |
+### Consistent Task Cancellation
+
+- [x] Create a small **TaskBag** utility — a collection that cancels all tasks when it's deallocated, preventing orphaned tasks
+- [ ] Audit all `Task<Void, Never>?` properties across ViewModels and Services
+- [ ] Add `deinit` (or `onDisappear` cleanup) that cancels all outstanding tasks
+
+### Error Surface Layer
+
+- [x] Add a unified **AppAlertManager** that services can push user-facing errors to
+- [x] Categorize errors: dismissible info, actionable warning (with retry button), critical (blocks automation)
+- [ ] Errors from proxy failures, tunnel disconnects, and connection issues bubble up to a banner or toast visible on any screen
+- [ ] Replace scattered `lastError` string properties with structured error types
+
+### Automation Resilience
+
+- [x] Add WebKit process crash recovery: `reportProcessTermination()` in WebViewPool with alert surfacing
+- [ ] Add network reachability check before starting batches — surface a clear message if offline
+- [ ] Add session heartbeat timeout recovery: if a session goes unresponsive, tear it down and retry on a new session instead of hanging
+
+---
+
+## Phase 4: Large Service File Decomposition
+
+### Split HumanInteractionEngine (1892 LOC)
+
+- [ ] Extract each form pattern into its own file under `Services/Patterns/`
+- [ ] The engine becomes a coordinator that dispatches to pattern-specific handlers
+- [ ] Each pattern file is ~100-200 lines and independently maintainable
+
+### Split LoginSiteWebSession (2166 LOC)
+
+- [ ] Extract JavaScript generation into a **LoginJSBuilder** service
+- [ ] Extract response evaluation logic into a **LoginResponseEvaluator**
+- [ ] The session class focuses only on WebView lifecycle and coordination
+
+### Split ProxyRotationService (1507 LOC)
+
+- [ ] Extract SOCKS5 proxy management into **SOCKS5ProxyManager**
+- [ ] Extract WireGuard config management into **WGConfigManager**
+- [ ] Extract OpenVPN config management into **OVPNConfigManager**
+- [ ] The rotation service becomes an orchestrator over the three managers
+
+---
+
+## Phase 5: Reduce Singleton Coupling
+
+### Introduce Lightweight Dependency Passing
+
+- [ ] For the most tightly-coupled services (PersistentFileStorageService, NetworkSessionFactory, DeviceProxyService), pass dependencies via init parameters instead of reaching for `.shared`
+- [ ] Keep `.shared` as the convenience access point but make dependencies explicit and testable
+- [ ] Start with the 6 most interconnected services; leave simple leaf services (BINLookup, TemplatePersistence, etc.) as-is
+
+### Service Registry (Optional)
+
+- [ ] If the dependency passing creates too much boilerplate, introduce a simple **ServiceContainer** that holds references and can be swapped for testing
+- [ ] This is a stepping stone, not a full DI framework
+
+---
+
+## Summary of Expected Impact
+
+| Area | Before | After |
+|------|--------|-------|
+| Peak memory (screenshots) | ~2000 screenshots in RAM | ~200 in RAM, rest on disk ✅ |
+| Log entries in memory | Unbounded | Capped at 5,000 with disk rotation ✅ |
+| Memory pressure response | None | Auto-flush screenshots, drain WebViews, shrink caches ✅ |
+| WebView crash handling | Silent failure | Tracked, alerted, recoverable ✅ |
+| Task lifecycle | Orphaned tasks possible | TaskBag utility available ✅ |
+| Error surfacing | Scattered lastError strings | AppAlertManager available ✅ |
+| LoginViewModel size | ~1000+ LOC | Pending Phase 2 |
+| Duplicate batch logic | ~60% shared | Pending Phase 2 |
+| HumanInteractionEngine | 1892 LOC monolith | Pending Phase 4 |
+| Largest service files | 5 files over 1000 LOC | Pending Phase 4 |

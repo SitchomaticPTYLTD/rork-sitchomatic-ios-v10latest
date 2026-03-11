@@ -77,6 +77,15 @@ struct DualModeCarCheckAppApp: App {
             .task {
                 if !nordInitialized {
                     nordInitialized = true
+
+                    let monitor = MemoryPressureMonitor.shared
+                    monitor.register()
+                    monitor.onMemoryWarning {
+                        DebugLogger.shared.handleMemoryPressure()
+                        WebViewPool.shared.handleMemoryPressure()
+                        ScreenshotCacheService.shared.setMaxCacheCounts(memory: 20, disk: 300)
+                    }
+
                     let vault = PersistentFileStorageService.shared
                     let didRestore = vault.restoreIfNeeded()
                     if didRestore {

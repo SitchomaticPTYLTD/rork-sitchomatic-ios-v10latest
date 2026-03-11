@@ -9,6 +9,7 @@ class WebViewPool {
     private var inUse: Set<ObjectIdentifier> = []
     private let maxPoolSize: Int = 10
     private let logger = DebugLogger.shared
+    private(set) var processTerminationCount: Int = 0
 
     var activeCount: Int { inUse.count }
     var availableCount: Int { available.count }
@@ -74,5 +75,23 @@ class WebViewPool {
         }
         available.removeAll()
         logger.log("WebViewPool: drained all (\(inUse.count) still in use)", category: .webView, level: .info)
+    }
+
+    func handleMemoryPressure() {
+        let drained = available.count
+        drainAll()
+        if drained > 0 {
+            logger.log("WebViewPool: memory pressure — drained \(drained) idle WebViews", category: .webView, level: .warning)
+        }
+    }
+
+    func reportProcessTermination() {
+        processTerminationCount += 1
+        logger.log("WebViewPool: WebKit content process terminated (total: \(processTerminationCount))", category: .webView, level: .error)
+        AppAlertManager.shared.pushWarning(
+            source: .webView,
+            title: "WebView Crash",
+            message: "A WebKit content process was terminated. The session will be retried automatically."
+        )
     }
 }
