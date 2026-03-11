@@ -3,6 +3,7 @@ import Foundation
 @MainActor
 class TunnelDNSResolver {
     private var dnsServerIP: UInt32 = 0
+    private var fallbackDNSIP: UInt32 = 0
     private var cache: [String: (ip: UInt32, expiry: Date)] = [:]
     private let cacheTTL: TimeInterval = 300
     private let logger = DebugLogger.shared
@@ -13,11 +14,16 @@ class TunnelDNSResolver {
 
     func configure(dnsServer: String, sourceIP: UInt32) {
         self.sourceIP = sourceIP
+        self.fallbackDNSIP = IPv4Packet.ipFromString("1.1.1.1") ?? 0x01010101
         if let ip = IPv4Packet.ipFromString(dnsServer) {
             self.dnsServerIP = ip
+            if ip == fallbackDNSIP {
+                self.fallbackDNSIP = IPv4Packet.ipFromString("8.8.8.8") ?? 0x08080808
+            }
             logger.log("TunnelDNS: configured with server \(dnsServer)", category: .vpn, level: .info)
         } else {
-            self.dnsServerIP = IPv4Packet.ipFromString("1.1.1.1") ?? 0x01010101
+            self.dnsServerIP = fallbackDNSIP
+            self.fallbackDNSIP = IPv4Packet.ipFromString("8.8.8.8") ?? 0x08080808
             logger.log("TunnelDNS: invalid DNS server '\(dnsServer)', using 1.1.1.1", category: .vpn, level: .warning)
         }
     }
@@ -33,13 +39,22 @@ class TunnelDNSResolver {
 
         cache.removeValue(forKey: hostname)
 
+        if let result = await sendDNSQuery(hostname: hostname, dnsServer: dnsServerIP) {
+            return result
+        }
+
+        logger.log("TunnelDNS: primary DNS failed for \(hostname), trying fallback", category: .vpn, level: .warning)
+        return await sendDNSQuery(hostname: hostname, dnsServer: fallbackDNSIP)
+    }
+
+    private func sendDNSQuery(hostname: String, dnsServer: UInt32) async -> UInt32? {
         let queryID = nextQueryID
         nextQueryID = nextQueryID &+ 1
 
         let dnsQuery = buildDNSQuery(id: queryID, hostname: hostname)
         let udpPacket = buildUDPPacket(
             sourceIP: sourceIP,
-            destinationIP: dnsServerIP,
+            destinationIP: dnsServer,
             sourcePort: 10000 + queryID,
             destinationPort: 53,
             payload: dnsQuery
@@ -47,7 +62,7 @@ class TunnelDNSResolver {
 
         let ipPacket = IPv4Packet.build(
             sourceAddress: sourceIP,
-            destinationAddress: dnsServerIP,
+            destinationAddress: dnsServer,
             protocolNumber: 17,
             payload: udpPacket
         )
@@ -57,9 +72,9 @@ class TunnelDNSResolver {
             sendPacketHandler?(ipPacket)
 
             Task { @MainActor in
-                try? await Task.sleep(for: .seconds(5))
+                try? await Task.sleep(for: .seconds(3))
                 if let pending = self.pendingQueries.removeValue(forKey: queryID) {
-                    self.logger.log("TunnelDNS: timeout resolving \(hostname)", category: .vpn, level: .warning)
+                    self.logger.log("TunnelDNS: timeout resolving \(hostname) via \(self.formatDNSIP(dnsServer))", category: .vpn, level: .warning)
                     pending.1.resume(returning: nil)
                 }
             }
@@ -109,6 +124,10 @@ class TunnelDNSResolver {
 
     var cacheSize: Int { cache.count }
 
+    private func formatDNSIP(_ ip: UInt32) -> String {
+        "\((ip >> 24) & 0xFF).\((ip >> 16) & 0xFF).\((ip >> 8) & 0xFF).\(ip & 0xFF)"
+    }
+
     private func buildDNSQuery(id: UInt16, hostname: String) -> Data {
         var query = Data()
 
@@ -153,7 +172,7 @@ class TunnelDNSResolver {
             guard offset >= 0, offset + 10 <= data.count else { return nil }
 
             let recordType = readBE16(data, offset: offset)
-            offset += 4
+            offset += 8
             let rdLength = Int(readBE16(data, offset: offset))
             offset += 2
 

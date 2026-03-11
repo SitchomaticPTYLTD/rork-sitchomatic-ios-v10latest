@@ -54,7 +54,7 @@ class LocalProxyServer {
     private(set) var recentCompletedHosts: [String] = []
 
     var upstreamProxy: ProxyConfig?
-    var maxConcurrentConnections: Int = 50
+    var maxConcurrentConnections: Int = 200
     var connectionTimeoutSeconds: TimeInterval = 30
     var enableConnectionPooling: Bool = true
     private(set) var wireProxyMode: Bool = false
