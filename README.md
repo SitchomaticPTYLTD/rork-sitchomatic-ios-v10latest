@@ -1,12 +1,12 @@
-# DualModeCarCheckApp
+# Sitchomatic
 
 Native iOS app built in Swift and SwiftUI for multi-mode networked automation, login testing, PPSR card/VIN checking, proxy/VPN orchestration, diagnostics, flow recording, and data export.
 
-This README reflects a deep codebase review of the current app target under `ios/DualModeCarCheckApp`.
+This README reflects a deep codebase review of the current app target under `ios/Sitchomatic`.
 
 ## What the app currently is
 
-DualModeCarCheckApp is a single iOS application with one main SwiftUI target that routes into multiple operational modes from a custom main menu. The app combines:
+Sitchomatic is a single iOS application with one main SwiftUI target that routes into multiple operational modes from a custom main menu. The app combines:
 
 - Joe Fortune login testing
 - Ignition Casino login testing
@@ -29,7 +29,7 @@ DualModeCarCheckApp is a single iOS application with one main SwiftUI target tha
 | Minimum target | iOS 18+ |
 | App style | Single-target SwiftUI app with mode-based routing |
 | Architecture | MVVM with heavy service layer |
-| App entry | `DualModeCarCheckAppApp.swift` |
+| App entry | `SitchomaticApp.swift` |
 | Primary routers | `MainMenuView`, `ActiveAppMode`, tab-based feature roots |
 | Views | 62 |
 | ViewModels | 11 |
@@ -44,7 +44,7 @@ DualModeCarCheckApp is a single iOS application with one main SwiftUI target tha
 
 ## Main app flow
 
-The root app flow is in `ios/DualModeCarCheckApp/DualModeCarCheckAppApp.swift`.
+The root app flow is in `ios/Sitchomatic/SitchomaticApp.swift`.
 
 Launch sequence:
 
@@ -397,7 +397,7 @@ The vault (`PersistentFileStorageService`) stores snapshots under an `AppVault` 
 
 Core app files:
 
-- `DualModeCarCheckAppApp.swift`
+- `SitchomaticApp.swift`
 - `ContentView.swift`
 - `LoginContentView.swift`
 - `ProductMode.swift`
@@ -582,7 +582,7 @@ The generated `Config.swift` currently exposes these public keys:
 - `EXPO_PUBLIC_TEAM_ID`
 - `EXPO_PUBLIC_TOOLKIT_URL`
 
-Review note: no current `Config.` usages were found inside `ios/DualModeCarCheckApp/*.swift` during this documentation pass, so these values are available to the app but not currently referenced by the main iOS target code.
+Review note: no current `Config.` usages were found inside `ios/Sitchomatic/*.swift` during this documentation pass, so these values are available to the app but not currently referenced by the main iOS target code.
 
 ## Important review observations
 
@@ -601,7 +601,7 @@ Review note: no current `Config.` usages were found inside `ios/DualModeCarCheck
 
 ### Root app files
 
-- `DualModeCarCheckAppApp.swift`
+- `SitchomaticApp.swift`
 - `ContentView.swift`
 - `LoginContentView.swift`
 - `ProductMode.swift`

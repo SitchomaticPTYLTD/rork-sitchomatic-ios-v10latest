@@ -1,13 +1,13 @@
 //
-//  DualModeCarCheckAppUITests.swift
-//  DualModeCarCheckAppUITests
+//  SitchomaticUITests.swift
+//  SitchomaticUITests
 //
 //  Created by Rork on March 9, 2026.
 //
 
 import XCTest
 
-final class DualModeCarCheckAppUITests: XCTestCase {
+final class SitchomaticUITests: XCTestCase {
 
     override func setUpWithError() throws {
         // Put setup code here. This method is called before the invocation of each test method in the class.

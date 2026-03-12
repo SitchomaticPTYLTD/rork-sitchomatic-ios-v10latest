@@ -1,13 +1,13 @@
 //
-//  DualModeCarCheckAppUITestsLaunchTests.swift
-//  DualModeCarCheckAppUITests
+//  SitchomaticUITestsLaunchTests.swift
+//  SitchomaticUITests
 //
 //  Created by Rork on March 9, 2026.
 //
 
 import XCTest
 
-final class DualModeCarCheckAppUITestsLaunchTests: XCTestCase {
+final class SitchomaticUITestsLaunchTests: XCTestCase {
 
     override class var runsForEachTargetApplicationUIConfiguration: Bool {
         true

@@ -30,3 +30,8 @@ This applies across the Network Settings screen, the banner at the top of Joe/Ig
 - Update banner view (`UnifiedIPBannerView`) to reflect the new naming — show "United IP" when app-wide mode is active, hide when per-session mode is active
 - Confirm Super Test's WireProxy WebView phase correctly checks tunnel availability before running
 - Clean up any stale references to the old "Unified IP Mode" naming across all views (Settings, Automation Settings, Login Network Settings, Super Test)
+
+## Additional Requests
+
+### 6. Rename app branding and files to Sitchomatic
+- [x] Rename the app target, project references, app folder, entitlements file, and test targets from DualModeCarCheckApp to Sitchomatic
