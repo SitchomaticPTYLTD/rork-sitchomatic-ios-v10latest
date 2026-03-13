@@ -3,7 +3,7 @@ import UniformTypeIdentifiers
 
 struct LoginContentView: View {
     let initialMode: ActiveAppMode
-    @State private var vm = LoginViewModel()
+    @State private var vm = LoginViewModel.shared
     @State private var initialModeApplied: Bool = false
 
     private var accentColor: Color {

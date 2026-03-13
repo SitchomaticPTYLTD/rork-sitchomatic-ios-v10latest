@@ -5,6 +5,8 @@ import SwiftUI
 @Observable
 @MainActor
 class LoginViewModel {
+    static let shared = LoginViewModel()
+
     var credentials: [LoginCredential] = []
     var attempts: [LoginAttempt] = []
     var isRunning: Bool = false

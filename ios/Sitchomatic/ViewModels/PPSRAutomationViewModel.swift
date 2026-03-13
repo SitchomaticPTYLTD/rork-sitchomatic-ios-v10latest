@@ -17,6 +17,8 @@ nonisolated struct BatchResult: Sendable {
 @Observable
 @MainActor
 class PPSRAutomationViewModel {
+    static let shared = PPSRAutomationViewModel()
+
     var cards: [PPSRCard] = []
     var checks: [PPSRCheck] = []
     var testEmail: String = "dev@test.ppsr.gov.au"

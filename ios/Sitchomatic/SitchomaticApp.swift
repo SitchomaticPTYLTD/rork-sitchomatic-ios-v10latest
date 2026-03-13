@@ -7,18 +7,41 @@ struct SitchomaticApp: App {
     @State private var introFinished: Bool = false
     @State private var nordInitialized: Bool = false
     @State private var nordService = NordVPNService.shared
+    @State private var hasEverOpenedJoe: Bool = false
+    @State private var hasEverOpenedIgnition: Bool = false
+    @State private var hasEverOpenedPPSR: Bool = false
 
     private var activeMode: ActiveAppMode? {
         ActiveAppMode(rawValue: activeModeRaw)
     }
 
+    private var isAnyTestRunning: Bool {
+        LoginViewModel.shared.isRunning || PPSRAutomationViewModel.shared.isRunning
+    }
+
+    private var showingIntro: Bool {
+        introVideoEnabled && !introFinished
+    }
+
+    private var showingProfileSelect: Bool {
+        !showingIntro && !nordService.hasSelectedProfile
+    }
+
+    private var showingMenu: Bool {
+        !showingIntro && !showingProfileSelect && activeMode == nil
+    }
+
+    private var persistentModes: Set<ActiveAppMode> {
+        [.joe, .ignition, .ppsr]
+    }
+
     var body: some Scene {
         WindowGroup {
-            Group {
-                if introVideoEnabled && !introFinished {
+            ZStack {
+                if showingIntro {
                     IntroVideoView(isFinished: $introFinished)
                         .transition(.opacity)
-                } else if !nordService.hasSelectedProfile {
+                } else if showingProfileSelect {
                     MainMenuView(
                         activeMode: Binding(
                             get: { activeMode },
@@ -33,67 +56,59 @@ struct SitchomaticApp: App {
                         requiresProfileSelection: true
                     )
                     .transition(.opacity)
-                } else if let mode = activeMode {
-                    Group {
-                        switch mode {
-                        case .joe:
+                } else {
+                    ZStack {
+                        if hasEverOpenedJoe {
                             LoginContentView(initialMode: .joe)
-                        case .ignition:
+                                .opacity(activeMode == .joe ? 1 : 0)
+                                .allowsHitTesting(activeMode == .joe)
+                        }
+
+                        if hasEverOpenedIgnition {
                             LoginContentView(initialMode: .ignition)
-                        case .ppsr:
+                                .opacity(activeMode == .ignition ? 1 : 0)
+                                .allowsHitTesting(activeMode == .ignition)
+                        }
+
+                        if hasEverOpenedPPSR {
                             ContentView()
-                        case .superTest:
-                            SuperTestContainerView()
-                        case .debugLog:
-                            NavigationStack {
-                                DebugLogView()
-                            }
-                            .withMainMenuButton()
-                            .preferredColorScheme(.dark)
-                        case .flowRecorder:
-                            NavigationStack {
-                                FlowRecorderView()
-                            }
-                            .withMainMenuButton()
-                            .preferredColorScheme(.dark)
-                        case .nordConfig:
-                            NordLynxConfigView()
-                        case .splitTest:
-                            DualWebStackView()
-                        case .vault:
-                            NavigationStack {
-                                StorageFileBrowserView()
-                            }
-                            .withMainMenuButton()
-                            .preferredColorScheme(.dark)
-                        case .ipScoreTest:
-                            IPScoreTestView()
-                        case .dualFind:
-                            DualFindContainerView()
-                        case .settingsAndTesting:
-                            SettingsAndTestingView()
-                        case .proxyManager:
-                            ProxyManagerView()
-                        case .testDebug:
-                            TestDebugContainerView()
+                                .opacity(activeMode == .ppsr ? 1 : 0)
+                                .allowsHitTesting(activeMode == .ppsr)
+                        }
+
+                        if let mode = activeMode, !persistentModes.contains(mode) {
+                            nonPersistentModeView(mode)
+                                .transition(.asymmetric(
+                                    insertion: .move(edge: .trailing).combined(with: .opacity),
+                                    removal: .move(edge: .trailing).combined(with: .opacity)
+                                ))
+                        }
+
+                        if showingMenu {
+                            MainMenuView(activeMode: Binding(
+                                get: { activeMode },
+                                set: { newMode in
+                                    if let m = newMode {
+                                        activeModeRaw = m.rawValue
+                                    } else {
+                                        activeModeRaw = ""
+                                    }
+                                }
+                            ))
+                            .transition(.opacity)
                         }
                     }
-                    .transition(.asymmetric(
-                        insertion: .move(edge: .trailing).combined(with: .opacity),
-                        removal: .move(edge: .trailing).combined(with: .opacity)
-                    ))
-                } else {
-                    MainMenuView(activeMode: Binding(
-                        get: { activeMode },
-                        set: { newMode in
-                            if let m = newMode {
-                                activeModeRaw = m.rawValue
-                            } else {
-                                activeModeRaw = ""
-                            }
-                        }
-                    ))
-                    .transition(.opacity)
+                }
+            }
+            .animation(.spring(duration: 0.35, bounce: 0.15), value: activeModeRaw)
+            .onChange(of: activeModeRaw) { _, newValue in
+                if let mode = ActiveAppMode(rawValue: newValue) {
+                    switch mode {
+                    case .joe: hasEverOpenedJoe = true
+                    case .ignition: hasEverOpenedIgnition = true
+                    case .ppsr: hasEverOpenedPPSR = true
+                    default: break
+                    }
                 }
             }
             .task {
@@ -106,6 +121,8 @@ struct SitchomaticApp: App {
                         DebugLogger.shared.handleMemoryPressure()
                         WebViewPool.shared.handleMemoryPressure()
                         ScreenshotCacheService.shared.setMaxCacheCounts(memory: 20, disk: 300)
+                        LoginViewModel.shared.handleMemoryPressure()
+                        PPSRAutomationViewModel.shared.handleMemoryPressure()
                     }
 
                     let vault = PersistentFileStorageService.shared
@@ -127,16 +144,71 @@ struct SitchomaticApp: App {
                     if nord.hasSelectedProfile {
                         await nord.autoPopulateConfigs(forceRefresh: false)
                     }
+
+                    if let mode = activeMode {
+                        switch mode {
+                        case .joe: hasEverOpenedJoe = true
+                        case .ignition: hasEverOpenedIgnition = true
+                        case .ppsr: hasEverOpenedPPSR = true
+                        default: break
+                        }
+                    }
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in
                 PersistentFileStorageService.shared.forceSave()
                 DebugLogger.shared.persistLatestLog()
+                LoginViewModel.shared.persistCredentialsNow()
+                PPSRAutomationViewModel.shared.persistCardsNow()
             }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
                 PersistentFileStorageService.shared.forceSave()
                 DebugLogger.shared.persistLatestLog()
+                LoginViewModel.shared.persistCredentialsNow()
+                PPSRAutomationViewModel.shared.persistCardsNow()
             }
+        }
+    }
+
+    @ViewBuilder
+    private func nonPersistentModeView(_ mode: ActiveAppMode) -> some View {
+        switch mode {
+        case .superTest:
+            SuperTestContainerView()
+        case .debugLog:
+            NavigationStack {
+                DebugLogView()
+            }
+            .withMainMenuButton()
+            .preferredColorScheme(.dark)
+        case .flowRecorder:
+            NavigationStack {
+                FlowRecorderView()
+            }
+            .withMainMenuButton()
+            .preferredColorScheme(.dark)
+        case .nordConfig:
+            NordLynxConfigView()
+        case .splitTest:
+            DualWebStackView()
+        case .vault:
+            NavigationStack {
+                StorageFileBrowserView()
+            }
+            .withMainMenuButton()
+            .preferredColorScheme(.dark)
+        case .ipScoreTest:
+            IPScoreTestView()
+        case .dualFind:
+            DualFindContainerView()
+        case .settingsAndTesting:
+            SettingsAndTestingView()
+        case .proxyManager:
+            ProxyManagerView()
+        case .testDebug:
+            TestDebugContainerView()
+        default:
+            EmptyView()
         }
     }
 }

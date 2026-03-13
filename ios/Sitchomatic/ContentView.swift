@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct ContentView: View {
-    @State private var vm = PPSRAutomationViewModel()
+    @State private var vm = PPSRAutomationViewModel.shared
     @State private var selectedTab: AppTab = .dashboard
 
     nonisolated enum AppTab: String, Sendable {
