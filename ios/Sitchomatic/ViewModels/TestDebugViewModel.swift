@@ -463,7 +463,7 @@ class TestDebugViewModel {
             session.status = .success
         case .noAcc, .permDisabled, .tempDisabled:
             session.status = .failed
-        case .unsure, .redBannerError:
+        case .unsure, .redBannerError, .smsDetected:
             session.status = .unsure
         case .timeout:
             session.status = .timeout

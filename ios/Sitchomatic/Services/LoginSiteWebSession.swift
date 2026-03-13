@@ -544,6 +544,22 @@ class LoginSiteWebSession: NSObject {
                 return (true, keyword)
             }
         }
+
+        let currentURL = await getCurrentURL()
+        if currentURL.lowercased().contains("ignition") {
+            let smsKeywords = [
+                "sms", "text message", "verification code", "verify your phone",
+                "send code", "sent a code", "enter the code", "phone verification",
+                "mobile verification", "confirm your number", "we sent", "code sent",
+                "enter code", "security code sent", "check your phone"
+            ]
+            for keyword in smsKeywords {
+                if contentLower.contains(keyword) {
+                    return (true, "SMS_NOTIFICATION: \(keyword)")
+                }
+            }
+        }
+
         let bannerSelectors = [".error-banner", ".alert-danger", ".alert-error", ".login-error", ".notification-error", "[role='alert']"]
         for selector in bannerSelectors {
             let escaped = selector.replacingOccurrences(of: "'", with: "\\'")
@@ -1265,6 +1281,8 @@ class LoginSiteWebSession: NSObject {
         let anyContentChange: Bool
         let errorBannerDetected: Bool
         let errorBannerText: String?
+        let smsNotificationDetected: Bool
+        let smsNotificationText: String?
     }
 
     func rapidWelcomePoll(timeout: TimeInterval = 90, originalURL: String) async -> RapidPollResult {
@@ -1375,8 +1393,40 @@ class LoginSiteWebSession: NSObject {
                         navigationDetected: navDetected,
                         anyContentChange: contentChanged,
                         errorBannerDetected: true,
-                        errorBannerText: context.trimmingCharacters(in: .whitespacesAndNewlines)
+                        errorBannerText: context.trimmingCharacters(in: .whitespacesAndNewlines),
+                        smsNotificationDetected: false,
+                        smsNotificationText: nil
                     )
+                }
+            }
+
+            let isIgnitionSite = lastURL.lowercased().contains("ignition")
+            if isIgnitionSite && contentChanged {
+                let smsKeywords = [
+                    "sms", "text message", "verification code", "verify your phone",
+                    "send code", "sent a code", "enter the code", "phone verification",
+                    "mobile verification", "confirm your number", "we sent", "code sent",
+                    "enter code", "security code sent", "check your phone"
+                ]
+                for keyword in smsKeywords {
+                    if contentLower.contains(keyword) {
+                        let smsContext = pageText.components(separatedBy: .newlines)
+                            .first { $0.lowercased().contains(keyword) } ?? keyword
+                        return RapidPollResult(
+                            welcomeTextFound: false,
+                            welcomeContext: nil,
+                            welcomeScreenshot: nil,
+                            redirectedToHomepage: false,
+                            finalURL: lastURL,
+                            finalPageContent: lastContent,
+                            navigationDetected: navDetected,
+                            anyContentChange: contentChanged,
+                            errorBannerDetected: false,
+                            errorBannerText: nil,
+                            smsNotificationDetected: true,
+                            smsNotificationText: smsContext.trimmingCharacters(in: .whitespacesAndNewlines)
+                        )
+                    }
                 }
             }
 
@@ -1413,7 +1463,9 @@ class LoginSiteWebSession: NSObject {
                         navigationDetected: navDetected,
                         anyContentChange: contentChanged,
                         errorBannerDetected: true,
-                        errorBannerText: bannerText.trimmingCharacters(in: .whitespacesAndNewlines)
+                        errorBannerText: bannerText.trimmingCharacters(in: .whitespacesAndNewlines),
+                        smsNotificationDetected: false,
+                        smsNotificationText: nil
                     )
                 }
             }
@@ -1434,7 +1486,9 @@ class LoginSiteWebSession: NSObject {
                         navigationDetected: navDetected,
                         anyContentChange: contentChanged,
                         errorBannerDetected: false,
-                        errorBannerText: nil
+                        errorBannerText: nil,
+                        smsNotificationDetected: false,
+                        smsNotificationText: nil
                     )
                 }
             }
@@ -1450,7 +1504,9 @@ class LoginSiteWebSession: NSObject {
             navigationDetected: navDetected,
             anyContentChange: contentChanged,
             errorBannerDetected: false,
-            errorBannerText: nil
+            errorBannerText: nil,
+            smsNotificationDetected: false,
+            smsNotificationText: nil
         )
     }
 

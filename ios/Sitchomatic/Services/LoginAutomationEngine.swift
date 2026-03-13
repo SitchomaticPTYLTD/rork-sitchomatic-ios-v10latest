@@ -11,6 +11,7 @@ nonisolated enum LoginOutcome: Sendable {
     case connectionFailure
     case timeout
     case redBannerError
+    case smsDetected
 }
 
 @MainActor
@@ -553,7 +554,7 @@ class LoginAutomationEngine {
             logger.startTimer(key: "\(sessionId)_poll_\(cycle)")
             let pollResult = await session.rapidWelcomePoll(timeout: responseTimeout, originalURL: preSubmitURL)
             let pollMs = logger.stopTimer(key: "\(sessionId)_poll_\(cycle)")
-            logger.log("Rapid poll complete: welcome=\(pollResult.welcomeTextFound) redirect=\(pollResult.redirectedToHomepage) nav=\(pollResult.navigationDetected) banner=\(pollResult.errorBannerDetected)", category: .automation, level: .debug, sessionId: sessionId, durationMs: pollMs)
+            logger.log("Rapid poll complete: welcome=\(pollResult.welcomeTextFound) redirect=\(pollResult.redirectedToHomepage) nav=\(pollResult.navigationDetected) banner=\(pollResult.errorBannerDetected) sms=\(pollResult.smsNotificationDetected)", category: .automation, level: .debug, sessionId: sessionId, durationMs: pollMs)
 
             advanceTo(.evaluatingResult, attempt: attempt, message: "Cycle \(cycle)/\(maxSubmitCycles) — evaluating response...")
 
@@ -641,6 +642,18 @@ class LoginAutomationEngine {
                 attempt.errorMessage = "Red banner error detected — requeuing to bottom"
                 attempt.completedAt = Date()
                 return .redBannerError
+            }
+
+            if pollResult.smsNotificationDetected {
+                attempt.logs.append(PPSRLogEntry(
+                    message: "SMS NOTIFICATION detected (Ignition): \(pollResult.smsNotificationText ?? "sms verification") — burning session, requeuing with different IP/webview",
+                    level: .warning
+                ))
+                await captureTerminalScreenshot(session: session, attempt: attempt, step: "sms_notification", note: "SMS NOTIFICATION (Ignition): \(pollResult.smsNotificationText ?? "sms verification") — burn session, retry with different setup", autoResult: .unknown, terminalType: .smsVerification)
+                attempt.status = .failed
+                attempt.errorMessage = "SMS notification detected — burning session, requeuing for retry with different IP/webview"
+                attempt.completedAt = Date()
+                return .smsDetected
             }
 
             logger.startTimer(key: "\(sessionId)_eval_\(cycle)")
@@ -1032,7 +1045,11 @@ class LoginAutomationEngine {
         let ocrDisabledCheck = await visionML.detectDisabledAccount(in: img)
         if ocrDisabledCheck.type != .none {
             logger.log("OCR DISABLED DETECTION on screenshot: \(ocrDisabledCheck.type.rawValue) — '\(ocrDisabledCheck.matchedText ?? "unknown")'" , category: .evaluation, level: .critical)
-            finalAutoResult = .fail
+            if ocrDisabledCheck.type == .smsDetected {
+                finalAutoResult = .unknown
+            } else {
+                finalAutoResult = .fail
+            }
         }
 
         let compressed: UIImage
@@ -1205,6 +1222,8 @@ class LoginAutomationEngine {
             keywords = ["account is disabled", "account has been disabled", "account has been suspended", "permanently banned", "account is closed", "self-excluded", "account has been blocked"]
         case .errorBanner:
             return fullScreenshot
+        case .smsVerification:
+            keywords = ["sms", "text message", "verification code", "verify your phone", "send code", "enter the code", "phone verification", "mobile verification", "code sent", "enter code", "security code"]
         }
 
         let keywordsJS = "[" + keywords.map { "'\($0)'" }.joined(separator: ",") + "]"

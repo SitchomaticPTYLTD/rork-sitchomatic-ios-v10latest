@@ -528,6 +528,19 @@ class DualFindViewModel {
         if contentLower.contains("error") && !contentLower.contains("incorrect") && !contentLower.contains("invalid") && !contentLower.contains("wrong") {
             return .transient
         }
+
+        let isIgnition = urlLower.contains("ignition")
+        if isIgnition {
+            let smsKeywords = ["sms", "text message", "verification code", "verify your phone",
+                               "send code", "sent a code", "enter the code", "phone verification",
+                               "mobile verification", "confirm your number", "code sent",
+                               "enter code", "security code sent", "check your phone"]
+            for keyword in smsKeywords {
+                if contentLower.contains(keyword) {
+                    return .transient
+                }
+            }
+        }
         if contentLower.contains("sms") {
             return .transient
         }

@@ -30,6 +30,7 @@ class TrueDetectionService {
         case temporarilyDisabled = "temporarily_disabled"
         case accountDisabled = "account_disabled"
         case errorBanner = "error_banner"
+        case smsVerification = "sms_verification"
     }
 
     nonisolated struct TrueDetectionConfig: Sendable {
@@ -403,6 +404,23 @@ class TrueDetectionService {
                     return .temporarilyDisabled
                 }
                 return .accountDisabled
+            }
+        }
+
+        let isIgnitionSite = (await session.getCurrentURL()).lowercased().contains("ignition")
+        if isIgnitionSite {
+            let smsKeywords = [
+                "sms", "text message", "verification code", "verify your phone",
+                "send code", "sent a code", "enter the code", "phone verification",
+                "mobile verification", "confirm your number", "we sent", "code sent",
+                "enter code", "security code sent", "check your phone"
+            ]
+            for keyword in smsKeywords {
+                if contentLower.contains(keyword.lowercased()) {
+                    onLog?("TRUE DETECTION: SMS NOTIFICATION detected (Ignition) — '\(keyword)' — burn session", .error)
+                    logger.log("TrueDetection: SMS NOTIFICATION '\(keyword)' on Ignition", category: .evaluation, level: .critical, sessionId: sessionId)
+                    return .smsVerification
+                }
             }
         }
 

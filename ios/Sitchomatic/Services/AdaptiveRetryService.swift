@@ -147,6 +147,7 @@ class AdaptiveRetryService {
         case .connectionFailure: return fieldDetectionFailed ? .fieldDetectionMiss : .connectionFailure
         case .permDisabled, .tempDisabled: return .disabledAccount
         case .redBannerError: return .rateLimited
+        case .smsDetected: return .rateLimited
         case .noAcc:
             if submitFailed { return .submitNoOp }
             return .unknown

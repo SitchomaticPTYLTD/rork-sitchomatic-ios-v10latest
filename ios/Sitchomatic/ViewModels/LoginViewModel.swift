@@ -657,6 +657,16 @@ class LoginViewModel {
             }
             log("\(credential.username) — red banner error detected, requeued", level: .warning)
 
+        case .smsDetected:
+            credential.status = .untested
+            let smsEntry = RequeuePriorityService.shared.prioritize(credentialId: credential.id, username: credential.username, outcome: outcome)
+            if let entry = smsEntry {
+                requeueCredentialWithPriority(credential, entry: entry)
+            } else {
+                requeueCredentialToBottom(credential)
+            }
+            log("\(credential.username) — SMS notification detected (Ignition) — burning session, requeued for retry with different IP/webview", level: .warning)
+
         case .unsure, .timeout, .connectionFailure:
             credential.status = .untested
             if outcome == .connectionFailure {
@@ -875,12 +885,13 @@ class LoginViewModel {
         case .timeout: outcomeLabel = "timeout"
         case .connectionFailure: outcomeLabel = "connectionFailure"
         case .redBannerError: outcomeLabel = "redBannerError"
+        case .smsDetected: outcomeLabel = "smsDetected"
         }
 
         switch outcome {
         case .success, .noAcc, .permDisabled, .tempDisabled:
             recoveryService.markCompleted(credentialId: credential.id)
-        case .unsure, .timeout, .connectionFailure, .redBannerError:
+        case .unsure, .timeout, .connectionFailure, .redBannerError, .smsDetected:
             let screenshotHash = attempt.screenshotIds.last
             recoveryService.updateSnapshot(
                 credentialId: credential.id,

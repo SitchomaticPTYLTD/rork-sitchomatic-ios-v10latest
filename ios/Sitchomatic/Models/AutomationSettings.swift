@@ -209,6 +209,10 @@ nonisolated struct AutomationSettings: Codable, Sendable {
     var mfaMarkAsTempDisabled: Bool = true
     var mfaKeywords: [String] = ["verification", "verify", "code", "2fa", "two-factor", "authenticator", "one-time", "OTP", "security code"]
 
+    var smsNotificationKeywords: [String] = ["sms", "text message", "verification code", "verify your phone", "send code", "sent a code", "enter the code", "phone verification", "mobile verification", "confirm your number", "we sent", "code sent", "enter code", "security code sent", "check your phone"]
+    var smsDetectionEnabled: Bool = true
+    var smsBurnSession: Bool = true
+
     // MARK: - CAPTCHA Handling
     var captchaDetectionEnabled: Bool = false
     var captchaAutoSkip: Bool = true

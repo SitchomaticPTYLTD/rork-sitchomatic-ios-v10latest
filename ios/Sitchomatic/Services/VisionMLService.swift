@@ -283,6 +283,7 @@ class VisionMLService {
     nonisolated enum DisabledDetectionType: String, Sendable {
         case permDisabled
         case tempDisabled
+        case smsDetected
         case none
     }
 
@@ -345,6 +346,20 @@ class VisionMLService {
             "exceeded login attempts", "login attempts exceeded",
             "multiple failed attempts",
         ]
+
+        let smsNotificationPhrases = [
+            "sms", "text message", "verification code", "verify your phone",
+            "send code", "sent a code", "enter the code", "phone verification",
+            "mobile verification", "confirm your number", "code sent",
+            "enter code", "security code sent", "check your phone"
+        ]
+        for phrase in smsNotificationPhrases {
+            if fullLower.contains(phrase) {
+                let matchedLine = allText.first { $0.text.lowercased().contains(phrase) }?.text ?? phrase
+                logger.log("VisionML: SMS NOTIFICATION detected via OCR — '\(phrase)'", category: .automation, level: .critical)
+                return (.smsDetected, matchedLine, fullText)
+            }
+        }
 
         for phrase in tempDisabledPhrases {
             if fullLower.contains(phrase) {

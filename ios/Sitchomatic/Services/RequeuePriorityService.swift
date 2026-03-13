@@ -53,6 +53,10 @@ class RequeuePriorityService {
             priority = .medium
             reason = "red banner error"
             suggestProxy = true
+        case .smsDetected:
+            priority = .high
+            reason = "SMS notification (Ignition) — burn session, different IP/webview needed"
+            suggestProxy = true
         case .unsure:
             priority = .low
             reason = "unsure result"

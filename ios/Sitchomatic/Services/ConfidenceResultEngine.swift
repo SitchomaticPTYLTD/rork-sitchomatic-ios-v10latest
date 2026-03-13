@@ -220,6 +220,13 @@ class ConfidenceResultEngine {
             }
         }
 
+        let smsOCR = ["sms", "text message", "verification code", "verify your phone", "send code", "enter code", "phone verification"]
+        for term in smsOCR {
+            if allText.contains(term) {
+                return SignalContribution(source: "SMS_OCR", weight: weight, rawScore: 0.85, weightedScore: weight * 0.85, detail: "sms notification OCR '\(term)'")
+            }
+        }
+
         let disabledOCR = ["disabled", "suspended", "banned", "blocked", "closed"]
         for term in disabledOCR {
             if allText.contains(term) {
