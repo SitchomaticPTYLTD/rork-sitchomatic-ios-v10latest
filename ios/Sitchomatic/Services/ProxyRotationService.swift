@@ -220,6 +220,7 @@ class ProxyRotationService {
         ppsrConnectionMode = mode
         persistConnectionModes()
         persistUnifiedMode()
+        DeviceProxyService.shared.handleUnifiedConnectionModeChange()
         logger.log("ProxyRotation: unified connection mode set to \(mode.label)", category: .proxy, level: .success)
     }
 

@@ -281,7 +281,7 @@ struct IPScoreTestView: View {
                     Image(systemName: "shield.checkered")
                         .font(.system(size: 9, weight: .bold))
                         .foregroundStyle(.cyan)
-                    Text("UNIFIED IP")
+                    Text("UNITED IP")
                         .font(.system(size: 9, weight: .heavy, design: .monospaced))
                         .foregroundStyle(.cyan)
                     if let endpoint = deviceProxy.activeEndpointLabel {
@@ -446,7 +446,7 @@ struct IPScoreTestView: View {
                 }
 
                 if deviceProxy.isEnabled {
-                    Section("App-Wide United IP") {
+                    Section("United IP") {
                         LabeledContent("Status") {
                             Text(deviceProxy.isActive ? "Active" : "Inactive")
                                 .foregroundStyle(deviceProxy.isActive ? .green : .red)
@@ -537,7 +537,7 @@ struct IPScoreTestView: View {
             createAndLoadWebView(for: session)
         }
 
-        logger.log("IPScoreTest: launched \(sessionCount) concurrent sessions — mode: \(connectionMode.label), unified IP: \(deviceProxy.isEnabled)", category: .automation, level: .info)
+        logger.log("IPScoreTest: launched \(sessionCount) concurrent sessions — mode: \(connectionMode.label), app-wide united IP: \(deviceProxy.isEnabled)", category: .automation, level: .info)
 
         elapsedTimer?.invalidate()
         elapsedTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
@@ -588,7 +588,7 @@ struct IPScoreTestView: View {
     private func assignNetworkToSession(_ session: IPScoreSession, index: Int, mode: ConnectionMode) {
         if deviceProxy.isEnabled, let config = deviceProxy.activeConfig {
             session.networkConfig = config
-            session.networkLabel = "Unified: \(config.label)"
+            session.networkLabel = "United IP: \(config.label)"
             if case .wireGuardDNS(let wg) = config {
                 session.assignedVPNServer = wg.fileName
                 session.assignedVPNIP = wg.peerEndpoint

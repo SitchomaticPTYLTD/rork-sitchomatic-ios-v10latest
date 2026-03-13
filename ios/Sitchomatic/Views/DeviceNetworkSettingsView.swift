@@ -34,7 +34,7 @@ struct DeviceNetworkSettingsView: View {
                 unitedIPOptionsSection
             }
             connectionModeSection
-            if proxyService.unifiedConnectionMode == .wireguard {
+            if deviceProxy.shouldShowWireProxySection {
                 wireProxyServerSection
             }
             if LoginURLRotationService.shared.isIgnitionMode {
@@ -115,34 +115,37 @@ struct DeviceNetworkSettingsView: View {
 
     private var ipRoutingSection: some View {
         Section {
-            Picker(selection: Binding(
+            Picker("IP Routing", selection: Binding(
                 get: { deviceProxy.ipRoutingMode },
                 set: { deviceProxy.ipRoutingMode = $0 }
             )) {
                 ForEach(IPRoutingMode.allCases, id: \.self) { mode in
-                    Label(mode.label, systemImage: mode.icon).tag(mode)
-                }
-            } label: {
-                HStack(spacing: 10) {
-                    ZStack {
-                        Circle()
-                            .fill(deviceProxy.isEnabled ? Color.cyan.opacity(0.15) : Color.gray.opacity(0.1))
-                            .frame(width: 36, height: 36)
-                        Image(systemName: deviceProxy.ipRoutingMode.icon)
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundStyle(deviceProxy.isEnabled ? .cyan : .secondary)
-                    }
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("IP Routing")
-                            .font(.subheadline.bold())
-                        Text(deviceProxy.ipRoutingMode.label)
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
+                    Text(mode.shortLabel).tag(mode)
                 }
             }
-            .pickerStyle(.menu)
+            .pickerStyle(.segmented)
+            .accessibilityLabel("IP Routing")
             .sensoryFeedback(.impact(weight: .heavy), trigger: deviceProxy.ipRoutingMode)
+
+            HStack(spacing: 10) {
+                ZStack {
+                    Circle()
+                        .fill(deviceProxy.isEnabled ? Color.cyan.opacity(0.15) : Color.gray.opacity(0.1))
+                        .frame(width: 36, height: 36)
+                    Image(systemName: deviceProxy.ipRoutingMode.icon)
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(deviceProxy.isEnabled ? .cyan : .secondary)
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(deviceProxy.ipRoutingMode.label)
+                        .font(.subheadline.bold())
+                    Text(deviceProxy.isEnabled ? "One shared IP for the whole app with scheduled rotation." : "Each web session gets its own IP from the selected pool.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+            .padding(.vertical, 2)
 
             if deviceProxy.isEnabled && deviceProxy.isActive {
                 VStack(alignment: .leading, spacing: 8) {
@@ -507,7 +510,7 @@ struct DeviceNetworkSettingsView: View {
                     }
                 }
 
-                if wireProxyBridge.isActive {
+                if deviceProxy.shouldShowWireProxyDashboard {
                     NavigationLink {
                         WireProxyDashboardView()
                     } label: {
@@ -543,7 +546,7 @@ struct DeviceNetworkSettingsView: View {
                 }
             }
         } footer: {
-            Text("Routes WebView traffic through an encrypted WireGuard tunnel via localhost SOCKS5. Only available in WireGuard connection mode.")
+            Text(deviceProxy.isEnabled ? "Routes WebView traffic through an encrypted WireGuard tunnel via localhost SOCKS5 when the app-wide united IP is on a WireGuard config." : "Available when Connection Mode is WireGuard. Turn on App-Wide United IP to activate the localhost SOCKS5 tunnel forwarder.")
         }
     }
 

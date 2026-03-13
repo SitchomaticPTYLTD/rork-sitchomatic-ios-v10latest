@@ -118,6 +118,24 @@ class DeviceProxyService {
         ipRoutingMode == .appWideUnited
     }
 
+    var isWireProxyCompatibleMode: Bool {
+        proxyService.unifiedConnectionMode == .wireguard
+    }
+
+    var shouldShowWireProxySection: Bool {
+        isWireProxyCompatibleMode
+    }
+
+    var shouldShowWireProxyDashboard: Bool {
+        shouldShowWireProxySection && wireProxyBridge.isActive
+    }
+
+    var canManageWireProxyTunnel: Bool {
+        guard shouldShowWireProxySection, isEnabled else { return false }
+        guard case .wireGuardDNS = activeConfig else { return false }
+        return true
+    }
+
     var rotationInterval: RotationInterval = .every5Min {
         didSet {
             persistSettings()
@@ -354,6 +372,12 @@ class DeviceProxyService {
             localProxy.enableWireProxyMode(false)
             localProxy.updateUpstream(proxy)
         case .wireGuardDNS:
+            guard isWireProxyCompatibleMode else {
+                wireProxyBridge.stop()
+                localProxy.enableWireProxyMode(false)
+                localProxy.updateUpstream(nil)
+                return
+            }
             syncWireProxyTunnel()
         default:
             localProxy.enableWireProxyMode(false)
@@ -362,6 +386,11 @@ class DeviceProxyService {
     }
 
     private func syncWireProxyTunnel() {
+        guard isWireProxyCompatibleMode else {
+            wireProxyBridge.stop()
+            localProxy.enableWireProxyMode(false)
+            return
+        }
         guard localProxyEnabled else {
             wireProxyBridge.stop()
             localProxy.enableWireProxyMode(false)
@@ -429,7 +458,7 @@ class DeviceProxyService {
     }
 
     func reconnectWireProxy() {
-        guard ipRoutingMode == .appWideUnited, case .wireGuardDNS = activeConfig else { return }
+        guard canManageWireProxyTunnel else { return }
         wireProxyBridge.stop()
         localProxy.enableWireProxyMode(false)
         logger.log("DeviceProxy: WireProxy reconnect requested", category: .vpn, level: .info)
@@ -440,6 +469,16 @@ class DeviceProxyService {
         wireProxyBridge.stop()
         localProxy.enableWireProxyMode(false)
         logger.log("DeviceProxy: WireProxy manually stopped", category: .vpn, level: .info)
+    }
+
+    func handleUnifiedConnectionModeChange() {
+        if !isWireProxyCompatibleMode {
+            wireProxyBridge.stop()
+            localProxy.enableWireProxyMode(false)
+        }
+
+        guard isEnabled else { return }
+        performRotation(reason: "Connection Mode Changed")
     }
 
     func handleProfileSwitch() {
@@ -468,7 +507,7 @@ class DeviceProxyService {
     }
 
     func rotateWireProxyConfig() {
-        guard ipRoutingMode == .appWideUnited else { return }
+        guard canManageWireProxyTunnel else { return }
         wireProxyBridge.stop()
         localProxy.enableWireProxyMode(false)
         let config = resolveNextConfig()
@@ -502,7 +541,7 @@ class DeviceProxyService {
         case .socks5:
             return localProxy.localProxyConfig
         case .wireGuardDNS:
-            if wireProxyBridge.isActive {
+            if isWireProxyCompatibleMode, wireProxyBridge.isActive {
                 return localProxy.localProxyConfig
             }
             return nil

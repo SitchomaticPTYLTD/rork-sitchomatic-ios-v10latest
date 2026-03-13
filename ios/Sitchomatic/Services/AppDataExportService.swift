@@ -21,6 +21,7 @@ nonisolated struct ComprehensiveExportConfig: Codable, Sendable {
     var connectionModes: ExportConnectionModes = ExportConnectionModes()
     var networkRegion: String = "USA"
     var unifiedConnectionMode: String = "DNS"
+    var ipRoutingSettings: ExportIPRoutingSettings?
     var settings: ExportSettings = ExportSettings()
     var automationSettings: AutomationSettings?
 
@@ -91,6 +92,17 @@ nonisolated struct ComprehensiveExportConfig: Codable, Sendable {
         var joe: String = "DNS"
         var ignition: String = "DNS"
         var ppsr: String = "DNS"
+    }
+
+    nonisolated struct ExportIPRoutingSettings: Codable, Sendable {
+        var mode: String = "Separate IP per Session"
+        var rotationInterval: String = "Every 5 Minutes"
+        var rotateOnBatchStart: Bool = true
+        var rotateOnFingerprintDetection: Bool = true
+        var localProxyEnabled: Bool = true
+        var autoFailoverEnabled: Bool = true
+        var healthCheckInterval: TimeInterval = 30
+        var maxFailuresBeforeRotation: Int = 3
     }
 
     nonisolated struct ExportSettings: Codable, Sendable {
@@ -226,6 +238,17 @@ class AppDataExportService {
         )
         config.networkRegion = proxyService.networkRegion.rawValue
         config.unifiedConnectionMode = proxyService.unifiedConnectionMode.rawValue
+        let deviceProxy = DeviceProxyService.shared
+        config.ipRoutingSettings = .init(
+            mode: deviceProxy.ipRoutingMode.rawValue,
+            rotationInterval: deviceProxy.rotationInterval.rawValue,
+            rotateOnBatchStart: deviceProxy.rotateOnBatchStart,
+            rotateOnFingerprintDetection: deviceProxy.rotateOnFingerprintDetection,
+            localProxyEnabled: deviceProxy.localProxyEnabled,
+            autoFailoverEnabled: deviceProxy.autoFailoverEnabled,
+            healthCheckInterval: deviceProxy.healthCheckInterval,
+            maxFailuresBeforeRotation: deviceProxy.maxFailuresBeforeRotation
+        )
 
         config.settings = .init(
             autoExcludeBlacklist: blacklistService.autoExcludeBlacklist,
@@ -537,6 +560,23 @@ class AppDataExportService {
         }
         if let unified = ConnectionMode(rawValue: config.unifiedConnectionMode) {
             proxyService.setUnifiedConnectionMode(unified)
+        }
+
+        let deviceProxy = DeviceProxyService.shared
+        if let ipRouting = config.ipRoutingSettings {
+            deviceProxy.ipRoutingMode = .separatePerSession
+            if let interval = RotationInterval(rawValue: ipRouting.rotationInterval) {
+                deviceProxy.rotationInterval = interval
+            }
+            deviceProxy.rotateOnBatchStart = ipRouting.rotateOnBatchStart
+            deviceProxy.rotateOnFingerprintDetection = ipRouting.rotateOnFingerprintDetection
+            deviceProxy.localProxyEnabled = ipRouting.localProxyEnabled
+            deviceProxy.autoFailoverEnabled = ipRouting.autoFailoverEnabled
+            deviceProxy.healthCheckInterval = ipRouting.healthCheckInterval
+            deviceProxy.maxFailuresBeforeRotation = ipRouting.maxFailuresBeforeRotation
+            if let mode = IPRoutingMode(rawValue: ipRouting.mode) {
+                deviceProxy.ipRoutingMode = mode
+            }
         }
 
         blacklistService.autoExcludeBlacklist = config.settings.autoExcludeBlacklist
