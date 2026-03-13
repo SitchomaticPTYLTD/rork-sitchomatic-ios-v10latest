@@ -50,17 +50,101 @@ class SettingVariationGenerator {
         ("Full Isolation", .full),
     ]
 
-    func generateSessions(count: Int, mode: TestDebugVariationMode, site: TestDebugSite) -> [TestDebugSession] {
+    func generateSessions(count: Int, mode: TestDebugVariationMode, site: TestDebugSite, overrides: TestDebugVariationOverrides = TestDebugVariationOverrides()) -> [TestDebugSession] {
+        let raw: [TestDebugSession]
         switch mode {
         case .all:
-            return generateAllVariations(count: count, site: site)
+            raw = generateAllVariations(count: count, site: site, overrides: overrides)
         case .network:
-            return generateNetworkVariations(count: count, site: site)
+            raw = generateNetworkVariations(count: count, site: site, overrides: overrides)
         case .automation:
-            return generateAutomationVariations(count: count, site: site)
+            raw = generateAutomationVariations(count: count, site: site, overrides: overrides)
         case .smartMatrix:
-            return generateSmartMatrix(count: count, site: site)
+            raw = generateSmartMatrix(count: count, site: site, overrides: overrides)
         }
+        return deduplicateSessions(raw)
+    }
+
+    private func deduplicateSessions(_ sessions: [TestDebugSession]) -> [TestDebugSession] {
+        var seen = Set<String>()
+        var result: [TestDebugSession] = []
+        for session in sessions {
+            let key = snapshotFingerprint(session.settingsSnapshot)
+            if seen.contains(key) {
+                let tweaked = tweakSnapshot(session.settingsSnapshot)
+                let newKey = snapshotFingerprint(tweaked)
+                if !seen.contains(newKey) {
+                    seen.insert(newKey)
+                    let newSession = TestDebugSession(
+                        index: session.index,
+                        differentiator: session.differentiator + " [tweaked]",
+                        settingsSnapshot: tweaked
+                    )
+                    result.append(newSession)
+                } else {
+                    seen.insert(key + "_\(session.index)")
+                    result.append(session)
+                }
+            } else {
+                seen.insert(key)
+                result.append(session)
+            }
+        }
+        return result
+    }
+
+    private func snapshotFingerprint(_ s: TestDebugSettingsSnapshot) -> String {
+        "\(s.connectionMode.rawValue)|\(s.wireGuardConfigIndex ?? -1)|\(s.pattern)|\(s.typingSpeedMinMs)-\(s.typingSpeedMaxMs)|\(s.stealthJSInjection)|\(s.humanMouseMovement)|\(s.fingerprintSpoofing)|\(s.trueDetectionEnabled)|\(s.tabBetweenFields)|\(s.pageLoadExtraDelayMs)|\(s.preSubmitDelayMs)|\(s.postSubmitDelayMs)|\(s.sessionIsolation.rawValue)"
+    }
+
+    private func tweakSnapshot(_ s: TestDebugSettingsSnapshot) -> TestDebugSettingsSnapshot {
+        let newMin = s.typingSpeedMinMs + Int.random(in: 10...30)
+        let newMax = s.typingSpeedMaxMs + Int.random(in: 10...30)
+        let newPreSubmit = s.preSubmitDelayMs + Int.random(in: 50...200)
+        return TestDebugSettingsSnapshot(
+            connectionMode: s.connectionMode,
+            wireGuardConfigIndex: s.wireGuardConfigIndex,
+            pattern: s.pattern,
+            typingSpeedMinMs: newMin,
+            typingSpeedMaxMs: newMax,
+            stealthJSInjection: s.stealthJSInjection,
+            humanMouseMovement: s.humanMouseMovement,
+            humanScrollJitter: s.humanScrollJitter,
+            viewportRandomization: s.viewportRandomization,
+            fingerprintSpoofing: s.fingerprintSpoofing,
+            trueDetectionEnabled: s.trueDetectionEnabled,
+            tabBetweenFields: s.tabBetweenFields,
+            pageLoadExtraDelayMs: s.pageLoadExtraDelayMs,
+            preSubmitDelayMs: newPreSubmit,
+            postSubmitDelayMs: s.postSubmitDelayMs,
+            clearCookiesBetweenAttempts: s.clearCookiesBetweenAttempts,
+            sessionIsolation: s.sessionIsolation,
+            webViewPoolIndex: s.webViewPoolIndex
+        )
+    }
+
+    private func applyOverrides(_ snapshot: TestDebugSettingsSnapshot, overrides: TestDebugVariationOverrides) -> TestDebugSettingsSnapshot {
+        guard overrides.hasPins else { return snapshot }
+        return TestDebugSettingsSnapshot(
+            connectionMode: overrides.pinConnectionMode ?? snapshot.connectionMode,
+            wireGuardConfigIndex: snapshot.wireGuardConfigIndex,
+            pattern: overrides.pinPattern ?? snapshot.pattern,
+            typingSpeedMinMs: overrides.pinTypingSpeed?.min ?? snapshot.typingSpeedMinMs,
+            typingSpeedMaxMs: overrides.pinTypingSpeed?.max ?? snapshot.typingSpeedMaxMs,
+            stealthJSInjection: overrides.pinStealth ?? snapshot.stealthJSInjection,
+            humanMouseMovement: overrides.pinHumanSim ?? snapshot.humanMouseMovement,
+            humanScrollJitter: overrides.pinHumanSim ?? snapshot.humanScrollJitter,
+            viewportRandomization: snapshot.viewportRandomization,
+            fingerprintSpoofing: overrides.pinFingerprint ?? snapshot.fingerprintSpoofing,
+            trueDetectionEnabled: overrides.pinTrueDetection ?? snapshot.trueDetectionEnabled,
+            tabBetweenFields: (overrides.pinPattern ?? snapshot.pattern) == "Tab Navigation",
+            pageLoadExtraDelayMs: snapshot.pageLoadExtraDelayMs,
+            preSubmitDelayMs: snapshot.preSubmitDelayMs,
+            postSubmitDelayMs: snapshot.postSubmitDelayMs,
+            clearCookiesBetweenAttempts: snapshot.clearCookiesBetweenAttempts,
+            sessionIsolation: overrides.pinSessionIsolation ?? snapshot.sessionIsolation,
+            webViewPoolIndex: snapshot.webViewPoolIndex
+        )
     }
 
     private func availableConnectionModes() -> [(label: String, mode: ConnectionMode, wgIndex: Int?)] {
@@ -83,7 +167,7 @@ class SettingVariationGenerator {
         return modes
     }
 
-    private func generateAllVariations(count: Int, site: TestDebugSite) -> [TestDebugSession] {
+    private func generateAllVariations(count: Int, site: TestDebugSite, overrides: TestDebugVariationOverrides = TestDebugVariationOverrides()) -> [TestDebugSession] {
         var sessions: [TestDebugSession] = []
         let netModes = availableConnectionModes()
         let poolSize = 24
@@ -131,13 +215,14 @@ class SettingVariationGenerator {
                 webViewPoolIndex: i % poolSize
             )
 
-            sessions.append(TestDebugSession(index: i + 1, differentiator: parts.joined(separator: " + "), settingsSnapshot: snapshot))
+            let finalSnapshot = applyOverrides(snapshot, overrides: overrides)
+            sessions.append(TestDebugSession(index: i + 1, differentiator: parts.joined(separator: " + "), settingsSnapshot: finalSnapshot))
         }
 
         return sessions
     }
 
-    private func generateNetworkVariations(count: Int, site: TestDebugSite) -> [TestDebugSession] {
+    private func generateNetworkVariations(count: Int, site: TestDebugSite, overrides: TestDebugVariationOverrides = TestDebugVariationOverrides()) -> [TestDebugSession] {
         var sessions: [TestDebugSession] = []
         let netModes = availableConnectionModes()
         let poolSize = 24
@@ -171,13 +256,14 @@ class SettingVariationGenerator {
                 webViewPoolIndex: i % poolSize
             )
 
-            sessions.append(TestDebugSession(index: i + 1, differentiator: parts.joined(separator: " + "), settingsSnapshot: snapshot))
+            let finalSnapshot = applyOverrides(snapshot, overrides: overrides)
+            sessions.append(TestDebugSession(index: i + 1, differentiator: parts.joined(separator: " + "), settingsSnapshot: finalSnapshot))
         }
 
         return sessions
     }
 
-    private func generateAutomationVariations(count: Int, site: TestDebugSite) -> [TestDebugSession] {
+    private func generateAutomationVariations(count: Int, site: TestDebugSite, overrides: TestDebugVariationOverrides = TestDebugVariationOverrides()) -> [TestDebugSession] {
         var sessions: [TestDebugSession] = []
         let poolSize = 24
         let defaultMode = proxyService.unifiedConnectionMode
@@ -220,13 +306,14 @@ class SettingVariationGenerator {
                 webViewPoolIndex: i % poolSize
             )
 
-            sessions.append(TestDebugSession(index: i + 1, differentiator: parts.joined(separator: " + "), settingsSnapshot: snapshot))
+            let finalSnapshot = applyOverrides(snapshot, overrides: overrides)
+            sessions.append(TestDebugSession(index: i + 1, differentiator: parts.joined(separator: " + "), settingsSnapshot: finalSnapshot))
         }
 
         return sessions
     }
 
-    private func generateSmartMatrix(count: Int, site: TestDebugSite) -> [TestDebugSession] {
+    private func generateSmartMatrix(count: Int, site: TestDebugSite, overrides: TestDebugVariationOverrides = TestDebugVariationOverrides()) -> [TestDebugSession] {
         var sessions: [TestDebugSession] = []
         let poolSize = 24
         let defaultMode = proxyService.unifiedConnectionMode

@@ -10,6 +10,7 @@ struct TestDebugProgressView: View {
             VStack(spacing: 20) {
                 waveHeader
                 progressBar
+                etaLabel
                 statsRow
                 controlButtons
                 sessionGrid
@@ -18,8 +19,13 @@ struct TestDebugProgressView: View {
             .padding(.vertical, 16)
         }
         .background(Color(.systemGroupedBackground))
-        .navigationTitle("Running Test")
+        .navigationTitle(vm.isRetryingFailed ? "Retrying Failed" : "Running Test")
         .navigationBarTitleDisplayMode(.inline)
+        .sheet(isPresented: $vm.showSessionLogSheet) {
+            if let session = vm.selectedSessionForLog {
+                TestDebugSessionLogSheet(session: session)
+            }
+        }
     }
 
     private var waveHeader: some View {
@@ -59,6 +65,24 @@ struct TestDebugProgressView: View {
             Text("\(Int(vm.progress * 100))%")
                 .font(.system(size: 11, weight: .bold, design: .monospaced))
                 .foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder
+    private var etaLabel: some View {
+        if let eta = vm.estimatedTimeRemaining {
+            HStack(spacing: 6) {
+                Image(systemName: "clock.fill")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(.purple.opacity(0.7))
+                Text(eta)
+                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .background(Color.purple.opacity(0.08))
+            .clipShape(.rect(cornerRadius: 10))
         }
     }
 
@@ -132,13 +156,24 @@ struct TestDebugProgressView: View {
 
     private var sessionGrid: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("SESSIONS")
-                .font(.system(size: 11, weight: .heavy, design: .monospaced))
-                .foregroundStyle(.secondary)
+            HStack {
+                Text("SESSIONS")
+                    .font(.system(size: 11, weight: .heavy, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text("Tap for logs")
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(.tertiary)
+            }
 
             LazyVGrid(columns: columns, spacing: 6) {
                 ForEach(vm.sessions) { session in
-                    sessionTile(session)
+                    Button {
+                        vm.showSessionLog(session)
+                    } label: {
+                        sessionTile(session)
+                    }
+                    .buttonStyle(.plain)
                 }
             }
         }

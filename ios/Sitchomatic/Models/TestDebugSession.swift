@@ -218,6 +218,34 @@ nonisolated struct TestDebugSettingsSnapshot: Sendable {
     }
 }
 
+nonisolated struct TestDebugVariationOverrides: Sendable {
+    var pinConnectionMode: ConnectionMode?
+    var pinPattern: String?
+    var pinStealth: Bool?
+    var pinHumanSim: Bool?
+    var pinFingerprint: Bool?
+    var pinTypingSpeed: (min: Int, max: Int)?
+    var pinSessionIsolation: AutomationSettings.SessionIsolationMode?
+    var pinTrueDetection: Bool?
+
+    var hasPins: Bool {
+        pinConnectionMode != nil || pinPattern != nil || pinStealth != nil ||
+        pinHumanSim != nil || pinFingerprint != nil || pinTypingSpeed != nil ||
+        pinSessionIsolation != nil || pinTrueDetection != nil
+    }
+
+    var summary: String {
+        var parts: [String] = []
+        if let mode = pinConnectionMode { parts.append("Net: \(mode.rawValue)") }
+        if let pat = pinPattern { parts.append("Pat: \(pat)") }
+        if let s = pinStealth { parts.append("Stealth: \(s ? "ON" : "OFF")") }
+        if let h = pinHumanSim { parts.append("Human: \(h ? "ON" : "OFF")") }
+        if let t = pinTrueDetection { parts.append("TrueDet: \(t ? "ON" : "OFF")") }
+        if let iso = pinSessionIsolation { parts.append("Iso: \(iso.rawValue)") }
+        return parts.isEmpty ? "None" : parts.joined(separator: ", ")
+    }
+}
+
 nonisolated struct TestDebugCredentialEntry: Sendable {
     let email: String
     let password: String
@@ -226,4 +254,27 @@ nonisolated struct TestDebugCredentialEntry: Sendable {
         !email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
         !password.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
+}
+
+nonisolated struct TestDebugRunSummary: Sendable, Identifiable {
+    let id: String
+    let date: Date
+    let site: String
+    let sessionCount: Int
+    let variationMode: String
+    let successCount: Int
+    let failedCount: Int
+    let unsureCount: Int
+    let timeoutCount: Int
+    let totalDuration: TimeInterval
+    let sessionSummaries: [TestDebugSessionSummary]
+}
+
+nonisolated struct TestDebugSessionSummary: Sendable, Identifiable {
+    let id: String
+    let index: Int
+    let differentiator: String
+    let status: String
+    let duration: TimeInterval?
+    let errorMessage: String?
 }

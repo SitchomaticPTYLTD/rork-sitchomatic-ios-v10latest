@@ -4,6 +4,7 @@ struct TestDebugSetupView: View {
     @Bindable var vm: TestDebugViewModel
     @State private var emailInputs: [String] = [""]
     @State private var passwordInputs: [String] = [""]
+    @State private var showOverridesSheet: Bool = false
 
     var body: some View {
         ScrollView {
@@ -13,6 +14,7 @@ struct TestDebugSetupView: View {
                 sitePickerSection
                 sessionCountSection
                 variationModeSection
+                overridesSection
                 startButton
             }
             .padding(.horizontal, 16)
@@ -261,6 +263,46 @@ struct TestDebugSetupView: View {
             .padding(4)
             .background(Color(.secondarySystemGroupedBackground))
             .clipShape(.rect(cornerRadius: 14))
+        }
+    }
+
+    private var overridesSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label("Pin Settings", systemImage: "pin.fill")
+                .font(.headline)
+
+            Button {
+                showOverridesSheet = true
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: vm.variationOverrides.hasPins ? "pin.circle.fill" : "pin.circle")
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundStyle(vm.variationOverrides.hasPins ? .purple : .secondary)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(vm.variationOverrides.hasPins ? "Custom Pins Active" : "No Pins Set")
+                            .font(.system(size: 13, weight: .bold, design: .monospaced))
+                            .foregroundStyle(.primary)
+                        Text(vm.variationOverrides.hasPins ? vm.variationOverrides.summary : "Tap to pin specific settings while varying everything else")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
+
+                    Spacer()
+
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(.tertiary)
+                }
+                .padding(14)
+                .background(Color(.secondarySystemGroupedBackground))
+                .clipShape(.rect(cornerRadius: 14))
+            }
+            .buttonStyle(.plain)
+        }
+        .sheet(isPresented: $showOverridesSheet) {
+            TestDebugOverridesView(overrides: $vm.variationOverrides)
         }
     }
 
