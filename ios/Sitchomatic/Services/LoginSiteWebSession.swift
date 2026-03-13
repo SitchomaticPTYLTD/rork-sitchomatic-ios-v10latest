@@ -54,6 +54,9 @@ class LoginSiteWebSession: NSObject {
     private(set) var lastFingerprintScore: FingerprintValidationService.FingerprintScore?
     var onFingerprintLog: ((String, PPSRLogEntry.Level) -> Void)?
     private let logger = DebugLogger.shared
+    private(set) var navigationCount: Int = 0
+    private(set) var processTerminated: Bool = false
+    var onProcessTerminated: (() -> Void)?
 
     init(targetURL: URL, networkConfig: ActiveNetworkConfig = .direct, proxyTarget: ProxyRotationService.ProxyTarget? = nil) {
         self.targetURL = targetURL
@@ -1464,6 +1467,11 @@ class LoginSiteWebSession: NSObject {
 
     func captureScreenshot() async -> UIImage? {
         guard let webView else { return nil }
+        return await RenderStableScreenshotService.shared.captureStableScreenshot(from: webView)
+    }
+
+    func captureScreenshotFast() async -> UIImage? {
+        guard let webView else { return nil }
         let config = WKSnapshotConfiguration()
         config.rect = webView.bounds
         do {
@@ -1765,7 +1773,24 @@ extension LoginSiteWebSession: WKNavigationDelegate {
     }
 
     nonisolated func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+        Task { @MainActor in
+            self.navigationCount += 1
+        }
         decisionHandler(.allow)
+    }
+
+    nonisolated func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        Task { @MainActor in
+            self.processTerminated = true
+            self.lastNavigationError = "WebKit content process terminated (crash)"
+            self.logger.log("LoginSiteWebSession: WKWebView content process TERMINATED — controlled recovery needed", category: .webView, level: .critical)
+            WebViewPool.shared.reportProcessTermination()
+            if let cont = self.pageLoadContinuation {
+                self.pageLoadContinuation = nil
+                cont.resume(returning: false)
+            }
+            self.onProcessTerminated?()
+        }
     }
 
     nonisolated func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse, decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {

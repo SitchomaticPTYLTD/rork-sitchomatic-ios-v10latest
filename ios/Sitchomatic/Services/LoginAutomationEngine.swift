@@ -28,6 +28,15 @@ class LoginAutomationEngine {
     private let networkFactory = NetworkSessionFactory.shared
     private let deadSessionDetector = DeadSessionDetector.shared
     private let replayLogger = SessionReplayLogger.shared
+    private let circuitBreaker = HostCircuitBreakerService.shared
+    private let challengeClassifier = ChallengePageClassifier.shared
+    private let crashRecovery = WebViewCrashRecoveryService.shared
+    private let lifetimeBudget = WebViewLifetimeBudgetService.shared
+    private let screenshotDedup = ScreenshotDedupService.shared
+    private let hostFingerprint = HostFingerprintLearningService.shared
+    private let adaptiveRetry = AdaptiveRetryService.shared
+    private let urlQualityScoring = URLQualityScoringService.shared
+    private let confidenceEngine = ConfidenceResultEngine.shared
     var onScreenshot: ((PPSRDebugScreenshot) -> Void)?
     var onPurgeScreenshots: (([String]) -> Void)?
     var onConnectionFailure: ((String) -> Void)?
@@ -50,6 +59,16 @@ class LoginAutomationEngine {
         let sessionId = "login_\(attempt.credential.username.prefix(12))_\(UUID().uuidString.prefix(6))"
         attempt.startedAt = Date()
 
+        let host = targetURL.host ?? targetURL.absoluteString
+        if !circuitBreaker.shouldAllow(host: host) {
+            let remaining = Int(circuitBreaker.cooldownRemaining(host: host))
+            logger.log("CircuitBreaker: BLOCKED \(host) — cooldown \(remaining)s remaining", category: .network, level: .warning)
+            attempt.status = .failed
+            attempt.errorMessage = "Host circuit breaker open — cooldown \(remaining)s"
+            attempt.completedAt = Date()
+            return .connectionFailure
+        }
+
         replayLogger.startSession(id: sessionId, targetURL: targetURL.absoluteString, credential: attempt.credential.username)
         replayLogger.log(sessionId: sessionId, action: "init", detail: "timeout=\(Int(timeout))s stealth=\(stealthEnabled)")
 
@@ -71,8 +90,13 @@ class LoginAutomationEngine {
         }
         logger.log("WebView session setUp (wipeAll: true) network=\(netConfig.label)", category: .webView, level: .trace, sessionId: sessionId)
         session.setUp(wipeAll: true)
+        session.onProcessTerminated = { [weak self] in
+            self?.logger.log("LoginEngine: WebView process terminated for \(sessionId) — crash recovery will handle", category: .webView, level: .critical, sessionId: sessionId)
+        }
         defer {
             session.tearDown(wipeAll: true)
+            crashRecovery.clearSession(sessionId)
+            lifetimeBudget.clearSession(sessionId)
             logger.log("WebView session tearDown (wipeAll: true)", category: .webView, level: .trace, sessionId: sessionId)
         }
 
@@ -109,10 +133,25 @@ class LoginAutomationEngine {
             logger.log("CONNECTION FAILURE for \(attempt.credential.username) on \(targetURL.host ?? "")", category: .network, level: .error, sessionId: sessionId, durationMs: totalMs)
             onURLFailure?(targetURL.absoluteString)
             onUnusualFailure?("Connection failure for \(attempt.credential.username)")
+            circuitBreaker.recordFailure(host: host, type: .connectionError)
+            urlQualityScoring.recordFailure(urlString: targetURL.absoluteString, failureType: "connectionFailure")
+        }
+
+        if outcome == .timeout {
+            circuitBreaker.recordFailure(host: host, type: .timeout)
+            urlQualityScoring.recordFailure(urlString: targetURL.absoluteString, failureType: "timeout")
         }
 
         if outcome == .success || outcome == .noAcc || outcome == .permDisabled || outcome == .tempDisabled {
             onURLSuccess?(targetURL.absoluteString)
+            circuitBreaker.recordSuccess(host: host)
+            if let started = attempt.startedAt {
+                urlQualityScoring.recordSuccess(urlString: targetURL.absoluteString, latencyMs: Int(Date().timeIntervalSince(started) * 1000))
+            }
+            if outcome == .success {
+                urlQualityScoring.recordLoginSuccess(urlString: targetURL.absoluteString)
+                hostFingerprint.recordPatternOutcome(host: host, pattern: "last_used", success: true)
+            }
         }
 
         if let started = attempt.startedAt {
@@ -170,6 +209,19 @@ class LoginAutomationEngine {
             }
         }
 
+        if !loaded && session.processTerminated {
+            let recovered = await crashRecovery.handleProcessTermination(session: session, sessionId: sessionId) { msg, level in
+                attempt.logs.append(PPSRLogEntry(message: msg, level: level))
+            }
+            if recovered {
+                attempt.logs.append(PPSRLogEntry(message: "WebView crash recovered — continuing", level: .success))
+                loaded = true
+            } else {
+                failAttempt(attempt, message: "WebView process crashed — recovery failed")
+                return .connectionFailure
+            }
+        }
+
         guard loaded else {
             let errorDetail = session.lastNavigationError ?? "Unknown error"
             logger.log("FATAL: Page load failed after 3 attempts — \(errorDetail)", category: .network, level: .critical, sessionId: sessionId)
@@ -180,6 +232,28 @@ class LoginAutomationEngine {
             return .connectionFailure
         }
         replayLogger.log(sessionId: sessionId, action: "page_loaded", detail: "loaded after retries")
+
+        let challengeResult = await challengeClassifier.classify(session: session)
+        if challengeResult.type != .none {
+            attempt.logs.append(PPSRLogEntry(message: "CHALLENGE DETECTED: \(challengeResult.type.rawValue) (confidence: \(String(format: "%.0f%%", challengeResult.confidence * 100))) — action: \(challengeResult.suggestedAction.rawValue)", level: .warning))
+            logger.log("Challenge page detected for \(attempt.credential.username): \(challengeResult.type.rawValue)", category: .evaluation, level: .warning, sessionId: sessionId)
+
+            switch challengeResult.suggestedAction {
+            case .abort:
+                failAttempt(attempt, message: "Challenge page: \(challengeResult.type.rawValue) — aborting")
+                return .connectionFailure
+            case .waitAndRetry:
+                attempt.logs.append(PPSRLogEntry(message: "Waiting 5s before retrying due to \(challengeResult.type.rawValue)", level: .info))
+                try? await Task.sleep(for: .seconds(5))
+            case .rotateProxy, .switchNetwork, .rotateURL:
+                attempt.logs.append(PPSRLogEntry(message: "Challenge suggests network change — proceeding with caution", level: .warning))
+            case .proceed:
+                break
+            }
+        }
+
+        let pageHost = session.targetURL.host ?? ""
+        let _ = await hostFingerprint.captureSignature(from: session, host: pageHost)
 
         let extraDelay = automationSettings.pageLoadExtraDelayMs
         if extraDelay > 0 {
@@ -1235,6 +1309,7 @@ class LoginAutomationEngine {
 
     private func makeSlowDebugCaptureTaskIfNeeded(session: LoginSiteWebSession, attempt: LoginAttempt, sessionId: String) -> Task<Void, Never>? {
         guard automationSettings.slowDebugMode else { return nil }
+        screenshotDedup.resetSession()
         return Task { [weak self] in
             guard let self else { return }
             var captureIndex = 1
@@ -1246,6 +1321,13 @@ class LoginAutomationEngine {
                 }
                 guard !Task.isCancelled else { return }
                 guard !attempt.status.isTerminal else { return }
+
+                if let img = await session.captureScreenshotFast(), self.screenshotDedup.isDuplicate(img) {
+                    self.logger.log("Slow debug capture \(captureIndex) SKIPPED (duplicate)", category: .screenshot, level: .trace, sessionId: sessionId)
+                    captureIndex += 1
+                    continue
+                }
+
                 logger.log("Slow debug capture \(captureIndex) status=\(attempt.status.rawValue)", category: .screenshot, level: .trace, sessionId: sessionId)
                 await self.captureDebugScreenshot(
                     session: session,

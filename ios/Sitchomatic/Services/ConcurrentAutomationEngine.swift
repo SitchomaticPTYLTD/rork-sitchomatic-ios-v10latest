@@ -78,6 +78,10 @@ class ConcurrentAutomationEngine {
     private let networkFactory = NetworkSessionFactory.shared
     private let urlCooldown = URLCooldownService.shared
     private let throttler = AutomationThrottler(maxConcurrency: 5)
+    private let circuitBreaker = HostCircuitBreakerService.shared
+    private let urlQualityScoring = URLQualityScoringService.shared
+    private let proxyQualityDecay = ProxyQualityDecayService.shared
+    private let preflightService = PreflightSmokeTestService.shared
     private(set) var isRunning: Bool = false
     private var cancelFlag: Bool = false
     private var deadAccounts: Set<String> = []
@@ -317,6 +321,24 @@ class ConcurrentAutomationEngine {
             logger.log("ConcurrentEngine: proxy pre-check FAILED for login batch — proceeding with caution", category: .network, level: .warning)
         }
 
+        if let firstURL = urls.first {
+            let smokeResult = await preflightService.runPreflightTest(
+                targetURL: firstURL,
+                networkConfig: netConfig,
+                proxyTarget: proxyTarget,
+                stealthEnabled: engine.stealthEnabled,
+                timeout: 15
+            )
+            if !smokeResult.passed {
+                logger.log("ConcurrentEngine: PREFLIGHT SMOKE TEST FAILED — \(smokeResult.detail)", category: .automation, level: .critical)
+                if !smokeResult.proxyWorking {
+                    logger.log("ConcurrentEngine: network route broken — consider rotating proxy/URL before batch", category: .network, level: .critical)
+                }
+            } else {
+                logger.log("ConcurrentEngine: preflight passed in \(smokeResult.latencyMs)ms", category: .automation, level: .success)
+            }
+        }
+
         var allResults: [(String, LoginOutcome)] = []
         var successCount = 0
         var failureCount = 0
@@ -333,14 +355,20 @@ class ConcurrentAutomationEngine {
             var effectiveURLs: [Int: URL] = [:]
             for index in batchIndices {
                 let url = urls[index % urls.count]
+                let urlHost = url.host ?? ""
                 if urlCooldown.isAutoDisabled(url.absoluteString) {
-                    logger.log("ConcurrentEngine: URL \(url.host ?? "") is AUTO-DISABLED — skipping", category: .network, level: .warning)
+                    logger.log("ConcurrentEngine: URL \(urlHost) is AUTO-DISABLED — skipping", category: .network, level: .warning)
                     let alternate = urls.first { !self.urlCooldown.isAutoDisabled($0.absoluteString) && !self.urlCooldown.isOnCooldown($0.absoluteString) && $0 != url }
                     effectiveURLs[index] = alternate ?? url
                 } else if urlCooldown.isOnCooldown(url.absoluteString) {
                     let remaining = Int(urlCooldown.cooldownRemaining(url.absoluteString))
-                    logger.log("ConcurrentEngine: URL \(url.host ?? "") on cooldown (\(remaining)s left) — rotating", category: .network, level: .warning)
+                    logger.log("ConcurrentEngine: URL \(urlHost) on cooldown (\(remaining)s left) — rotating", category: .network, level: .warning)
                     let alternate = urls.first { !self.urlCooldown.isOnCooldown($0.absoluteString) && !self.urlCooldown.isAutoDisabled($0.absoluteString) && $0 != url }
+                    effectiveURLs[index] = alternate ?? url
+                } else if !circuitBreaker.shouldAllow(host: urlHost) {
+                    let remaining = Int(circuitBreaker.cooldownRemaining(host: urlHost))
+                    logger.log("ConcurrentEngine: URL \(urlHost) circuit OPEN (\(remaining)s left) — rotating", category: .network, level: .warning)
+                    let alternate = urls.first { self.circuitBreaker.shouldAllow(host: $0.host ?? "") && !self.urlCooldown.isOnCooldown($0.absoluteString) && $0 != url }
                     effectiveURLs[index] = alternate ?? url
                 } else {
                     effectiveURLs[index] = url
