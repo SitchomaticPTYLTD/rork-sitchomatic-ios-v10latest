@@ -1641,9 +1641,26 @@ struct FlowSettingsView: View {
             }
 
             Section("Viewport") {
+                Toggle(isOn: Binding(
+                    get: { settings.useWebViewPoolFingerprints },
+                    set: { newValue in
+                        settings.useWebViewPoolFingerprints = newValue
+                        if newValue { settings.randomizeViewportSize = false }
+                    }
+                )) {
+                    Text("WebView Pool Fingerprints")
+                }
                 Stepper("Width: \(settings.viewportWidth)px", value: $settings.viewportWidth, in: 320...1920, step: 10)
                 Stepper("Height: \(settings.viewportHeight)px", value: $settings.viewportHeight, in: 480...1080, step: 10)
-                Toggle("Randomize Viewport", isOn: $settings.randomizeViewportSize)
+                Toggle(isOn: Binding(
+                    get: { settings.randomizeViewportSize },
+                    set: { newValue in
+                        settings.randomizeViewportSize = newValue
+                        if newValue { settings.useWebViewPoolFingerprints = false }
+                    }
+                )) {
+                    Text("Randomize Viewport")
+                }
                 Toggle("Mobile Emulation", isOn: $settings.mobileViewportEmulation)
             }
         }

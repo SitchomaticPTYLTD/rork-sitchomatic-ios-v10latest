@@ -15,7 +15,7 @@ nonisolated struct AutomationSettings: Codable, Sendable {
     var trueDetectionSubmitSelector: String = "#login-submit"
     var trueDetectionSuccessMarkers: [String] = ["balance", "wallet", "my account", "logout"]
     var trueDetectionTerminalKeywords: [String] = ["temporarily disabled", "account is disabled"]
-    var trueDetectionErrorBannerSelectors: [String] = [".error-banner", ".alert-danger"]
+    var trueDetectionErrorBannerSelectors: [String] = [".error-banner", ".alert-danger", ".alert-error", ".login-error", ".notification-error", "[role='alert']"]
     var trueDetectionNoProxyRotation: Bool = false
     var trueDetectionStrictWaits: Bool = true
     var trueDetectionIgnorePlaceholders: Bool = true
@@ -269,7 +269,8 @@ nonisolated struct AutomationSettings: Codable, Sendable {
     // MARK: - Viewport & Window
     var viewportWidth: Int = 1280
     var viewportHeight: Int = 800
-    var randomizeViewportSize: Bool = true
+    var useWebViewPoolFingerprints: Bool = true
+    var randomizeViewportSize: Bool = false
     var viewportSizeVariancePx: Int = 50
     var mobileViewportEmulation: Bool = true
     var mobileViewportWidth: Int = 390

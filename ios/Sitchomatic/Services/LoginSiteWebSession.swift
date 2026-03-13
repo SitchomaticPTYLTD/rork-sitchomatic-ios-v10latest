@@ -544,10 +544,25 @@ class LoginSiteWebSession: NSObject {
                 return (true, keyword)
             }
         }
-        let bannerSelectors = [".error-banner", ".alert-danger", ".alert-error", ".error-message", ".login-error", ".form-error", ".notification-error", ".message-error", "[class*='error']", "[class*='alert']", "[class*='disabled']", "[role='alert']"]
+        let bannerSelectors = [".error-banner", ".alert-danger", ".alert-error", ".login-error", ".notification-error", "[role='alert']"]
         for selector in bannerSelectors {
             let escaped = selector.replacingOccurrences(of: "'", with: "\\'")
-            let js = "(function(){var el=document.querySelector('\(escaped)');if(!el||el.offsetParent===null)return'NONE';return'BANNER:'+el.textContent.trim().substring(0,200);})();"
+            let js = """
+            (function(){
+                var el=document.querySelector('\(escaped)');
+                if(!el||el.offsetParent===null)return'NONE';
+                var style=window.getComputedStyle(el);
+                var bg=style.backgroundColor||'';
+                var isRed=false;
+                var m=bg.match(/rgba?\\((\\d+),\\s*(\\d+),\\s*(\\d+)/);
+                if(m){var r=parseInt(m[1]),g=parseInt(m[2]),b=parseInt(m[3]);isRed=r>140&&g<80&&b<80;}
+                if(!isRed){var p=el.parentElement;for(var i=0;i<3&&p;i++){var ps=window.getComputedStyle(p).backgroundColor||'';var pm=ps.match(/rgba?\\((\\d+),\\s*(\\d+),\\s*(\\d+)/);if(pm){var pr=parseInt(pm[1]),pg=parseInt(pm[2]),pb=parseInt(pm[3]);if(pr>140&&pg<80&&pb<80){isRed=true;break;}}p=p.parentElement;}}
+                if(!isRed)return'NONE';
+                var text=el.textContent.trim();
+                if(!/error/i.test(text)&&text.length>100)return'NONE';
+                return'BANNER:'+text.substring(0,200);
+            })();
+            """
             let result = await executeJS(js)
             if let result, result.hasPrefix("BANNER:") {
                 return (true, String(result.dropFirst(7)))
@@ -1365,11 +1380,29 @@ class LoginSiteWebSession: NSObject {
                 }
             }
 
-            let errorBannerTerms = ["error", "error!", "login error", "an error occurred", "error occurred"]
-            for term in errorBannerTerms {
-                if contentLower.contains(term) && contentChanged {
-                    let context = pageText.components(separatedBy: .newlines)
-                        .first { $0.lowercased().contains("error") }
+            if contentChanged {
+                let redBannerJS = """
+                (function(){
+                    var sels=['.error-banner','.alert-danger','.alert-error','.login-error','.notification-error',"[role='alert']"];
+                    for(var i=0;i<sels.length;i++){
+                        var el=document.querySelector(sels[i]);
+                        if(!el||el.offsetParent===null)continue;
+                        var style=window.getComputedStyle(el);
+                        var bg=style.backgroundColor||'';
+                        var m=bg.match(/rgba?\\((\\d+),\\s*(\\d+),\\s*(\\d+)/);
+                        var isRed=false;
+                        if(m){var r=parseInt(m[1]),g=parseInt(m[2]),b=parseInt(m[3]);isRed=r>140&&g<80&&b<80;}
+                        if(!isRed){var p=el.parentElement;for(var j=0;j<3&&p;j++){var ps=window.getComputedStyle(p).backgroundColor||'';var pm=ps.match(/rgba?\\((\\d+),\\s*(\\d+),\\s*(\\d+)/);if(pm){var pr=parseInt(pm[1]),pg=parseInt(pm[2]),pb=parseInt(pm[3]);if(pr>140&&pg<80&&pb<80){isRed=true;break;}}p=p.parentElement;}}
+                        if(!isRed)continue;
+                        var text=(el.textContent||'').trim();
+                        if(/error/i.test(text))return'RED_BANNER:'+text.substring(0,200);
+                    }
+                    return'NONE';
+                })();
+                """
+                let bannerResult = await executeJS(redBannerJS)
+                if let bannerResult, bannerResult.hasPrefix("RED_BANNER:") {
+                    let bannerText = String(bannerResult.dropFirst(11))
                     return RapidPollResult(
                         welcomeTextFound: false,
                         welcomeContext: nil,
@@ -1380,7 +1413,7 @@ class LoginSiteWebSession: NSObject {
                         navigationDetected: navDetected,
                         anyContentChange: contentChanged,
                         errorBannerDetected: true,
-                        errorBannerText: context?.trimmingCharacters(in: .whitespacesAndNewlines)
+                        errorBannerText: bannerText.trimmingCharacters(in: .whitespacesAndNewlines)
                     )
                 }
             }

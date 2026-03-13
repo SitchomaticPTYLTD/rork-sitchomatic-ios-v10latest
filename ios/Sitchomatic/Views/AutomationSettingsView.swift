@@ -1768,13 +1768,33 @@ struct AutomationSettingsView: View {
 
     private var viewportWindowSection: some View {
         Section {
+            Toggle(isOn: Binding(
+                get: { vm.automationSettings.useWebViewPoolFingerprints },
+                set: { newValue in
+                    vm.automationSettings.useWebViewPoolFingerprints = newValue
+                    if newValue { vm.automationSettings.randomizeViewportSize = false }
+                }
+            )) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("WebView Pool Fingerprints")
+                    Text("Use trusted fingerprint pool for viewport & UA").font(.caption2).foregroundStyle(.secondary)
+                }
+            }
+            .tint(.purple)
+
             Stepper("Width: \(vm.automationSettings.viewportWidth)px", value: $vm.automationSettings.viewportWidth, in: 320...2560, step: 10)
             Stepper("Height: \(vm.automationSettings.viewportHeight)px", value: $vm.automationSettings.viewportHeight, in: 480...1440, step: 10)
 
-            Toggle(isOn: $vm.automationSettings.randomizeViewportSize) {
+            Toggle(isOn: Binding(
+                get: { vm.automationSettings.randomizeViewportSize },
+                set: { newValue in
+                    vm.automationSettings.randomizeViewportSize = newValue
+                    if newValue { vm.automationSettings.useWebViewPoolFingerprints = false }
+                }
+            )) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Randomize Viewport")
-                    Text("Add variance per session").font(.caption2).foregroundStyle(.secondary)
+                    Text("Add random variance per session").font(.caption2).foregroundStyle(.secondary)
                 }
             }
             .tint(accentColor)

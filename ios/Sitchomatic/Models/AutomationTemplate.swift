@@ -211,6 +211,7 @@ nonisolated struct AutomationTemplate: Codable, Sendable, Identifiable {
             s.clearCacheBetweenAttempts = true
             s.clearIndexedDBBetweenAttempts = true
             s.freshWebViewPerAttempt = true
+            s.useWebViewPoolFingerprints = false
             s.randomizeViewportSize = true
             s.viewportSizeVariancePx = 80
             s.delayRandomizationEnabled = true

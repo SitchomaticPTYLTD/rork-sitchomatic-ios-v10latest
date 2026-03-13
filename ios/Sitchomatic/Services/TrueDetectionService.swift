@@ -53,7 +53,7 @@ class TrueDetectionService {
             "contact customer service", "contact support",
             "your account is locked", "account is restricted"
         ]
-        var errorBannerSelectors: [String] = [".error-banner", ".alert-danger", ".alert-error", ".error-message", ".login-error", ".form-error", ".notification-error", ".message-error", "[class*='error']", "[class*='alert']", "[class*='disabled']", "[role='alert']"]
+        var errorBannerSelectors: [String] = [".error-banner", ".alert-danger", ".alert-error", ".login-error", ".notification-error", "[role='alert']"]
     }
 
     private var cooldownAccounts: [String: Date] = [:]
@@ -412,9 +412,32 @@ class TrueDetectionService {
             (function() {
                 var el = document.querySelector('\(escaped)');
                 if (!el) return 'NOT_FOUND';
-                var text = (el.textContent || '').trim();
+                var text = (el.textContent || '').trim().toLowerCase();
                 var visible = el.offsetParent !== null || el.offsetHeight > 0;
                 if (!visible) return 'NOT_VISIBLE';
+                var style = window.getComputedStyle(el);
+                var bg = style.backgroundColor || '';
+                var isRed = false;
+                var m = bg.match(/rgba?\\((\\d+),\\s*(\\d+),\\s*(\\d+)/);
+                if (m) {
+                    var r = parseInt(m[1]), g = parseInt(m[2]), b = parseInt(m[3]);
+                    isRed = r > 140 && g < 80 && b < 80;
+                }
+                if (!isRed) {
+                    var parent = el.parentElement;
+                    for (var i = 0; i < 3 && parent; i++) {
+                        var ps = window.getComputedStyle(parent).backgroundColor || '';
+                        var pm = ps.match(/rgba?\\((\\d+),\\s*(\\d+),\\s*(\\d+)/);
+                        if (pm) {
+                            var pr = parseInt(pm[1]), pg = parseInt(pm[2]), pb = parseInt(pm[3]);
+                            if (pr > 140 && pg < 80 && pb < 80) { isRed = true; break; }
+                        }
+                        parent = parent.parentElement;
+                    }
+                }
+                if (!isRed) return 'NOT_RED';
+                var hasErrorText = /^error!?$/i.test(text) || /error/i.test(text);
+                if (!hasErrorText && text.length > 100) return 'NOT_ERROR_TEXT';
                 return 'BANNER:' + text.substring(0, 200);
             })();
             """
