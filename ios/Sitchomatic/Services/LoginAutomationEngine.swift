@@ -377,7 +377,7 @@ class LoginAutomationEngine {
             attempt.logs.append(PPSRLogEntry(message: "Using saved calibration (confidence: \(String(format: "%.0f%%", calibration!.confidence * 100)))", level: .info))
         }
 
-        let maxSubmitCycles = 4
+        let maxSubmitCycles = max(3, automationSettings.maxSubmitCycles)
         var finalOutcome: LoginOutcome = .noAcc
         var lastEvaluation: EvaluationResult?
         var usedPatterns: [LoginFormPattern] = []
@@ -573,8 +573,8 @@ class LoginAutomationEngine {
                 duplicateContentCount += 1
                 attempt.logs.append(PPSRLogEntry(message: "Cycle \(cycle): DUPLICATE CONTENT detected (\(duplicateContentCount)x same hash) — page may be stuck", level: .warning))
                 logger.log("Duplicate content hash on cycle \(cycle) — stuck page likely", category: .evaluation, level: .warning, sessionId: sessionId)
-                if duplicateContentCount >= 2 {
-                    attempt.logs.append(PPSRLogEntry(message: "Cycle \(cycle): 2+ duplicate pages — skipping re-evaluation, treating as stuck", level: .error))
+                if duplicateContentCount >= 6 {
+                    attempt.logs.append(PPSRLogEntry(message: "Cycle \(cycle): 6+ duplicate pages — skipping re-evaluation, treating as stuck", level: .error))
                     failAttempt(attempt, message: "Page stuck — same content after \(duplicateContentCount) consecutive cycles")
                     await captureDebugScreenshot(session: session, attempt: attempt, step: "stuck_page", note: "Same content hash after \(duplicateContentCount) cycles", autoResult: .unknown)
                     return .connectionFailure

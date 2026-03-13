@@ -1,20 +1,45 @@
-# Part 3: Auto-Apply Winner, Connection Pre-Check & Heatmap
+# Fix Login Attempt Logic: Require 3+ Attempts Before "No Account" & Fix Content Hash Bail-Out
 
-**Part 3 of the Test & Debug improvements (items 8–10):**
+## Problem
+The app currently declares "No Account" too quickly. The correct logic is:
+- **Temporarily Disabled = the account EXISTS** (wrong password triggered a lock)
+- **3+ fully completed login attempts with NO temp disabled = No Account**
+- For safety, 4–5 full attempts before concluding no account
+- Seeing the same "incorrect password" page across cycles is normal — the app shouldn't bail out calling it "stuck"
 
-## Features
+## Changes
 
-- **Apply Winner Settings** — On the results screen, the gold winner card gets an "Apply These Settings" button that copies the winning session's configuration (network mode, pattern, typing speed, stealth, etc.) directly into the app's active automation settings with one tap
-- **Connection Pre-Check** — Before each session attempts a login, a quick connectivity probe runs against the target site using that session's network config. Sessions with dead/unreachable connections are immediately marked as "Connection Failure" instead of wasting 90 seconds on a timeout
-- **Heatmap Visualization** — A new third tab ("Heatmap") on the results screen shows a color-coded matrix of which setting dimensions (network mode, pattern, typing speed, stealth, human sim, isolation) correlated with success vs failure, making it easy to spot winning combos at a glance
+### 1. Remove Content Hash Bail-Out (Too Aggressive)
+- Currently, 2 consecutive identical page content hashes causes the engine to declare "page stuck" and abort
+- This is wrong because seeing the same "incorrect password" error page across multiple submit cycles is **expected behavior**
+- **Change:** Increase the duplicate content hash threshold from 2 to 6, so it only triggers for truly stuck pages (not normal error repetition)
 
-## Design
+### 2. Use the Setting Instead of Hardcoded Cycles
+- The engine hardcodes `maxSubmitCycles = 4` but there's already a setting `automationSettings.maxSubmitCycles` (default 5)
+- **Change:** Use the setting value, and increase the default from 5 to 5 (keeping it, but now actually using it)
 
-- **Apply Winner button** — Purple gradient button below the winner card text, with a "wand.and.stars" icon; triggers a haptic confirmation and shows a brief "Settings Applied ✓" toast
-- **Pre-check indicator** — Each session tile briefly shows a "signal checking" animation before transitioning to "running"; failed pre-checks show immediately as connection failures with a "wifi.slash" icon
-- **Heatmap tab** — Grid layout with setting dimensions as rows and values as columns; each cell is color-coded from deep red (0% success) through yellow (50%) to bright green (100%); cell shows the fraction (e.g. "3/4") for quick reading
+### 3. Add "Minimum Attempts Before No Account" Setting
+- New setting: **Min Attempts Before No Acc** (default: 4, range 3–8)
+- This tracks how many **full login runs** (not just cycles within one run) a credential needs before it can be marked "No Account"
+- Appears in the Automation Settings screen under the Retry / Requeue section
 
-## Screens
+### 4. Track Full Attempt Count Per Credential
+- Add a counter on each credential that tracks how many **fully completed login attempts** (where the form was filled and submitted) have occurred
+- This persists across batch runs so the app remembers previous attempts
 
-- **Results Screen** — Updated with 3 tabs: Grid, Ranked, Heatmap. Winner card now includes the Apply button
-- **Heatmap Tab** — Scrollable grid showing success rates broken down by Network Mode, Pattern, Typing Speed, Stealth ON/OFF, Human Sim ON/OFF, and Session Isolation mode
+### 5. Requeue Instead of Marking "No Account" Too Early
+- When the engine returns "noAcc" but the credential hasn't reached the minimum attempt threshold yet:
+  - **Don't mark as No Account**
+  - **Don't blacklist**
+  - Instead, reset to "Untested" and requeue to bottom for another attempt
+  - Log: "Incorrect password but only X/4 attempts — requeuing for confirmation"
+- Only after reaching the minimum (default 4) fully completed attempts with no "temporarily disabled" seen → mark as No Account and blacklist
+
+### 6. Temp Disabled = Account Confirmed
+- When "temporarily disabled" is detected, the credential is confirmed to have an active account
+- Log clearly: "ACCOUNT CONFIRMED — temp disabled means account exists"
+- If the credential has assigned alternative passwords, it should be queued for retry with the next password
+
+### 7. Settings UI Update
+- Add the new "Min Attempts Before No Acc" stepper (3–8) in the Automation Settings under Retry / Requeue
+- Add a label explaining: "Minimum full login attempts before declaring No Account (temp disabled = account exists)"

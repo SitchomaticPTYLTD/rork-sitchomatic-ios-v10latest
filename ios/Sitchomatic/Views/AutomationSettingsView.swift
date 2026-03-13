@@ -1627,6 +1627,13 @@ struct AutomationSettingsView: View {
             Stepper("Max Requeue Count: \(vm.automationSettings.maxRequeueCount)", value: $vm.automationSettings.maxRequeueCount, in: 0...20)
 
             VStack(alignment: .leading, spacing: 4) {
+                Stepper("Min Attempts Before No Acc: \(vm.automationSettings.minAttemptsBeforeNoAcc)", value: $vm.automationSettings.minAttemptsBeforeNoAcc, in: 3...8)
+                Text("Minimum full login attempts before declaring No Account. Temp disabled = account exists.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
                 Text("Cycle Pause Range").font(.subheadline)
                 HStack(spacing: 12) {
                     VStack(alignment: .leading) {

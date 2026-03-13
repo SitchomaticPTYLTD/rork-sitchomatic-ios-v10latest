@@ -614,13 +614,21 @@ class LoginViewModel {
             consecutiveUnusualFailures = 0
 
         case .noAcc:
-            credential.recordResult(success: false, duration: duration, error: attempt.errorMessage, detail: "no account")
-            log("\(credential.username) — NO ACC: incorrect credentials", level: .error)
-            consecutiveUnusualFailures = 0
-            if blacklistService.autoBlacklistNoAcc {
-                blacklistService.addToBlacklist(credential.username, reason: "Auto: no account")
-                log("\(credential.username) — auto-added to blacklist (no acc)", level: .warning)
+            credential.recordFullLoginAttempt()
+            let minAttempts = automationSettings.minAttemptsBeforeNoAcc
+            if credential.fullLoginAttemptCount < minAttempts && !credential.accountConfirmedViaTempDisabled {
+                credential.status = .untested
+                requeueCredentialToBottom(credential)
+                log("\(credential.username) — incorrect password but only \(credential.fullLoginAttemptCount)/\(minAttempts) attempts — requeuing for confirmation", level: .warning)
+            } else {
+                credential.recordResult(success: false, duration: duration, error: attempt.errorMessage, detail: "no account")
+                log("\(credential.username) — NO ACC: \(credential.fullLoginAttemptCount) attempts with no temp disabled — confirmed no account", level: .error)
+                if blacklistService.autoBlacklistNoAcc {
+                    blacklistService.addToBlacklist(credential.username, reason: "Auto: no account after \(credential.fullLoginAttemptCount) attempts")
+                    log("\(credential.username) — auto-added to blacklist (no acc)", level: .warning)
+                }
             }
+            consecutiveUnusualFailures = 0
 
         case .permDisabled:
             credential.recordResult(success: false, duration: duration, error: attempt.errorMessage, detail: "permanently disabled")
@@ -630,8 +638,13 @@ class LoginViewModel {
             log("\(credential.username) — auto-added to blacklist (perm disabled)", level: .warning)
 
         case .tempDisabled:
+            credential.recordFullLoginAttempt()
+            credential.confirmAccountExists()
             credential.recordResult(success: false, duration: duration, error: attempt.errorMessage, detail: "temporarily disabled")
-            log("\(credential.username) — TEMP DISABLED (moved to temp disabled section)", level: .warning)
+            log("\(credential.username) — ACCOUNT CONFIRMED — temp disabled means account exists", level: .warning)
+            if !credential.assignedPasswords.isEmpty && credential.nextPasswordIndex < credential.assignedPasswords.count {
+                log("\(credential.username) — has \(credential.untestedPasswordCount) untested password(s) — queued for alt password retry", level: .info)
+            }
             consecutiveUnusualFailures = 0
 
         case .redBannerError:
@@ -753,10 +766,12 @@ class LoginViewModel {
                             self.handleOutcome(outcome, credential: cred, attempt: attempt)
                             self.updateRecoveryForOutcome(outcome, credential: cred, attempt: attempt)
 
-                            switch outcome {
-                            case .success: batchWorking += 1
-                            case .noAcc, .permDisabled, .tempDisabled: batchDead += 1
-                            case .unsure, .timeout, .connectionFailure, .redBannerError: batchRequeued += 1
+                            if cred.status == .untested {
+                                batchRequeued += 1
+                            } else if outcome == .success {
+                                batchWorking += 1
+                            } else {
+                                batchDead += 1
                             }
 
                             self.persistCredentials()
@@ -829,10 +844,12 @@ class LoginViewModel {
                             self.handleOutcome(outcome, credential: cred, attempt: attempt)
                             self.updateRecoveryForOutcome(outcome, credential: cred, attempt: attempt)
 
-                            switch outcome {
-                            case .success: batchWorking += 1
-                            case .noAcc, .permDisabled, .tempDisabled: batchDead += 1
-                            case .unsure, .timeout, .connectionFailure, .redBannerError: batchRequeued += 1
+                            if cred.status == .untested {
+                                batchRequeued += 1
+                            } else if outcome == .success {
+                                batchWorking += 1
+                            } else {
+                                batchDead += 1
                             }
 
                             self.persistCredentials()

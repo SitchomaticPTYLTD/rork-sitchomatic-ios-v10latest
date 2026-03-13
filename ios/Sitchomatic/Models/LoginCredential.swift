@@ -23,6 +23,8 @@ class LoginCredential: Identifiable {
     var assignedPasswords: [String] = []
     var nextPasswordIndex: Int = 0
     var lastTempDisabledCheck: Date?
+    var fullLoginAttemptCount: Int = 0
+    var accountConfirmedViaTempDisabled: Bool = false
 
     var displayStatus: String { status.rawValue }
     var isWorking: Bool { status == .working }
@@ -48,6 +50,14 @@ class LoginCredential: Identifiable {
 
     var untestedPasswordCount: Int {
         max(0, assignedPasswords.count - nextPasswordIndex)
+    }
+
+    func recordFullLoginAttempt() {
+        fullLoginAttemptCount += 1
+    }
+
+    func confirmAccountExists() {
+        accountConfirmedViaTempDisabled = true
     }
 
     init(username: String, password: String) {
