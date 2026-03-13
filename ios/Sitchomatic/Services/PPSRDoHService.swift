@@ -42,14 +42,14 @@ class PPSRDoHService {
     static let defaultProviders: [DoHProvider] = [
         DoHProvider(name: "Cloudflare", url: "https://cloudflare-dns.com/dns-query"),
         DoHProvider(name: "Google", url: "https://dns.google/dns-query"),
-        DoHProvider(name: "Quad9", url: "https://dns.quad9.net:5053/dns-query"),
-        DoHProvider(name: "OpenDNS", url: "https://doh.opendns.com/dns-query"),
-        DoHProvider(name: "Mullvad", url: "https://dns.mullvad.net/dns-query"),
-        DoHProvider(name: "AdGuard", url: "https://dns.adguard-dns.com/dns-query"),
+        DoHProvider(name: "Seby AU", url: "https://doh.seby.io/dns-query"),
+        DoHProvider(name: "AdFilter Sydney", url: "https://syd.adfilter.net/dns-query"),
+        DoHProvider(name: "AdFilter Adelaide", url: "https://adl.adfilter.net/dns-query"),
+        DoHProvider(name: "Quad9 Sydney", url: "https://dns.quad9.net:5053/dns-query"),
         DoHProvider(name: "NextDNS", url: "https://dns.nextdns.io/dns-query"),
         DoHProvider(name: "ControlD", url: "https://freedns.controld.com/p0"),
-        DoHProvider(name: "CleanBrowsing", url: "https://doh.cleanbrowsing.org/doh/security-filter/"),
-        DoHProvider(name: "DNS.SB", url: "https://doh.dns.sb/dns-query"),
+        DoHProvider(name: "AliDNS", url: "https://dns.alidns.com/dns-query"),
+        DoHProvider(name: "Wikimedia", url: "https://wikimedia-dns.org/dns-query"),
     ]
 
     var managedProviders: [ManagedDoHProvider] = []
