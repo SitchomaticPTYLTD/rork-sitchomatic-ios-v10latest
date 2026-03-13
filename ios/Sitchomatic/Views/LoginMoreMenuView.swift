@@ -150,6 +150,42 @@ struct LoginMoreMenuView: View {
                         }
                     }
                 }
+
+                NavigationLink {
+                    SessionReplayDebuggerView(vm: vm)
+                } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: "play.rectangle.on.rectangle.fill")
+                            .font(.title3).foregroundStyle(.purple)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Replay Debugger").font(.subheadline.bold())
+                            Text("Step-by-step session timeline with screenshots & logs")
+                                .font(.caption2).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+
+                NavigationLink {
+                    TapHeatmapOverlayView(vm: vm)
+                } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: "viewfinder.rectangular")
+                            .font(.title3).foregroundStyle(.cyan)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Tap Heatmap").font(.subheadline.bold())
+                            Text("Vision field/button detection overlay on screenshots")
+                                .font(.caption2).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        if !vm.debugScreenshots.isEmpty {
+                            Text("\(vm.debugScreenshots.count)")
+                                .font(.system(.caption2, design: .monospaced, weight: .bold))
+                                .foregroundStyle(.cyan)
+                                .padding(.horizontal, 6).padding(.vertical, 2)
+                                .background(Color.cyan.opacity(0.12)).clipShape(Capsule())
+                        }
+                    }
+                }
             }
         }
     }
