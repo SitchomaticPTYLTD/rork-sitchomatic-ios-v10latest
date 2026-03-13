@@ -44,7 +44,7 @@ class LoginViewModel {
     var savedCropRect: CGRect? = nil
     var automationSettings: AutomationSettings = AutomationSettings()
     var isSlowDebugModeEnabled: Bool {
-        automationSettings.slowDebugMode ?? false
+        automationSettings.slowDebugMode
     }
     var effectiveMaxConcurrency: Int {
         isSlowDebugModeEnabled ? 1 : maxConcurrency

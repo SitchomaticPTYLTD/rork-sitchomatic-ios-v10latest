@@ -1817,7 +1817,7 @@ struct AutomationSettingsView: View {
     private var screenshotDebugSection: some View {
         Section {
             Toggle(isOn: Binding(
-                get: { vm.automationSettings.slowDebugMode ?? false },
+                get: { vm.automationSettings.slowDebugMode },
                 set: { vm.automationSettings.slowDebugMode = $0 }
             )) {
                 VStack(alignment: .leading, spacing: 2) {
@@ -1839,9 +1839,9 @@ struct AutomationSettingsView: View {
 
     private var concurrencySection: some View {
         Section {
-            Stepper("Max Concurrency: \((vm.automationSettings.slowDebugMode ?? false) ? 1 : vm.automationSettings.maxConcurrency)", value: $vm.automationSettings.maxConcurrency, in: 1...16)
-                .disabled(vm.automationSettings.slowDebugMode ?? false)
-            if vm.automationSettings.slowDebugMode ?? false {
+            Stepper("Max Concurrency: \(vm.automationSettings.slowDebugMode ? 1 : vm.automationSettings.maxConcurrency)", value: $vm.automationSettings.maxConcurrency, in: 1...16)
+                .disabled(vm.automationSettings.slowDebugMode)
+            if vm.automationSettings.slowDebugMode {
                 Label("Slow Debug Mode overrides concurrency to 1 session.", systemImage: "tortoise.fill")
                     .font(.caption)
                     .foregroundStyle(.orange)

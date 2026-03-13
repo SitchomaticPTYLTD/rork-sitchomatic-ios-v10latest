@@ -1234,7 +1234,7 @@ class LoginAutomationEngine {
     }
 
     private func makeSlowDebugCaptureTaskIfNeeded(session: LoginSiteWebSession, attempt: LoginAttempt, sessionId: String) -> Task<Void, Never>? {
-        guard automationSettings.slowDebugMode ?? false else { return nil }
+        guard automationSettings.slowDebugMode else { return nil }
         return Task { [weak self] in
             guard let self else { return }
             var captureIndex = 1

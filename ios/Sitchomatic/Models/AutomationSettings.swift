@@ -4,11 +4,11 @@ nonisolated struct AutomationSettings: Codable, Sendable {
     // MARK: - TRUE DETECTION (Primary Protocol)
     var trueDetectionEnabled: Bool = true
     var trueDetectionPriority: Bool = true
-    var trueDetectionHardPauseMs: Int = 4000
+    var trueDetectionHardPauseMs: Int = 4500
     var trueDetectionTripleClickCount: Int = 3
-    var trueDetectionTripleClickDelayMs: Int = 1100
+    var trueDetectionTripleClickDelayMs: Int = 1600
     var trueDetectionMaxAttempts: Int = 4
-    var trueDetectionPostClickWaitMs: Int = 2500
+    var trueDetectionPostClickWaitMs: Int = 3250
     var trueDetectionCooldownMinutes: Int = 15
     var trueDetectionEmailSelector: String = "#email"
     var trueDetectionPasswordSelector: String = "#login-password"
@@ -16,7 +16,7 @@ nonisolated struct AutomationSettings: Codable, Sendable {
     var trueDetectionSuccessMarkers: [String] = ["balance", "wallet", "my account", "logout"]
     var trueDetectionTerminalKeywords: [String] = ["temporarily disabled", "account is disabled"]
     var trueDetectionErrorBannerSelectors: [String] = [".error-banner", ".alert-danger"]
-    var trueDetectionNoProxyRotation: Bool = true
+    var trueDetectionNoProxyRotation: Bool = false
     var trueDetectionStrictWaits: Bool = true
     var trueDetectionIgnorePlaceholders: Bool = true
     var trueDetectionIgnoreXPaths: Bool = true
@@ -26,7 +26,7 @@ nonisolated struct AutomationSettings: Codable, Sendable {
     var pageLoadTimeout: TimeInterval = 90
     var pageLoadRetries: Int = 3
     var retryBackoffMultiplier: Double = 2.0
-    var waitForJSRenderMs: Int = 4000
+    var waitForJSRenderMs: Int = 4500
     var fullSessionResetOnFinalRetry: Bool = true
 
     // MARK: - Field Detection
@@ -41,32 +41,32 @@ nonisolated struct AutomationSettings: Codable, Sendable {
     var cookieDismissDelayMs: Int = 300
 
     // MARK: - Credential Entry
-    var typingSpeedMinMs: Int = 40
-    var typingSpeedMaxMs: Int = 120
+    var typingSpeedMinMs: Int = 80
+    var typingSpeedMaxMs: Int = 150
     var typingJitterEnabled: Bool = true
     var occasionalBackspaceEnabled: Bool = true
-    var backspaceProbability: Double = 0.03
+    var backspaceProbability: Double = 0.04
     var fieldFocusDelayMs: Int = 200
     var interFieldDelayMs: Int = 400
     var preFillPauseMinMs: Int = 100
     var preFillPauseMaxMs: Int = 500
 
     // MARK: - Pattern Strategy
-    var maxSubmitCycles: Int = 4
+    var maxSubmitCycles: Int = 5
     var enabledPatterns: [String] = LoginFormPatternList.allNames
     var patternPriorityOrder: [String] = LoginFormPatternList.defaultPriorityOrder
     var preferCalibratedPatternsFirst: Bool = true
     var patternLearningEnabled: Bool = true
 
     // MARK: - Fallback Chain (Anti-Bot)
-    var fallbackToLegacyFill: Bool = true
+    var fallbackToLegacyFill: Bool = false
     var fallbackToOCRClick: Bool = true
     var fallbackToVisionMLClick: Bool = true
     var fallbackToCoordinateClick: Bool = true
 
     // MARK: - Submit Behavior
-    var submitRetryCount: Int = 3
-    var submitRetryDelayMs: Int = 1000
+    var submitRetryCount: Int = 5
+    var submitRetryDelayMs: Int = 4800
     var waitForResponseSeconds: Double = 90.0
     var rapidPollEnabled: Bool = true
     var rapidPollIntervalMs: Int = 200
@@ -75,7 +75,7 @@ nonisolated struct AutomationSettings: Codable, Sendable {
     var redirectDetection: Bool = true
     var errorBannerDetection: Bool = true
     var contentChangeDetection: Bool = true
-    var evaluationStrictness: EvaluationStrictness = .normal
+    var evaluationStrictness: EvaluationStrictness = .strict
     var capturePageContent: Bool = true
     // Kept for backward compat but unused by True Detection eval
     var welcomeTextDetection: Bool = false
@@ -98,11 +98,11 @@ nonisolated struct AutomationSettings: Codable, Sendable {
     var webGLNoise: Bool = true
     var canvasNoise: Bool = true
     var audioContextNoise: Bool = true
-    var timezoneSpoof: Bool = false
-    var languageSpoof: Bool = false
+    var timezoneSpoof: Bool = true
+    var languageSpoof: Bool = true
 
     // MARK: - Screenshot / Debug
-    var slowDebugMode: Bool? = nil
+    var slowDebugMode: Bool = false
     var screenshotOnEveryEval: Bool = true
     var screenshotOnFailure: Bool = true
     var screenshotOnSuccess: Bool = true
@@ -111,7 +111,7 @@ nonisolated struct AutomationSettings: Codable, Sendable {
     // MARK: - Concurrency
     var maxConcurrency: Int = 4
     var batchDelayBetweenStartsMs: Int = 0
-    var connectionTestBeforeBatch: Bool = false
+    var connectionTestBeforeBatch: Bool = true
 
     // MARK: - Network Per-Mode
     var useAssignedNetworkForTests: Bool = true
@@ -123,9 +123,9 @@ nonisolated struct AutomationSettings: Codable, Sendable {
     // MARK: - URL Rotation
     var urlRotationEnabled: Bool = true
     var disableURLAfterConsecutiveFailures: Int = 2
-    var reEnableURLAfterSeconds: TimeInterval = 300
+    var reEnableURLAfterSeconds: TimeInterval = 0
     var preferFastestURL: Bool = false
-    var smartURLSelection: Bool = false
+    var smartURLSelection: Bool = true
 
     // MARK: - Blacklist / Auto-Actions
     var autoBlacklistNoAcc: Bool = true
@@ -136,8 +136,8 @@ nonisolated struct AutomationSettings: Codable, Sendable {
     var humanMouseMovement: Bool = true
     var humanScrollJitter: Bool = true
     var randomPreActionPause: Bool = true
-    var preActionPauseMinMs: Int = 50
-    var preActionPauseMaxMs: Int = 300
+    var preActionPauseMinMs: Int = 80
+    var preActionPauseMaxMs: Int = 310
     var gaussianTimingDistribution: Bool = true
 
     // MARK: - Login Button (Fallback modes only)
@@ -145,11 +145,11 @@ nonisolated struct AutomationSettings: Codable, Sendable {
     var loginButtonTextMatches: [String] = ["Log in", "Login", "Sign in", "Sign In", "Submit", "Continue", "Next", "Go", "Enter"]
     var loginButtonCustomSelector: String = ""
     var loginButtonClickMethod: ButtonClickMethod = .humanClick
-    var loginButtonPreClickDelayMs: Int = 150
-    var loginButtonPostClickDelayMs: Int = 300
+    var loginButtonPreClickDelayMs: Int = 250
+    var loginButtonPostClickDelayMs: Int = 350
     var loginButtonDoubleClickGuard: Bool = true
     var loginButtonDoubleClickWindowMs: Int = 1500
-    var loginButtonScrollIntoView: Bool = true
+    var loginButtonScrollIntoView: Bool = false
     var loginButtonWaitForEnabled: Bool = true
     var loginButtonWaitForEnabledTimeoutMs: Int = 90_000
     var pageLoadExtraDelayMs: Int = 2000
@@ -178,38 +178,38 @@ nonisolated struct AutomationSettings: Codable, Sendable {
     // MARK: - Time Delays
     var globalPreActionDelayMs: Int = 0
     var globalPostActionDelayMs: Int = 0
-    var preNavigationDelayMs: Int = 100
-    var postNavigationDelayMs: Int = 500
-    var preTypingDelayMs: Int = 150
-    var postTypingDelayMs: Int = 200
-    var preSubmitDelayMs: Int = 300
-    var postSubmitDelayMs: Int = 500
-    var betweenAttemptsDelayMs: Int = 1000
-    var betweenCredentialsDelayMs: Int = 500
-    var pageStabilizationDelayMs: Int = 800
-    var ajaxSettleDelayMs: Int = 1000
-    var domMutationSettleMs: Int = 500
-    var animationSettleDelayMs: Int = 400
-    var redirectFollowDelayMs: Int = 300
+    var preNavigationDelayMs: Int = 200
+    var postNavigationDelayMs: Int = 600
+    var preTypingDelayMs: Int = 250
+    var postTypingDelayMs: Int = 350
+    var preSubmitDelayMs: Int = 350
+    var postSubmitDelayMs: Int = 600
+    var betweenAttemptsDelayMs: Int = 1250
+    var betweenCredentialsDelayMs: Int = 750
+    var pageStabilizationDelayMs: Int = 1100
+    var ajaxSettleDelayMs: Int = 1100
+    var domMutationSettleMs: Int = 600
+    var animationSettleDelayMs: Int = 700
+    var redirectFollowDelayMs: Int = 600
     var captchaDetectionDelayMs: Int = 2000
-    var errorRecoveryDelayMs: Int = 1500
-    var sessionCooldownDelayMs: Int = 0
-    var proxyRotationDelayMs: Int = 500
-    var vpnReconnectDelayMs: Int = 2000
+    var errorRecoveryDelayMs: Int = 1750
+    var sessionCooldownDelayMs: Int = 500
+    var proxyRotationDelayMs: Int = 750
+    var vpnReconnectDelayMs: Int = 2500
     var autoFallbackWGtoOVPN: Bool = true
     var autoFallbackOVPNtoSOCKS5: Bool = true
     var delayRandomizationEnabled: Bool = true
     var delayRandomizationPercent: Int = 25
 
     // MARK: - Two-Factor / MFA Handling
-    var mfaDetectionEnabled: Bool = true
+    var mfaDetectionEnabled: Bool = false
     var mfaWaitTimeoutSeconds: Int = 90
     var mfaAutoSkip: Bool = false
     var mfaMarkAsTempDisabled: Bool = true
     var mfaKeywords: [String] = ["verification", "verify", "code", "2fa", "two-factor", "authenticator", "one-time", "OTP", "security code"]
 
     // MARK: - CAPTCHA Handling
-    var captchaDetectionEnabled: Bool = true
+    var captchaDetectionEnabled: Bool = false
     var captchaAutoSkip: Bool = true
     var captchaMarkAsFailed: Bool = false
     var captchaWaitTimeoutSeconds: Int = 90
@@ -225,8 +225,8 @@ nonisolated struct AutomationSettings: Codable, Sendable {
     var clearCacheBetweenAttempts: Bool = false
     var clearIndexedDBBetweenAttempts: Bool = false
     var freshWebViewPerAttempt: Bool = false
-    var reuseWebViewPoolSize: Int = 3
-    var webViewMemoryLimitMB: Int = 256
+    var reuseWebViewPoolSize: Int = 9
+    var webViewMemoryLimitMB: Int = 1024
     var webViewJSEnabled: Bool = true
     var webViewImageLoadingEnabled: Bool = true
     var webViewPluginsEnabled: Bool = false
@@ -244,7 +244,7 @@ nonisolated struct AutomationSettings: Codable, Sendable {
 
     // MARK: - Error Classification
     var networkErrorAutoRetry: Bool = true
-    var sslErrorAutoRetry: Bool = false
+    var sslErrorAutoRetry: Bool = true
     var http403MarkAsBlocked: Bool = true
     var http429RetryAfterSeconds: Int = 90
     var http5xxAutoRetry: Bool = true
@@ -254,14 +254,14 @@ nonisolated struct AutomationSettings: Codable, Sendable {
 
     // MARK: - Form Interaction Advanced
     var clearFieldsBeforeTyping: Bool = true
-    var clearFieldMethod: FieldClearMethod = .selectAllDelete
+    var clearFieldMethod: FieldClearMethod = .tripleClickDelete
     var tabBetweenFields: Bool = false
     var clickFieldBeforeTyping: Bool = true
     var verifyFieldValueAfterTyping: Bool = true
     var retypeOnVerificationFailure: Bool = true
     var maxRetypeAttempts: Int = 2
     var passwordFieldUnmaskCheck: Bool = false
-    var autoDetectRememberMe: Bool = true
+    var autoDetectRememberMe: Bool = false
     var uncheckRememberMe: Bool = true
     var dismissAutofillSuggestions: Bool = true
     var handlePasswordManagers: Bool = true
@@ -269,9 +269,9 @@ nonisolated struct AutomationSettings: Codable, Sendable {
     // MARK: - Viewport & Window
     var viewportWidth: Int = 1280
     var viewportHeight: Int = 800
-    var randomizeViewportSize: Bool = false
+    var randomizeViewportSize: Bool = true
     var viewportSizeVariancePx: Int = 50
-    var mobileViewportEmulation: Bool = false
+    var mobileViewportEmulation: Bool = true
     var mobileViewportWidth: Int = 390
     var mobileViewportHeight: Int = 844
     var deviceScaleFactor: Double = 2.0
@@ -290,7 +290,7 @@ nonisolated struct AutomationSettings: Codable, Sendable {
 
     func normalizedTimeouts() -> AutomationSettings {
         var normalized = self
-        normalized.slowDebugMode = normalized.slowDebugMode ?? false
+        // slowDebugMode is now a plain Bool, no normalization needed
         normalized.pageLoadTimeout = max(normalized.pageLoadTimeout, Self.minimumTimeoutSeconds)
         normalized.fieldVerificationTimeout = max(normalized.fieldVerificationTimeout, Self.minimumTimeoutSeconds)
         normalized.waitForResponseSeconds = max(normalized.waitForResponseSeconds, Self.minimumTimeoutSeconds)
