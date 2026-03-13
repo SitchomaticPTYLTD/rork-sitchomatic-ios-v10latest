@@ -11,6 +11,8 @@ struct TapHeatmapOverlayView: View {
     @State private var showTaps: Bool = true
     @State private var showRects: Bool = false
     @State private var analysisScreenshot: UIImage?
+    @State private var showFlipbook: Bool = false
+    @State private var flipbookStartIndex: Int = 0
 
     var body: some View {
         Group {
@@ -27,10 +29,11 @@ struct TapHeatmapOverlayView: View {
             }
         }
         .background(Color(.systemGroupedBackground))
-        .navigationTitle("Tap Heatmap")
+        .navigationTitle(heatmapData != nil ? "Heatmap Result" : "Tap Heatmap")
+        .navigationBarBackButtonHidden(heatmapData != nil)
         .toolbar {
             if heatmapData != nil {
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItem(placement: .topBarLeading) {
                     Button {
                         withAnimation(.snappy) {
                             heatmapData = nil
@@ -38,10 +41,17 @@ struct TapHeatmapOverlayView: View {
                             selectedScreenshot = nil
                         }
                     } label: {
-                        Label("Back to List", systemImage: "arrow.uturn.backward")
+                        HStack(spacing: 4) {
+                            Image(systemName: "chevron.left")
+                                .font(.body.weight(.semibold))
+                            Text("Screenshots")
+                        }
                     }
                 }
             }
+        }
+        .fullScreenCover(isPresented: $showFlipbook) {
+            ScreenshotFlipbookView(screenshots: vm.debugScreenshots, startIndex: flipbookStartIndex)
         }
     }
 
@@ -67,13 +77,21 @@ struct TapHeatmapOverlayView: View {
                 .background(Color(.secondarySystemGroupedBackground))
                 .clipShape(.rect(cornerRadius: 12))
 
-                ForEach(vm.debugScreenshots) { screenshot in
+                ForEach(Array(vm.debugScreenshots.enumerated()), id: \.element.id) { index, screenshot in
                     Button {
                         analyzeScreenshot(screenshot)
                     } label: {
                         HeatmapScreenshotPickerCard(screenshot: screenshot, isAnalyzing: isAnalyzing && selectedScreenshot?.id == screenshot.id)
                     }
                     .buttonStyle(.plain)
+                    .contextMenu {
+                        Button {
+                            flipbookStartIndex = index
+                            showFlipbook = true
+                        } label: {
+                            Label("Flipbook View", systemImage: "book.pages")
+                        }
+                    }
                 }
             }
             .padding(.horizontal)

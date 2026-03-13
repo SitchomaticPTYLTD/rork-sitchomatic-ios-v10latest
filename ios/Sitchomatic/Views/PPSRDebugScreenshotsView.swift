@@ -23,6 +23,8 @@ struct PPSRDebugScreenshotsView: View {
     @State private var selectedScreenshot: PPSRDebugScreenshot?
     @State private var selectedAlbum: ScreenshotAlbum?
     @State private var viewMode: ViewMode = .albums
+    @State private var showFlipbook: Bool = false
+    @State private var flipbookStartIndex: Int = 0
 
     private enum ViewMode: String, CaseIterable {
         case albums = "Albums"
@@ -59,8 +61,17 @@ struct PPSRDebugScreenshotsView: View {
                     case .all:
                         ScrollView {
                             LazyVStack(spacing: 12) {
-                                ForEach(vm.debugScreenshots) { screenshot in
-                                    Button { selectedScreenshot = screenshot } label: { ScreenshotCard(screenshot: screenshot) }.buttonStyle(.plain)
+                                ForEach(Array(vm.debugScreenshots.enumerated()), id: \.element.id) { index, screenshot in
+                                    Button { selectedScreenshot = screenshot } label: { ScreenshotCard(screenshot: screenshot) }
+                                        .buttonStyle(.plain)
+                                        .contextMenu {
+                                            Button {
+                                                flipbookStartIndex = index
+                                                showFlipbook = true
+                                            } label: {
+                                                Label("Flipbook View", systemImage: "book.pages")
+                                            }
+                                        }
                                 }
                             }.padding(.horizontal).padding(.vertical, 12)
                         }
@@ -75,6 +86,9 @@ struct PPSRDebugScreenshotsView: View {
         }
         .sheet(item: $selectedAlbum) { album in
             AlbumDetailSheet(album: album, vm: vm)
+        }
+        .fullScreenCover(isPresented: $showFlipbook) {
+            ScreenshotFlipbookView(screenshots: vm.debugScreenshots, startIndex: flipbookStartIndex)
         }
     }
 }
@@ -122,6 +136,8 @@ struct AlbumDetailSheet: View {
     let vm: PPSRAutomationViewModel
     @Environment(\.dismiss) private var dismiss
     @State private var selectedScreenshot: PPSRDebugScreenshot?
+    @State private var showFlipbook: Bool = false
+    @State private var flipbookStartIndex: Int = 0
 
     var body: some View {
         NavigationStack {
@@ -142,8 +158,17 @@ struct AlbumDetailSheet: View {
                     .padding().background(Color(.secondarySystemGroupedBackground)).clipShape(.rect(cornerRadius: 12))
 
                     LazyVStack(spacing: 12) {
-                        ForEach(album.screenshots) { screenshot in
-                            Button { selectedScreenshot = screenshot } label: { ScreenshotCard(screenshot: screenshot) }.buttonStyle(.plain)
+                        ForEach(Array(album.screenshots.enumerated()), id: \.element.id) { index, screenshot in
+                            Button { selectedScreenshot = screenshot } label: { ScreenshotCard(screenshot: screenshot) }
+                                .buttonStyle(.plain)
+                                .contextMenu {
+                                    Button {
+                                        flipbookStartIndex = index
+                                        showFlipbook = true
+                                    } label: {
+                                        Label("Flipbook View", systemImage: "book.pages")
+                                    }
+                                }
                         }
                     }
                 }
@@ -153,6 +178,9 @@ struct AlbumDetailSheet: View {
             .navigationTitle("Album").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
             .sheet(item: $selectedScreenshot) { screenshot in ScreenshotCorrectionSheet(screenshot: screenshot, vm: vm) }
+            .fullScreenCover(isPresented: $showFlipbook) {
+                ScreenshotFlipbookView(screenshots: album.screenshots, startIndex: flipbookStartIndex)
+            }
         }
         .presentationDetents([.large])
     }
