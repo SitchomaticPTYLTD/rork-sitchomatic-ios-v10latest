@@ -878,6 +878,7 @@ struct DeviceNetworkSettingsView: View {
         case .openvpn: openVPNSection
         case .wireguard: wireGuardSection
         case .dns: dnsSection
+        case .nodeMaven: nodeMavenSection
         }
     }
 
@@ -1205,6 +1206,239 @@ struct DeviceNetworkSettingsView: View {
         case .openvpn: .indigo
         case .wireguard: .purple
         case .dns: .cyan
+        case .nodeMaven: .teal
+        }
+    }
+
+    // MARK: - NodeMaven
+
+    private var nodeMavenSection: some View {
+        Section {
+            let nm = NodeMavenService.shared
+
+            HStack(spacing: 10) {
+                ZStack {
+                    Circle()
+                        .fill(Color.teal.opacity(0.15))
+                        .frame(width: 36, height: 36)
+                    Image(systemName: "cloud.fill")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(.teal)
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("NodeMaven Proxy").font(.subheadline.bold())
+                    Text(nm.statusSummary)
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+                Spacer()
+                if nm.isEnabled {
+                    Text(nm.shortStatus)
+                        .font(.system(.caption2, design: .monospaced, weight: .bold))
+                        .foregroundStyle(.teal)
+                        .padding(.horizontal, 6).padding(.vertical, 3)
+                        .background(Color.teal.opacity(0.12)).clipShape(Capsule())
+                }
+            }
+
+            if nm.proxyUsername.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                        Text("Credentials Required")
+                            .font(.caption.bold())
+                            .foregroundStyle(.orange)
+                    }
+                    Text("Enter your NodeMaven proxy username and password from the dashboard Proxy Setup section.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.vertical, 4)
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    Image(systemName: "person.fill").foregroundStyle(.teal).font(.caption)
+                    TextField("Proxy Username", text: Binding(
+                        get: { nm.proxyUsername },
+                        set: { nm.proxyUsername = $0 }
+                    ))
+                    .font(.system(.callout, design: .monospaced))
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+                }
+                HStack(spacing: 8) {
+                    Image(systemName: "key.fill").foregroundStyle(.teal).font(.caption)
+                    SecureField("Proxy Password", text: Binding(
+                        get: { nm.proxyPassword },
+                        set: { nm.proxyPassword = $0 }
+                    ))
+                    .font(.system(.callout, design: .monospaced))
+                }
+            }
+
+            Picker(selection: Binding(
+                get: { nm.country },
+                set: { nm.country = $0 }
+            )) {
+                ForEach(NodeMavenCountry.allCases, id: \.self) { c in
+                    Label("\(c.flagEmoji) \(c.label)", systemImage: c.icon).tag(c)
+                }
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "globe").foregroundStyle(.teal)
+                    Text("Country")
+                }
+            }
+            .pickerStyle(.menu)
+
+            Picker(selection: Binding(
+                get: { nm.proxyType },
+                set: { nm.proxyType = $0 }
+            )) {
+                ForEach(NodeMavenProxyType.allCases, id: \.self) { t in
+                    Label(t.label, systemImage: t.icon).tag(t)
+                }
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: nm.proxyType.icon).foregroundStyle(.teal)
+                    Text("Proxy Type")
+                }
+            }
+            .pickerStyle(.menu)
+
+            Picker(selection: Binding(
+                get: { nm.filter },
+                set: { nm.filter = $0 }
+            )) {
+                ForEach(NodeMavenFilter.allCases, id: \.self) { f in
+                    Text(f.label).tag(f)
+                }
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "line.3.horizontal.decrease.circle").foregroundStyle(.teal)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("IP Quality Filter")
+                        Text(nm.filter.detail)
+                            .font(.caption2).foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .pickerStyle(.menu)
+
+            Picker(selection: Binding(
+                get: { nm.sessionMode },
+                set: { nm.sessionMode = $0 }
+            )) {
+                ForEach(NodeMavenSessionMode.allCases, id: \.self) { s in
+                    Text(s.label).tag(s)
+                }
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "arrow.triangle.2.circlepath").foregroundStyle(.teal)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("Session Mode")
+                        Text(nm.sessionMode.detail)
+                            .font(.caption2).foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .pickerStyle(.menu)
+
+            if nm.isEnabled {
+                Button {
+                    Task { await nm.testConnection() }
+                } label: {
+                    HStack(spacing: 8) {
+                        if nm.isTesting {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Image(systemName: "antenna.radiowaves.left.and.right")
+                                .foregroundStyle(.teal)
+                        }
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Test Connection").font(.subheadline.bold())
+                            if let result = nm.lastTestResult {
+                                Text(result)
+                                    .font(.system(.caption2, design: .monospaced))
+                                    .foregroundStyle(result.contains("Connected") ? .green : .red)
+                            }
+                        }
+                        Spacer()
+                    }
+                }
+                .disabled(nm.isTesting)
+                .sensoryFeedback(.impact(weight: .medium), trigger: nm.isTesting)
+            }
+
+            if nm.isEnabled {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "info.circle.fill")
+                            .foregroundStyle(.teal.opacity(0.7))
+                            .font(.caption2)
+                        Text("Preview Username")
+                            .font(.caption2.bold())
+                            .foregroundStyle(.secondary)
+                    }
+                    Text(nm.buildUsername(sessionId: "preview123"))
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+                .padding(.vertical, 4)
+            }
+
+            DisclosureGroup {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "key.horizontal.fill").foregroundStyle(.orange).font(.caption)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("API Key").font(.caption.bold())
+                            if !nm.apiKey.isEmpty {
+                                Text(String(nm.apiKey.prefix(20)) + "...")
+                                    .font(.system(.caption2, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    TextField("JWT API Key", text: Binding(
+                        get: { nm.apiKey },
+                        set: { nm.apiKey = $0 }
+                    ))
+                    .font(.system(.caption, design: .monospaced))
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+
+                    HStack(spacing: 6) {
+                        Image(systemName: "server.rack").foregroundStyle(.secondary).font(.caption2)
+                        Text("Gateway: \(NodeMavenService.gatewayHost):1080 (SOCKS5)")
+                            .font(.system(.caption2, design: .monospaced))
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "gearshape").foregroundStyle(.teal)
+                    Text("Advanced")
+                }
+            }
+        } header: {
+            HStack {
+                Image(systemName: "cloud.fill")
+                Text("NodeMaven")
+                Spacer()
+                if NodeMavenService.shared.isEnabled {
+                    Text(NodeMavenService.shared.shortStatus)
+                        .font(.system(.caption2, design: .monospaced, weight: .bold))
+                        .foregroundStyle(.teal)
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(Color.teal.opacity(0.12))
+                        .clipShape(Capsule())
+                }
+            }
+        } footer: {
+            Text("NodeMaven residential & mobile proxy network. 30M+ IPs across 164+ countries. Proxy type (residential/mobile) is configured in your NodeMaven dashboard.")
         }
     }
 

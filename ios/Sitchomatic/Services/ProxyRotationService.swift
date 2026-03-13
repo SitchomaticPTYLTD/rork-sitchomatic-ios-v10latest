@@ -7,6 +7,7 @@ nonisolated enum ConnectionMode: String, CaseIterable, Sendable {
     case proxy = "Proxy"
     case openvpn = "OpenVPN"
     case wireguard = "WireGuard"
+    case nodeMaven = "NodeMaven"
 
     var icon: String {
         switch self {
@@ -14,6 +15,7 @@ nonisolated enum ConnectionMode: String, CaseIterable, Sendable {
         case .proxy: "network"
         case .openvpn: "shield.lefthalf.filled"
         case .wireguard: "lock.trianglebadge.exclamationmark.fill"
+        case .nodeMaven: "cloud.fill"
         }
     }
 
@@ -23,6 +25,7 @@ nonisolated enum ConnectionMode: String, CaseIterable, Sendable {
         case .proxy: "SOCKS5 Proxy"
         case .openvpn: "OpenVPN"
         case .wireguard: "WireGuard"
+        case .nodeMaven: "NodeMaven"
         }
     }
 }
@@ -729,6 +732,9 @@ class ProxyRotationService {
             let enabled = vpnConfigs(for: target).filter { $0.isEnabled }.count
             let total = vpnConfigs(for: target).count
             return "OpenVPN (\(enabled)/\(total) enabled)"
+        case .nodeMaven:
+            let nm = NodeMavenService.shared
+            return nm.isEnabled ? "NodeMaven (\(nm.shortStatus))" : "NodeMaven (not configured)"
         }
     }
 

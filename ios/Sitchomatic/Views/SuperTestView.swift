@@ -197,6 +197,7 @@ struct SuperTestView: View {
         case .openvpn: .indigo
         case .wireguard: .purple
         case .dns: .cyan
+        case .nodeMaven: .teal
         }
     }
 

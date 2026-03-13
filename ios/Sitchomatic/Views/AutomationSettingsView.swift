@@ -534,6 +534,8 @@ struct AutomationSettingsView: View {
                 unifiedOpenVPNSection
             } else if proxyService.unifiedConnectionMode == .wireguard {
                 unifiedWireGuardSection
+            } else if proxyService.unifiedConnectionMode == .nodeMaven {
+                nodeMavenStatusSection
             } else {
                 unifiedDNSSection
             }
@@ -546,6 +548,55 @@ struct AutomationSettingsView: View {
         case .openvpn: .indigo
         case .wireguard: .purple
         case .dns: .cyan
+        case .nodeMaven: .teal
+        }
+    }
+
+    private var nodeMavenStatusSection: some View {
+        Section {
+            let nm = NodeMavenService.shared
+            HStack(spacing: 10) {
+                ZStack {
+                    Circle()
+                        .fill(Color.teal.opacity(0.15))
+                        .frame(width: 36, height: 36)
+                    Image(systemName: "cloud.fill")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(.teal)
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("NodeMaven Proxy").font(.subheadline.bold())
+                    Text(nm.statusSummary)
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+                Spacer()
+                if nm.isEnabled {
+                    Text(nm.shortStatus)
+                        .font(.system(.caption2, design: .monospaced, weight: .bold))
+                        .foregroundStyle(.teal)
+                        .padding(.horizontal, 6).padding(.vertical, 3)
+                        .background(Color.teal.opacity(0.12)).clipShape(Capsule())
+                } else {
+                    Text("NOT SET")
+                        .font(.system(.caption2, design: .monospaced, weight: .bold))
+                        .foregroundStyle(.orange)
+                        .padding(.horizontal, 6).padding(.vertical, 3)
+                        .background(Color.orange.opacity(0.12)).clipShape(Capsule())
+                }
+            }
+
+            if !nm.isEnabled {
+                HStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange).font(.caption)
+                    Text("Configure NodeMaven credentials in Network Settings to use this mode.")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+            }
+        } header: {
+            Label("NodeMaven", systemImage: "cloud.fill")
+        } footer: {
+            Text("NodeMaven generates dynamic proxy credentials per session. Configure country, type, and quality in Network Settings.")
         }
     }
 

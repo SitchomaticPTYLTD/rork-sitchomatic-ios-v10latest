@@ -123,6 +123,18 @@ class NetworkSessionFactory {
             }
             logger.log("NetworkFactory: no fallback available for \(target.rawValue) — using direct", category: .network, level: .warning)
             return .direct
+
+        case .nodeMaven:
+            let nm = NodeMavenService.shared
+            if let proxy = nm.generateProxyConfig() {
+                logger.log("NetworkFactory: assigned NodeMaven proxy \(proxy.displayString) for \(target.rawValue)", category: .proxy, level: .debug)
+                return .socks5(proxy)
+            }
+            logger.log("NetworkFactory: NodeMaven not configured for \(target.rawValue) — falling back to SOCKS5", category: .proxy, level: .warning)
+            if let proxy = proxyService.nextWorkingProxy(for: target) {
+                return .socks5(proxy)
+            }
+            return .direct
         }
     }
 

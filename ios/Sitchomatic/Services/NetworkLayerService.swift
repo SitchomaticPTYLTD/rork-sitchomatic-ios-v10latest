@@ -55,6 +55,14 @@ class NetworkLayerService {
 
         case .dns:
             return .direct
+
+        case .nodeMaven:
+            let nm = NodeMavenService.shared
+            if let proxy = nm.generateProxyConfig() { return .socks5(proxy) }
+            addFallbackLog("NodeMaven not configured for \(target.rawValue), trying SOCKS5")
+            if let config = resolveSOCKS5(for: target) { return config }
+            addFallbackLog("All network modes failed for \(target.rawValue), using Direct")
+            return .direct
         }
     }
 

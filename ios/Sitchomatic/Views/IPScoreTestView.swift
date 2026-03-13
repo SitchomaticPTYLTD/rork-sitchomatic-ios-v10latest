@@ -656,6 +656,17 @@ struct IPScoreTestView: View {
                 session.networkLabel = "Direct"
             }
             session.networkConfig = .direct
+
+        case .nodeMaven:
+            let nm = NodeMavenService.shared
+            if let proxy = nm.generateProxyConfigForSession(index) {
+                session.assignedProxy = proxy.displayString
+                session.networkLabel = "NodeMaven \(nm.country.flagEmoji)"
+                session.networkConfig = .socks5(proxy)
+            } else {
+                session.networkLabel = "NodeMaven (not configured)"
+                session.networkConfig = .direct
+            }
         }
     }
 
