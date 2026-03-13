@@ -119,6 +119,10 @@ class NodeMavenService {
     static let socks5Port = 1080
     static let httpPort = 8080
 
+    static let mobileUsername = "Sitchmobile-country-au-type-mobile-filter-medium"
+    static let residentialUsername = "Sitchomatic-country-au-filter-medium"
+    static let hardcodedPassword = "Dada07077"
+
     private let logger = DebugLogger.shared
 
     var apiKey: String = "" { didSet { persist() } }
@@ -142,11 +146,14 @@ class NodeMavenService {
     }
 
     func buildUsername(sessionId: String? = nil) -> String {
-        var parts = [proxyUsername]
-
-        if !country.rawValue.isEmpty {
-            parts.append("country-\(country.rawValue)")
+        let baseUsername: String
+        if proxyType == .mobile {
+            baseUsername = Self.mobileUsername
+        } else {
+            baseUsername = Self.residentialUsername
         }
+
+        var parts = [baseUsername]
 
         if let sid = sessionId {
             parts.append("sid-\(sid)")
@@ -155,8 +162,6 @@ class NodeMavenService {
             let sid = String(UUID().uuidString.prefix(12)).lowercased().replacingOccurrences(of: "-", with: "") + "\(sessionCounter)"
             parts.append("sid-\(sid)")
         }
-
-        parts.append("filter-\(filter.rawValue)")
 
         return parts.joined(separator: "-")
     }
@@ -267,8 +272,10 @@ class NodeMavenService {
             return
         }
         apiKey = dict["apiKey"] ?? ""
-        proxyUsername = dict["proxyUsername"] ?? ""
-        proxyPassword = dict["proxyPassword"] ?? ""
+        proxyUsername = dict["proxyUsername"] ?? Self.mobileUsername
+        proxyPassword = dict["proxyPassword"] ?? Self.hardcodedPassword
+        if proxyUsername.isEmpty { proxyUsername = Self.mobileUsername }
+        if proxyPassword.isEmpty { proxyPassword = Self.hardcodedPassword }
         if let c = dict["country"], let v = NodeMavenCountry(rawValue: c) { country = v }
         if let t = dict["proxyType"], let v = NodeMavenProxyType(rawValue: t) { proxyType = v }
         if let f = dict["filter"], let v = NodeMavenFilter(rawValue: f) { filter = v }
@@ -277,6 +284,8 @@ class NodeMavenService {
 
     private func applyDefaults() {
         apiKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzczMzg2MjQyLCJpYXQiOjE3NzMzODQ0NDIsImp0aSI6Ijc3NGJiOTg4MTVmYjQ0ODY5MzhiOTJlZjFhMjViZTBiIiwidXNlcl9pZCI6IjkyMjUwMzFkLWVlOGQtNDMwZS1hOTE4LTE5MmE4NmUyNzUwMyJ9.ckJ_8Q6Et_yufcKFsVT3MB180Usrwi4NoOVaeh3hJ9o"
+        proxyUsername = Self.mobileUsername
+        proxyPassword = Self.hardcodedPassword
         country = .au
         proxyType = .mobile
         filter = .medium
