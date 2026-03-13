@@ -13,6 +13,7 @@ struct LoginDashboardContentView: View {
         ScrollView {
             LazyVStack(spacing: 20) {
                 statusHeader
+                NetworkTruthPanelView()
                 if vm.isIgnitionMode {
                     regionToggle
                 }

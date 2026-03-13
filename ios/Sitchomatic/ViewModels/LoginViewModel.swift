@@ -106,6 +106,7 @@ class LoginViewModel {
     private let notifications = PPSRNotificationService.shared
     private let logger = DebugLogger.shared
     private let backgroundService = BackgroundTaskService.shared
+    private let recoveryService = SessionRecoveryService.shared
     private var batchTask: Task<Void, Never>?
     private var secondaryBatchTask: Task<Void, Never>?
     private var settingsSaveTask: Task<Void, Never>?
@@ -210,6 +211,22 @@ class LoginViewModel {
     }
 
     private func restoreTestQueueIfNeeded() {
+        if let recoveredBatch = recoveryService.recoverBatch() {
+            let snapshots = recoveredBatch.snapshots
+            var restoredCount = 0
+            for snap in snapshots {
+                if let cred = credentials.first(where: { $0.id == snap.credentialId }), cred.status == .testing {
+                    cred.status = .untested
+                    restoredCount += 1
+                }
+            }
+            if restoredCount > 0 {
+                log("Recovery: restored \(restoredCount) interrupted test(s) with rich snapshots (network: \(snapshots.first?.networkMode ?? "?"), failures: \(snapshots.compactMap(\.lastFailureReason).count))", level: .warning)
+                persistCredentials()
+            }
+            return
+        }
+
         guard let queuedIds = persistence.loadTestQueue(), !queuedIds.isEmpty else { return }
         let idSet = Set(queuedIds)
         var restoredCount = 0
@@ -692,6 +709,8 @@ class LoginViewModel {
         DeviceProxyService.shared.notifyBatchStart()
         backgroundService.beginExtendedBackgroundExecution(reason: "Login batch test")
         persistence.saveTestQueue(credentialIds: credsToTest.map(\.id))
+        let batchURL = getNextTestURL()
+        recoveryService.beginBatch(credentials: credsToTest, siteMode: siteMode.rawValue, targetURL: batchURL)
         var batchWorking = 0
         var batchDead = 0
         var batchRequeued = 0
@@ -732,6 +751,7 @@ class LoginViewModel {
                             self.activeTestCount -= 1
                             self.batchCompletedCount += 1
                             self.handleOutcome(outcome, credential: cred, attempt: attempt)
+                            self.updateRecoveryForOutcome(outcome, credential: cred, attempt: attempt)
 
                             switch outcome {
                             case .success: batchWorking += 1
@@ -759,6 +779,8 @@ class LoginViewModel {
         DeviceProxyService.shared.notifyBatchStart()
         backgroundService.beginExtendedBackgroundExecution(reason: "Login dual-site batch test")
         persistence.saveTestQueue(credentialIds: credsToTest.map(\.id))
+        let dualBatchURL = getNextTestURL()
+        recoveryService.beginBatch(credentials: credsToTest, siteMode: "Dual", targetURL: dualBatchURL)
         var batchWorking = 0
         var batchDead = 0
         var batchRequeued = 0
@@ -805,6 +827,7 @@ class LoginViewModel {
                             self.batchCompletedCount += 1
                             attempt.logs.insert(PPSRLogEntry(message: "[\(siteLabel)] Tested on \(testURL.host ?? "")", level: .info), at: 0)
                             self.handleOutcome(outcome, credential: cred, attempt: attempt)
+                            self.updateRecoveryForOutcome(outcome, credential: cred, attempt: attempt)
 
                             switch outcome {
                             case .success: batchWorking += 1
@@ -824,6 +847,34 @@ class LoginViewModel {
         }
     }
 
+    private func updateRecoveryForOutcome(_ outcome: LoginOutcome, credential: LoginCredential, attempt: LoginAttempt) {
+        let outcomeLabel: String
+        switch outcome {
+        case .success: outcomeLabel = "success"
+        case .noAcc: outcomeLabel = "noAcc"
+        case .permDisabled: outcomeLabel = "permDisabled"
+        case .tempDisabled: outcomeLabel = "tempDisabled"
+        case .unsure: outcomeLabel = "unsure"
+        case .timeout: outcomeLabel = "timeout"
+        case .connectionFailure: outcomeLabel = "connectionFailure"
+        case .redBannerError: outcomeLabel = "redBannerError"
+        }
+
+        switch outcome {
+        case .success, .noAcc, .permDisabled, .tempDisabled:
+            recoveryService.markCompleted(credentialId: credential.id)
+        case .unsure, .timeout, .connectionFailure, .redBannerError:
+            let screenshotHash = attempt.screenshotIds.last
+            recoveryService.updateSnapshot(
+                credentialId: credential.id,
+                retriesUsed: credential.testResults.count,
+                lastScreenshotHash: screenshotHash,
+                lastFailureReason: attempt.errorMessage,
+                lastFailureOutcome: outcomeLabel
+            )
+        }
+    }
+
     private func finalizeBatch(working: Int, dead: Int, requeued: Int) {
         let result = BatchResult(working: working, dead: dead, requeued: requeued, total: working + dead + requeued)
         lastBatchResult = result
@@ -832,6 +883,7 @@ class LoginViewModel {
         forceStopTask?.cancel()
         forceStopTask = nil
         persistence.clearTestQueue()
+        if requeued == 0 { recoveryService.endBatch() }
         isRunning = false
         isPaused = false
         pauseCountdown = 0
@@ -940,6 +992,7 @@ class LoginViewModel {
         forceStopTask?.cancel()
         forceStopTask = nil
         persistence.clearTestQueue()
+        recoveryService.endBatch()
         isRunning = false
         isPaused = false
         isStopping = false

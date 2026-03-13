@@ -9,6 +9,8 @@ struct DualFindRunningView: View {
 
             ScrollView {
                 VStack(spacing: 14) {
+                    NetworkTruthCompactView()
+
                     hitsSection
 
                     sessionGrid
