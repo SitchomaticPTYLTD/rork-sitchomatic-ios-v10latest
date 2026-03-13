@@ -414,24 +414,45 @@ class ConcurrentAutomationEngine {
                 return results
             }
 
-            let connectionFailedSessions = batchResults.filter { $0.1 == .connectionFailure || $0.1 == .timeout }
-            let succeededSessions = batchResults.filter { $0.1 != .connectionFailure && $0.1 != .timeout }
-            let allFailed = !batchResults.isEmpty && connectionFailedSessions.count == batchResults.count
-            let someFailed = !connectionFailedSessions.isEmpty && !succeededSessions.isEmpty
+            let conclusiveSessions = batchResults.filter { isConclusiveOutcome($0.1) }
+            let retryableSessions = batchResults.filter { !isConclusiveOutcome($0.1) }
+            let hasRetryable = !retryableSessions.isEmpty
+            let allRetryable = !batchResults.isEmpty && conclusiveSessions.isEmpty
 
-            if allFailed && !cancelFlag {
-                logger.log("ConcurrentEngine: ALL \(batchResults.count) sessions in batch hit connection failure — rotating IP and retrying batch", category: .network, level: .critical)
+            for (username, outcome, latency, _) in conclusiveSessions {
+                allResults.append((username, outcome))
+                latencies.append(latency)
+                let matchingURL = effectiveURLs[batchIndices.first ?? 0]?.absoluteString ?? ""
+                urlCooldown.recordSuccess(for: matchingURL)
+                if outcome == .success {
+                    successCount += 1
+                    consecutiveConnectionFailures = 0
+                } else {
+                    failureCount += 1
+                    if outcome == .permDisabled {
+                        deadAccounts.insert(username)
+                        logger.log("ConcurrentEngine: account '\(username)' marked DEAD (permDisabled)", category: .automation, level: .warning)
+                    }
+                    consecutiveConnectionFailures = 0
+                }
+                processed += 1
+                recentOutcomeWindow.append(outcome == .success)
+                onProgress(processed, attempts.count, outcome)
+            }
+
+            if allRetryable && hasRetryable && !cancelFlag {
+                logger.log("ConcurrentEngine: ALL \(batchResults.count) sessions in batch need retry — rotating IP and retrying batch", category: .network, level: .critical)
 
                 rotateIP(for: proxyTarget)
                 try? await Task.sleep(for: .milliseconds(2000))
 
                 var retryEffectiveURLs: [Int: URL] = [:]
-                for (_, _, _, originalIndex) in connectionFailedSessions {
+                for (_, _, _, originalIndex) in retryableSessions {
                     retryEffectiveURLs[originalIndex] = urls[originalIndex % urls.count]
                 }
 
                 let retryResults: [(String, LoginOutcome, Int, Int)] = await withTaskGroup(of: (String, LoginOutcome, Int, Int).self) { group in
-                    for (_, _, _, originalIndex) in connectionFailedSessions {
+                    for (_, _, _, originalIndex) in retryableSessions {
                         if self.cancelFlag { break }
                         let attempt = attempts[originalIndex]
                         let retryURL = retryEffectiveURLs[originalIndex] ?? urls[originalIndex % urls.count]
@@ -459,8 +480,7 @@ class ConcurrentAutomationEngine {
                     return results
                 }
 
-                let finalBatchResults = retryResults
-                for (_, outcome, _, _) in finalBatchResults {
+                for (_, outcome, _, _) in retryResults {
                     let matchingURL = effectiveURLs[batchIndices.first ?? 0]?.absoluteString ?? ""
                     if outcome == .connectionFailure || outcome == .timeout {
                         urlCooldown.recordFailure(for: matchingURL)
@@ -468,7 +488,7 @@ class ConcurrentAutomationEngine {
                         urlCooldown.recordSuccess(for: matchingURL)
                     }
                 }
-                for (username, outcome, latency, _) in finalBatchResults {
+                for (username, outcome, latency, _) in retryResults {
                     allResults.append((username, outcome))
                     latencies.append(latency)
                     if outcome == .success {
@@ -490,63 +510,18 @@ class ConcurrentAutomationEngine {
                     recentOutcomeWindow.append(outcome == .success)
                     onProgress(processed, attempts.count, outcome)
                 }
-            } else if someFailed && !cancelFlag {
-                for (_, outcome, _, _) in succeededSessions {
-                    let matchingURL = effectiveURLs[batchIndices.first ?? 0]?.absoluteString ?? ""
-                    urlCooldown.recordSuccess(for: matchingURL)
-                }
-                for (username, outcome, latency, _) in succeededSessions {
-                    allResults.append((username, outcome))
-                    latencies.append(latency)
-                    if outcome == .success {
-                        successCount += 1
-                        consecutiveConnectionFailures = 0
-                    } else {
-                        failureCount += 1
-                        if outcome == .permDisabled {
-                            deadAccounts.insert(username)
-                            logger.log("ConcurrentEngine: account '\(username)' marked DEAD (permDisabled)", category: .automation, level: .warning)
-                        }
-                        consecutiveConnectionFailures = 0
-                    }
-                    processed += 1
-                    recentOutcomeWindow.append(outcome == .success)
-                    onProgress(processed, attempts.count, outcome)
-                }
-
-                let failedIndices = connectionFailedSessions.map { $0.3 }
-                logger.log("ConcurrentEngine: \(connectionFailedSessions.count) sessions failed connection — carrying over to next batch (indices: \(failedIndices))", category: .network, level: .warning)
-                carryOverIndices.append(contentsOf: failedIndices)
-            } else {
-                for (_, outcome, _, _) in batchResults {
+            } else if hasRetryable && !cancelFlag {
+                let retryableIndices = retryableSessions.map { $0.3 }
+                logger.log("ConcurrentEngine: \(retryableSessions.count) sessions inconclusive (connection/timeout/unsure) — carrying over to next batch (indices: \(retryableIndices))", category: .network, level: .warning)
+                carryOverIndices.append(contentsOf: retryableIndices)
+            } else if !hasRetryable {
+                for (_, outcome, _, _) in batchResults where !isConclusiveOutcome(outcome) {
                     let matchingURL = effectiveURLs[batchIndices.first ?? 0]?.absoluteString ?? ""
                     if outcome == .connectionFailure || outcome == .timeout {
                         urlCooldown.recordFailure(for: matchingURL)
                     } else {
                         urlCooldown.recordSuccess(for: matchingURL)
                     }
-                }
-                for (username, outcome, latency, _) in batchResults {
-                    allResults.append((username, outcome))
-                    latencies.append(latency)
-                    if outcome == .success {
-                        successCount += 1
-                        consecutiveConnectionFailures = 0
-                    } else {
-                        failureCount += 1
-                        if outcome == .permDisabled {
-                            deadAccounts.insert(username)
-                            logger.log("ConcurrentEngine: account '\(username)' marked DEAD (permDisabled)", category: .automation, level: .warning)
-                        }
-                        if outcome == .connectionFailure || outcome == .timeout {
-                            consecutiveConnectionFailures += 1
-                        } else {
-                            consecutiveConnectionFailures = 0
-                        }
-                    }
-                    processed += 1
-                    recentOutcomeWindow.append(outcome == .success)
-                    onProgress(processed, attempts.count, outcome)
                 }
             }
 
@@ -685,6 +660,15 @@ class ConcurrentAutomationEngine {
             logger.log("ConcurrentEngine: rotated to next SOCKS5 IP for \(target.rawValue)", category: .network, level: .warning)
         case .dns, .nodeMaven:
             logger.log("ConcurrentEngine: no IP pool to rotate for mode \(mode.label) on \(target.rawValue)", category: .network, level: .warning)
+        }
+    }
+
+    private func isConclusiveOutcome(_ outcome: LoginOutcome) -> Bool {
+        switch outcome {
+        case .success, .tempDisabled, .permDisabled, .noAcc:
+            return true
+        case .connectionFailure, .timeout, .unsure, .redBannerError, .smsDetected:
+            return false
         }
     }
 
