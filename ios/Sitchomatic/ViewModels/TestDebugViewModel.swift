@@ -36,6 +36,7 @@ class TestDebugViewModel {
     var selectedSessionForLog: TestDebugSession?
     var showSessionLogSheet: Bool = false
     var isRetryingFailed: Bool = false
+    var showAppliedToast: Bool = false
 
     private var batchTask: Task<Void, Never>?
     private let logger = DebugLogger.shared
@@ -231,6 +232,25 @@ class TestDebugViewModel {
         showSessionLogSheet = true
     }
 
+    func applyWinnerSettings() {
+        guard let winner = winningSession else { return }
+        let snapshot = winner.settingsSnapshot
+        var settings = snapshot.toAutomationSettings(base: AutomationSettings())
+        settings = settings.normalizedTimeouts()
+
+        if let data = try? JSONEncoder().encode(settings) {
+            UserDefaults.standard.set(data, forKey: "automation_settings_v1")
+        }
+
+        showAppliedToast = true
+        logger.log("TestDebug: Applied winner settings from session #\(winner.index) — \(winner.differentiator)", category: .login, level: .success)
+
+        Task {
+            try? await Task.sleep(for: .seconds(2))
+            showAppliedToast = false
+        }
+    }
+
     func saveCurrentRunSummary() {
         guard !sessions.isEmpty else { return }
         let summary = TestDebugRunSummary(
@@ -381,11 +401,34 @@ class TestDebugViewModel {
         session.status = .running
         session.startedAt = Date()
 
+        let snapshot = session.settingsSnapshot
+
+        urlRotation.isIgnitionMode = (selectedSite == .ignition)
+        let testURL = urlRotation.nextURL() ?? targetSite.url
+
+        let netConfigLabel = snapshot.connectionMode.rawValue
+        session.logs.append(PPSRLogEntry(message: "Config: \(session.differentiator)", level: .info))
+        session.logs.append(PPSRLogEntry(message: "URL: \(testURL.host ?? testURL.absoluteString)", level: .info))
+        session.logs.append(PPSRLogEntry(message: "Network: \(netConfigLabel)", level: .info))
+        session.logs.append(PPSRLogEntry(message: "Pattern: \(snapshot.pattern) | Typing: \(snapshot.typingSpeedMinMs)-\(snapshot.typingSpeedMaxMs)ms | Stealth: \(snapshot.stealthJSInjection)", level: .info))
+
+        session.webViewIndex = snapshot.webViewPoolIndex
+
+        session.logs.append(PPSRLogEntry(message: "Pre-check: probing \(testURL.host ?? "target")...", level: .info))
+        let preCheckOk = await runConnectionPreCheck(url: testURL)
+        if !preCheckOk {
+            session.status = .connectionFailure
+            session.completedAt = Date()
+            session.errorMessage = "Pre-check failed: target unreachable"
+            session.logs.append(PPSRLogEntry(message: "Pre-check FAILED — skipping session", level: .error))
+            return
+        }
+        session.logs.append(PPSRLogEntry(message: "Pre-check passed", level: .success))
+
         let loginCred = LoginCredential(username: credential.email, password: credential.password)
         let attempt = LoginAttempt(credential: loginCred, sessionIndex: session.index)
         attempt.startedAt = Date()
 
-        let snapshot = session.settingsSnapshot
         var settings = snapshot.toAutomationSettings(base: AutomationSettings())
         settings = settings.normalizedTimeouts()
 
@@ -395,17 +438,6 @@ class TestDebugViewModel {
         sessionEngine.automationSettings = settings
         sessionEngine.proxyTarget = proxyTarget
         sessionEngine.networkConfigOverride = snapshot.buildNetworkConfig(proxyTarget: proxyTarget)
-
-        urlRotation.isIgnitionMode = (selectedSite == .ignition)
-        let testURL = urlRotation.nextURL() ?? targetSite.url
-
-        let netConfigLabel = sessionEngine.networkConfigOverride?.label ?? snapshot.connectionMode.rawValue
-        session.logs.append(PPSRLogEntry(message: "Config: \(session.differentiator)", level: .info))
-        session.logs.append(PPSRLogEntry(message: "URL: \(testURL.host ?? testURL.absoluteString)", level: .info))
-        session.logs.append(PPSRLogEntry(message: "Network: \(netConfigLabel)", level: .info))
-        session.logs.append(PPSRLogEntry(message: "Pattern: \(snapshot.pattern) | Typing: \(snapshot.typingSpeedMinMs)-\(snapshot.typingSpeedMaxMs)ms | Stealth: \(snapshot.stealthJSInjection)", level: .info))
-
-        session.webViewIndex = snapshot.webViewPoolIndex
 
         let outcome = await sessionEngine.runLoginTest(attempt, targetURL: testURL, timeout: 90)
 
@@ -434,4 +466,80 @@ class TestDebugViewModel {
             level: session.status == .success ? .success : (session.status == .unsure || session.status == .timeout ? .warning : .error)
         ))
     }
+
+    private func runConnectionPreCheck(url: URL) async -> Bool {
+        do {
+            var request = URLRequest(url: url)
+            request.httpMethod = "HEAD"
+            request.timeoutInterval = 8
+            let (_, response) = try await URLSession.shared.data(for: request)
+            if let httpResponse = response as? HTTPURLResponse {
+                return httpResponse.statusCode < 500
+            }
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    func buildHeatmapData() -> [HeatmapDimension] {
+        guard !sessions.isEmpty else { return [] }
+        var dimensions: [HeatmapDimension] = []
+
+        let networkGroups = Dictionary(grouping: sessions) { $0.settingsSnapshot.connectionMode.rawValue }
+        dimensions.append(buildDimension("Network Mode", groups: networkGroups))
+
+        let patternGroups = Dictionary(grouping: sessions) { $0.settingsSnapshot.pattern }
+        dimensions.append(buildDimension("Pattern", groups: patternGroups))
+
+        let speedGroups = Dictionary(grouping: sessions) { session -> String in
+            let min = session.settingsSnapshot.typingSpeedMinMs
+            if min < 60 { return "Fast" }
+            if min < 120 { return "Medium" }
+            if min < 250 { return "Slow" }
+            return "Very Slow"
+        }
+        dimensions.append(buildDimension("Typing Speed", groups: speedGroups))
+
+        let stealthGroups = Dictionary(grouping: sessions) { $0.settingsSnapshot.stealthJSInjection ? "ON" : "OFF" }
+        dimensions.append(buildDimension("Stealth JS", groups: stealthGroups))
+
+        let humanGroups = Dictionary(grouping: sessions) { $0.settingsSnapshot.humanMouseMovement ? "ON" : "OFF" }
+        dimensions.append(buildDimension("Human Sim", groups: humanGroups))
+
+        let isoGroups = Dictionary(grouping: sessions) { $0.settingsSnapshot.sessionIsolation.rawValue }
+        dimensions.append(buildDimension("Isolation", groups: isoGroups))
+
+        let fpGroups = Dictionary(grouping: sessions) { $0.settingsSnapshot.fingerprintSpoofing ? "ON" : "OFF" }
+        dimensions.append(buildDimension("Fingerprint", groups: fpGroups))
+
+        let tdGroups = Dictionary(grouping: sessions) { $0.settingsSnapshot.trueDetectionEnabled ? "ON" : "OFF" }
+        dimensions.append(buildDimension("TRUE DETECTION", groups: tdGroups))
+
+        return dimensions
+    }
+
+    private func buildDimension(_ name: String, groups: [String: [TestDebugSession]]) -> HeatmapDimension {
+        let cells = groups.map { (key, sessions) -> HeatmapCell in
+            let total = sessions.filter { $0.status.isTerminal }.count
+            let successes = sessions.filter { $0.status == .success }.count
+            let rate = total > 0 ? Double(successes) / Double(total) : 0
+            return HeatmapCell(label: key, successes: successes, total: total, rate: rate)
+        }.sorted { $0.rate > $1.rate }
+        return HeatmapDimension(name: name, cells: cells)
+    }
+}
+
+nonisolated struct HeatmapDimension: Identifiable, Sendable {
+    let id = UUID()
+    let name: String
+    let cells: [HeatmapCell]
+}
+
+nonisolated struct HeatmapCell: Identifiable, Sendable {
+    let id = UUID()
+    let label: String
+    let successes: Int
+    let total: Int
+    let rate: Double
 }

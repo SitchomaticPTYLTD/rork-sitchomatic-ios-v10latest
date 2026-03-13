@@ -10,20 +10,31 @@ struct TestDebugResultsView: View {
     nonisolated enum ResultsTab: String, CaseIterable, Sendable {
         case grid = "Grid"
         case ranked = "Ranked"
+        case heatmap = "Heatmap"
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            tabPicker
-            
-            switch selectedTab {
-            case .grid:
-                screenshotGrid
-            case .ranked:
-                rankedList
+        ZStack(alignment: .bottom) {
+            VStack(spacing: 0) {
+                tabPicker
+
+                switch selectedTab {
+                case .grid:
+                    screenshotGrid
+                case .ranked:
+                    rankedList
+                case .heatmap:
+                    heatmapView
+                }
+            }
+            .background(Color(.systemGroupedBackground))
+
+            if vm.showAppliedToast {
+                appliedToast
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .animation(.spring(duration: 0.35), value: vm.showAppliedToast)
             }
         }
-        .background(Color(.systemGroupedBackground))
         .navigationTitle("Results")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -76,6 +87,25 @@ struct TestDebugResultsView: View {
         .sheet(isPresented: $showCompareSheet) {
             TestDebugCompareView(runs: vm.savedRunSummaries)
         }
+    }
+
+    private var appliedToast: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 16, weight: .bold))
+                .foregroundStyle(.white)
+            Text("Settings Applied")
+                .font(.system(size: 14, weight: .black, design: .monospaced))
+                .foregroundStyle(.white)
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 12)
+        .background(
+            LinearGradient(colors: [.green, .green.opacity(0.8)], startPoint: .leading, endPoint: .trailing)
+        )
+        .clipShape(Capsule())
+        .shadow(color: .green.opacity(0.3), radius: 10, y: 4)
+        .padding(.bottom, 20)
     }
 
     private var tabPicker: some View {
@@ -266,7 +296,7 @@ struct TestDebugResultsView: View {
     }
 
     private func winnerCard(_ session: TestDebugSession) -> some View {
-        VStack(spacing: 10) {
+        VStack(spacing: 12) {
             HStack(spacing: 8) {
                 Image(systemName: "trophy.fill")
                     .font(.system(size: 18, weight: .bold))
@@ -284,6 +314,25 @@ struct TestDebugResultsView: View {
                 .font(.system(size: 11, weight: .semibold, design: .monospaced))
                 .foregroundStyle(.white.opacity(0.9))
                 .frame(maxWidth: .infinity, alignment: .leading)
+
+            Button {
+                vm.applyWinnerSettings()
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "wand.and.stars")
+                        .font(.system(size: 13, weight: .bold))
+                    Text("APPLY THESE SETTINGS")
+                        .font(.system(size: 11, weight: .black, design: .monospaced))
+                }
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity)
+                .frame(height: 38)
+                .background(
+                    LinearGradient(colors: [.purple, .indigo], startPoint: .leading, endPoint: .trailing)
+                )
+                .clipShape(.rect(cornerRadius: 10))
+            }
+            .sensoryFeedback(.success, trigger: vm.showAppliedToast)
         }
         .padding(16)
         .background(
@@ -351,6 +400,104 @@ struct TestDebugResultsView: View {
         .clipShape(.rect(cornerRadius: 12))
     }
 
+    private var heatmapView: some View {
+        ScrollView {
+            let data = vm.buildHeatmapData()
+
+            if data.isEmpty {
+                VStack(spacing: 16) {
+                    Image(systemName: "chart.bar.xaxis")
+                        .font(.system(size: 40, weight: .bold))
+                        .foregroundStyle(.secondary)
+                    Text("No data yet")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 60)
+            } else {
+                VStack(spacing: 16) {
+                    heatmapLegend
+
+                    ForEach(data) { dimension in
+                        heatmapDimensionCard(dimension)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 14)
+            }
+        }
+    }
+
+    private var heatmapLegend: some View {
+        HStack(spacing: 4) {
+            Text("0%")
+                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .foregroundStyle(.secondary)
+
+            ForEach(0..<10, id: \.self) { i in
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(heatColor(Double(i) / 9.0))
+                    .frame(height: 8)
+            }
+
+            Text("100%")
+                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 4)
+    }
+
+    private func heatmapDimensionCard(_ dimension: HeatmapDimension) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(dimension.name.uppercased())
+                .font(.system(size: 10, weight: .heavy, design: .monospaced))
+                .foregroundStyle(.secondary)
+
+            ForEach(dimension.cells) { cell in
+                HStack(spacing: 10) {
+                    Text(cell.label)
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .foregroundStyle(.primary)
+                        .frame(width: 100, alignment: .leading)
+                        .lineLimit(1)
+
+                    GeometryReader { geo in
+                        ZStack(alignment: .leading) {
+                            RoundedRectangle(cornerRadius: 6)
+                                .fill(Color(.tertiarySystemGroupedBackground))
+
+                            RoundedRectangle(cornerRadius: 6)
+                                .fill(heatColor(cell.rate))
+                                .frame(width: max(0, geo.size.width * cell.rate))
+                        }
+                    }
+                    .frame(height: 26)
+
+                    Text("\(cell.successes)/\(cell.total)")
+                        .font(.system(size: 11, weight: .black, design: .monospaced))
+                        .foregroundStyle(heatColor(cell.rate))
+                        .frame(width: 40, alignment: .trailing)
+                }
+            }
+        }
+        .padding(14)
+        .background(Color(.secondarySystemGroupedBackground))
+        .clipShape(.rect(cornerRadius: 14))
+    }
+
+    private func heatColor(_ rate: Double) -> Color {
+        if rate >= 0.75 {
+            return .green
+        } else if rate >= 0.5 {
+            return .yellow
+        } else if rate >= 0.25 {
+            return .orange
+        } else {
+            return .red
+        }
+    }
+
     private func statusColor(_ status: TestDebugSessionStatus) -> Color {
         switch status {
         case .queued: .secondary
@@ -362,4 +509,3 @@ struct TestDebugResultsView: View {
         }
     }
 }
-
