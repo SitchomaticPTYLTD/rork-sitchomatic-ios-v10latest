@@ -5,34 +5,7 @@ import WebKit
 class PPSRStealthService {
     static let shared = PPSRStealthService()
 
-    private var userAgentIndex: Int = 0
-    private var viewportIndex: Int = 0
-    private var sessionSeed: UInt32 = arc4random()
-
-    private let userAgents: [String] = [
-        "Mozilla/5.0 (iPhone; CPU iPhone OS 18_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.4 Mobile/15E148 Safari/604.1",
-        "Mozilla/5.0 (iPhone; CPU iPhone OS 17_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.6 Mobile/15E148 Safari/604.1",
-        "Mozilla/5.0 (iPhone; CPU iPhone OS 18_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.2 Mobile/15E148 Safari/604.1",
-        "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1",
-        "Mozilla/5.0 (iPhone; CPU iPhone OS 18_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.1 Mobile/15E148 Safari/604.1",
-        "Mozilla/5.0 (iPad; CPU OS 18_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.4 Mobile/15E148 Safari/604.1",
-        "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1",
-        "Mozilla/5.0 (iPhone; CPU iPhone OS 18_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.3 Mobile/15E148 Safari/604.1",
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.2 Safari/605.1.15",
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.6 Safari/605.1.15",
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15",
-        "Mozilla/5.0 (iPhone; CPU iPhone OS 16_7_8 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.7 Mobile/15E148 Safari/604.1",
-    ]
-
-    private let viewportSizes: [(width: Int, height: Int)] = [
-        (390, 844), (393, 852), (414, 896),
-        (375, 812), (428, 926), (430, 932),
-        (320, 568), (768, 1024), (810, 1080),
-    ]
-
-    private let languages: [String] = [
-        "en-AU", "en-US", "en-GB", "en-NZ", "en-CA",
-    ]
+    private var profileIndex: Int = 0
 
     struct SessionProfile {
         let userAgent: String
@@ -48,76 +21,144 @@ class PPSRStealthService {
         let pixelRatio: Double
         let maxTouchPoints: Int
         let isMobile: Bool
+        let webglVendor: String
+        let webglRenderer: String
+        let connectionDownlink: Double
+        let connectionRtt: Int
     }
 
+    // MARK: - 10 Trusted Fingerprints
+    //
+    // Each profile represents a high-population real-world Apple device+OS combo.
+    // All signals are cross-consistent: UA ↔ platform ↔ viewport ↔ cores ↔ memory
+    // ↔ pixelRatio ↔ touchPoints ↔ WebGL renderer. Deterministic seeds produce
+    // stable canvas/audio hashes across sessions for the same profile slot.
+    //
+    // Why these are undetectable:
+    // 1. Exact real device specs — not randomized combos that create impossible devices
+    // 2. Apple GPU string matches what Safari actually reports on each device class
+    // 3. Screen dimensions match real hardware logical resolutions
+    // 4. Core counts match real SoC specs (A15=6, A16=6, A17 Pro=6, M1=8, M2=8)
+    // 5. Memory matches real RAM (iPhone=6GB, Pro=8GB, Mac=8-16GB)
+    // 6. Stable deterministic seeds — same profile = same canvas/audio hash every session
+    // 7. Connection API values match typical WiFi/cellular for device class
+
+    private let trustedProfiles: [SessionProfile] = [
+        // 0: iPhone 15 Pro — iOS 18.4, A17 Pro (6-core, 8GB), 393x852 @3x
+        SessionProfile(
+            userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.4 Mobile/15E148 Safari/604.1",
+            viewport: (393, 852), language: "en-AU", platform: "iPhone",
+            cores: 6, memory: 8, tzOffset: -600, tzName: "Australia/Sydney",
+            seed: 2847193650, colorDepth: 32, pixelRatio: 3.0, maxTouchPoints: 5,
+            isMobile: true, webglVendor: "Apple Inc.", webglRenderer: "Apple GPU",
+            connectionDownlink: 10.0, connectionRtt: 50
+        ),
+        // 1: iPhone 14 — iOS 17.6, A15 Bionic (6-core, 6GB), 390x844 @3x
+        SessionProfile(
+            userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.6 Mobile/15E148 Safari/604.1",
+            viewport: (390, 844), language: "en-US", platform: "iPhone",
+            cores: 6, memory: 6, tzOffset: -600, tzName: "Australia/Melbourne",
+            seed: 1592038476, colorDepth: 32, pixelRatio: 3.0, maxTouchPoints: 5,
+            isMobile: true, webglVendor: "Apple Inc.", webglRenderer: "Apple GPU",
+            connectionDownlink: 15.0, connectionRtt: 50
+        ),
+        // 2: iPhone 15 — iOS 18.2, A16 Bionic (6-core, 6GB), 393x852 @3x
+        SessionProfile(
+            userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.2 Mobile/15E148 Safari/604.1",
+            viewport: (393, 852), language: "en-GB", platform: "iPhone",
+            cores: 6, memory: 6, tzOffset: 0, tzName: "Europe/London",
+            seed: 3719204856, colorDepth: 32, pixelRatio: 3.0, maxTouchPoints: 5,
+            isMobile: true, webglVendor: "Apple Inc.", webglRenderer: "Apple GPU",
+            connectionDownlink: 8.5, connectionRtt: 75
+        ),
+        // 3: iPhone 13 — iOS 17.5.1, A15 Bionic (6-core, 4GB), 390x844 @3x
+        SessionProfile(
+            userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1",
+            viewport: (390, 844), language: "en-NZ", platform: "iPhone",
+            cores: 6, memory: 4, tzOffset: -660, tzName: "Pacific/Auckland",
+            seed: 4028371956, colorDepth: 32, pixelRatio: 3.0, maxTouchPoints: 5,
+            isMobile: true, webglVendor: "Apple Inc.", webglRenderer: "Apple GPU",
+            connectionDownlink: 12.0, connectionRtt: 50
+        ),
+        // 4: iPhone 16 Pro — iOS 18.3, A18 Pro (6-core, 8GB), 402x874 @3x
+        SessionProfile(
+            userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.3 Mobile/15E148 Safari/604.1",
+            viewport: (402, 874), language: "en-AU", platform: "iPhone",
+            cores: 6, memory: 8, tzOffset: -600, tzName: "Australia/Brisbane",
+            seed: 3184029367, colorDepth: 32, pixelRatio: 3.0, maxTouchPoints: 5,
+            isMobile: true, webglVendor: "Apple Inc.", webglRenderer: "Apple GPU",
+            connectionDownlink: 20.0, connectionRtt: 50
+        ),
+        // 5: iPad Pro 11" M2 — iPadOS 18.4, M2 (8-core, 8GB), 834x1194 @2x
+        SessionProfile(
+            userAgent: "Mozilla/5.0 (iPad; CPU OS 18_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.4 Mobile/15E148 Safari/604.1",
+            viewport: (834, 1194), language: "en-AU", platform: "iPad",
+            cores: 8, memory: 8, tzOffset: -600, tzName: "Australia/Sydney",
+            seed: 3293047185, colorDepth: 32, pixelRatio: 2.0, maxTouchPoints: 5,
+            isMobile: true, webglVendor: "Apple Inc.", webglRenderer: "Apple GPU",
+            connectionDownlink: 25.0, connectionRtt: 30
+        ),
+        // 6: iPhone 14 Pro — iOS 18.1, A16 Bionic (6-core, 6GB), 393x852 @3x
+        SessionProfile(
+            userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.1 Mobile/15E148 Safari/604.1",
+            viewport: (393, 852), language: "en-CA", platform: "iPhone",
+            cores: 6, memory: 6, tzOffset: -480, tzName: "Asia/Singapore",
+            seed: 3381920465, colorDepth: 32, pixelRatio: 3.0, maxTouchPoints: 5,
+            isMobile: true, webglVendor: "Apple Inc.", webglRenderer: "Apple GPU",
+            connectionDownlink: 10.0, connectionRtt: 75
+        ),
+        // 7: MacBook Air M1 — macOS Sonoma 14.7, M1 (8-core, 8GB), 1440x900 @2x
+        SessionProfile(
+            userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.2 Safari/605.1.15",
+            viewport: (1440, 900), language: "en-AU", platform: "MacIntel",
+            cores: 8, memory: 8, tzOffset: -600, tzName: "Australia/Sydney",
+            seed: 2472059316, colorDepth: 30, pixelRatio: 2.0, maxTouchPoints: 0,
+            isMobile: false, webglVendor: "Apple Inc.", webglRenderer: "Apple M1",
+            connectionDownlink: 80.0, connectionRtt: 20
+        ),
+        // 8: MacBook Pro M2 — macOS Ventura 13.6, M2 (8-core, 16GB), 1512x982 @2x
+        SessionProfile(
+            userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.6 Safari/605.1.15",
+            viewport: (1512, 982), language: "en-US", platform: "MacIntel",
+            cores: 8, memory: 16, tzOffset: 0, tzName: "Europe/London",
+            seed: 2561038274, colorDepth: 30, pixelRatio: 2.0, maxTouchPoints: 0,
+            isMobile: false, webglVendor: "Apple Inc.", webglRenderer: "Apple M2",
+            connectionDownlink: 100.0, connectionRtt: 20
+        ),
+        // 9: iPhone 12 — iOS 17.4, A14 Bionic (6-core, 4GB), 390x844 @3x
+        SessionProfile(
+            userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1",
+            viewport: (390, 844), language: "en-AU", platform: "iPhone",
+            cores: 6, memory: 4, tzOffset: -570, tzName: "Australia/Adelaide",
+            seed: 1047293856, colorDepth: 32, pixelRatio: 3.0, maxTouchPoints: 5,
+            isMobile: true, webglVendor: "Apple Inc.", webglRenderer: "Apple GPU",
+            connectionDownlink: 5.0, connectionRtt: 100
+        ),
+    ]
+
     func nextProfile() -> SessionProfile {
-        let ua = userAgents[userAgentIndex % userAgents.count]
-        userAgentIndex += 1
-        let vp = viewportSizes[viewportIndex % viewportSizes.count]
-        viewportIndex += 1
-        let lang = languages.randomElement() ?? "en-AU"
-        let seed = arc4random()
+        let profile = trustedProfiles[profileIndex % trustedProfiles.count]
+        profileIndex += 1
+        return profile
+    }
 
-        let isMobile = ua.contains("Mobile")
-        let isIPad = ua.contains("iPad")
-        let platform: String
-        if ua.contains("Macintosh") {
-            platform = "MacIntel"
-        } else if isIPad {
-            platform = "iPad"
-        } else {
-            platform = "iPhone"
-        }
-
-        let cores = isMobile ? [4, 6].randomElement()! : [4, 8, 10].randomElement()!
-        let memory = isMobile ? [4, 6].randomElement()! : [8, 16].randomElement()!
-
-        let tzOptions: [(offset: Int, name: String)] = [
-            (-600, "Australia/Sydney"),
-            (-660, "Pacific/Auckland"),
-            (0, "Europe/London"),
-            (-480, "Asia/Singapore"),
-            (-570, "Australia/Adelaide"),
-            (-600, "Australia/Melbourne"),
-            (-600, "Australia/Brisbane"),
-        ]
-        let tz = tzOptions.randomElement()!
-
-        let colorDepth = 32
-        let pixelRatio = isMobile ? [2.0, 3.0].randomElement()! : [1.0, 2.0].randomElement()!
-        let maxTouchPoints = isMobile ? 5 : 0
-
-        return SessionProfile(
-            userAgent: ua,
-            viewport: vp,
-            language: lang,
-            platform: platform,
-            cores: cores,
-            memory: memory,
-            tzOffset: tz.offset,
-            tzName: tz.name,
-            seed: seed,
-            colorDepth: colorDepth,
-            pixelRatio: pixelRatio,
-            maxTouchPoints: maxTouchPoints,
-            isMobile: isMobile
-        )
+    func profileForSlot(_ slot: Int) -> SessionProfile {
+        trustedProfiles[slot % trustedProfiles.count]
     }
 
     func nextUserAgent() -> String {
-        let ua = userAgents[userAgentIndex % userAgents.count]
-        userAgentIndex += 1
-        return ua
+        let profile = trustedProfiles[profileIndex % trustedProfiles.count]
+        profileIndex += 1
+        return profile.userAgent
     }
 
     func nextViewport() -> (width: Int, height: Int) {
-        let vp = viewportSizes[viewportIndex % viewportSizes.count]
-        viewportIndex += 1
-        return vp
+        let profile = trustedProfiles[profileIndex % trustedProfiles.count]
+        return profile.viewport
     }
 
     func randomLanguage() -> String {
-        languages.randomElement() ?? "en-AU"
+        trustedProfiles.randomElement()?.language ?? "en-AU"
     }
 
     func createStealthUserScript(profile: SessionProfile) -> WKUserScript {
@@ -176,9 +217,9 @@ class PPSRStealthService {
             // === CONNECTION API ===
             try {
                 if (navigator.connection) {
-                    defineP(navigator.connection, 'effectiveType', '\(p.isMobile ? "4g" : "4g")');
-                    defineP(navigator.connection, 'downlink', \(p.isMobile ? [5.0, 10.0, 15.0, 20.0].randomElement()! : [50.0, 80.0, 100.0].randomElement()!));
-                    defineP(navigator.connection, 'rtt', \(p.isMobile ? [50, 75, 100].randomElement()! : [20, 30, 50].randomElement()!));
+                    defineP(navigator.connection, 'effectiveType', '4g');
+                    defineP(navigator.connection, 'downlink', \(p.connectionDownlink));
+                    defineP(navigator.connection, 'rtt', \(p.connectionRtt));
                     defineP(navigator.connection, 'saveData', false);
                 }
             } catch(e) {}
@@ -288,10 +329,8 @@ class PPSRStealthService {
 
             // === WEBGL DEEP SPOOFING ===
             try {
-                var webglVendors = ['Apple Inc.'];
-                var webglRenderers = ['Apple GPU'];
-                var gpuVendor = webglVendors[0];
-                var gpuRenderer = webglRenderers[0];
+                var gpuVendor = '\(p.webglVendor)';
+                var gpuRenderer = '\(p.webglRenderer)';
 
                 function patchWebGLContext(proto) {
                     var origGetParameter = proto.getParameter;
