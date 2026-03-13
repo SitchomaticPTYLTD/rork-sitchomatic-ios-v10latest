@@ -166,6 +166,7 @@ struct IPScoreTestView: View {
     @State private var elapsedTimer: Timer?
     @State private var timerTick: Int = 0
     @State private var delegates: [UUID: IPScoreWebViewDelegate] = [:]
+    @State private var showFingerprintTest: Bool = false
 
     private let proxyService = ProxyRotationService.shared
     private let nordService = NordVPNService.shared
@@ -197,6 +198,11 @@ struct IPScoreTestView: View {
                     HStack(spacing: 12) {
                         if !sessions.isEmpty {
                             ViewModeToggle(mode: $viewMode, accentColor: .indigo)
+                        }
+                        NavigationLink(destination: FingerprintTestView()) {
+                            Image(systemName: "fingerprint")
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundStyle(.purple)
                         }
                         Button {
                             showNetworkSheet = true

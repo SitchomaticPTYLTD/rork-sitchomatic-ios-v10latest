@@ -263,6 +263,8 @@ class PPSRStealthService {
         ),
     ]
 
+    var profileCount: Int { trustedProfiles.count }
+
     func nextProfile() -> SessionProfile {
         let profile = trustedProfiles[profileIndex % trustedProfiles.count]
         profileIndex += 1
