@@ -180,6 +180,42 @@ nonisolated struct TestDebugSettingsSnapshot: Sendable {
         }
         return s
     }
+
+    @MainActor
+    func buildNetworkConfig(proxyTarget: ProxyRotationService.ProxyTarget) -> ActiveNetworkConfig {
+        let proxyService = ProxyRotationService.shared
+        let nodeMaven = NodeMavenService.shared
+
+        switch connectionMode {
+        case .wireguard:
+            let configs = proxyTarget == .ignition ? proxyService.ignitionWGConfigs : proxyService.joeWGConfigs
+            if let idx = wireGuardConfigIndex, idx < configs.count {
+                return .wireGuardDNS(configs[idx])
+            }
+            if let first = configs.first {
+                return .wireGuardDNS(first)
+            }
+            return .direct
+
+        case .nodeMaven:
+            if let proxy = nodeMaven.generateProxyConfigForSession(webViewPoolIndex) {
+                return .socks5(proxy)
+            }
+            return .direct
+
+        case .proxy:
+            if let proxy = proxyService.nextWorkingProxy(for: proxyTarget) {
+                return .socks5(proxy)
+            }
+            return .direct
+
+        case .dns:
+            return .direct
+
+        case .openvpn:
+            return .direct
+        }
+    }
 }
 
 nonisolated struct TestDebugCredentialEntry: Sendable {

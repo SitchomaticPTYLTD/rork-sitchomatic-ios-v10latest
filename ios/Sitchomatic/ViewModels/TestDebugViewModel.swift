@@ -29,11 +29,9 @@ class TestDebugViewModel {
     var isStopping: Bool = false
 
     private var batchTask: Task<Void, Never>?
-    private let engine = LoginAutomationEngine()
     private let logger = DebugLogger.shared
     private let generator = SettingVariationGenerator.shared
     private let proxyService = ProxyRotationService.shared
-    private let networkFactory = NetworkSessionFactory.shared
     private let urlRotation = LoginURLRotationService.shared
 
     let waveSize: Int = 6
@@ -159,9 +157,7 @@ class TestDebugViewModel {
     private func runWaves() async {
         let creds = validCredentials
         let targetSite = selectedSite.targetSite
-
         let proxyTarget: ProxyRotationService.ProxyTarget = selectedSite == .ignition ? .ignition : .joe
-        engine.proxyTarget = proxyTarget
 
         for waveIndex in 0..<totalWaves {
             guard !isStopping else { break }
@@ -180,7 +176,8 @@ class TestDebugViewModel {
 
             await withTaskGroup(of: Void.self) { group in
                 for session in waveSessions {
-                    let cred = creds[session.index % creds.count]
+                    let credIndex = (session.index - 1) % creds.count
+                    let cred = creds[credIndex]
 
                     group.addTask { [weak self] in
                         guard let self else { return }
@@ -213,18 +210,25 @@ class TestDebugViewModel {
         var settings = snapshot.toAutomationSettings(base: AutomationSettings())
         settings = settings.normalizedTimeouts()
 
-        engine.debugMode = false
-        engine.stealthEnabled = snapshot.stealthJSInjection
-        engine.automationSettings = settings
+        let sessionEngine = LoginAutomationEngine()
+        sessionEngine.debugMode = false
+        sessionEngine.stealthEnabled = snapshot.stealthJSInjection
+        sessionEngine.automationSettings = settings
+        sessionEngine.proxyTarget = proxyTarget
+        sessionEngine.networkConfigOverride = snapshot.buildNetworkConfig(proxyTarget: proxyTarget)
 
         urlRotation.isIgnitionMode = (selectedSite == .ignition)
         let testURL = urlRotation.nextURL() ?? targetSite.url
 
+        let netConfigLabel = sessionEngine.networkConfigOverride?.label ?? snapshot.connectionMode.rawValue
         session.logs.append(PPSRLogEntry(message: "Config: \(session.differentiator)", level: .info))
         session.logs.append(PPSRLogEntry(message: "URL: \(testURL.host ?? testURL.absoluteString)", level: .info))
-        session.logs.append(PPSRLogEntry(message: "Network: \(snapshot.connectionMode.label)", level: .info))
+        session.logs.append(PPSRLogEntry(message: "Network: \(netConfigLabel)", level: .info))
+        session.logs.append(PPSRLogEntry(message: "Pattern: \(snapshot.pattern) | Typing: \(snapshot.typingSpeedMinMs)-\(snapshot.typingSpeedMaxMs)ms | Stealth: \(snapshot.stealthJSInjection)", level: .info))
 
-        let outcome = await engine.runLoginTest(attempt, targetURL: testURL, timeout: 90)
+        session.webViewIndex = snapshot.webViewPoolIndex
+
+        let outcome = await sessionEngine.runLoginTest(attempt, targetURL: testURL, timeout: 90)
 
         session.completedAt = Date()
         session.errorMessage = attempt.errorMessage

@@ -1,39 +1,24 @@
-# Increase Connection Limit, Rework IP Mode Toggle & Clean Up WireProxy Visibility
+# Fix Test & Debug — Per-Session Engine Isolation & Network Config
 
-## Changes
+## Problem
+The Test & Debug feature doesn't work because all concurrent sessions (6 at a time) share a single automation engine. They overwrite each other's settings (network mode, stealth, typing speed, pattern, etc.), causing every session to use whatever the last one configured. Additionally, the per-session network variation (WireGuard configs, NodeMaven, proxies) is completely ignored — the engine always uses the global app network settings instead.
 
-### 1. Max Concurrent Connections → 500
-- [x] Increase the local proxy server's connection cap from 200 to 500 so high-burst test runs (like 8 concurrent IP score sessions) don't get rejected at capacity
+## Fixes
 
-### 2. Rework "Unified IP Mode" into IP Routing Toggle
-- [x] Replace the current "Unified IP Mode" on/off toggle with a clear two-option picker:
-  - **"Separate IP per Session"** — each web session gets its own IP from the config pool (current behavior when unified is OFF)
-  - **"App-Wide United IP"** — the entire app shares one IP that auto-rotates on a schedule (current behavior when unified is ON)
-- [x] Apply this across the Network Settings screen, the banner at the top of Joe/Ignition/PPSR views, and other surfaced UI references. The rotation interval, rotate-on-batch, rotate-on-fingerprint, and rotate-now controls remain under the "App-Wide United IP" option.
+**Per-session engine isolation**
+- [x] Each session will create its own dedicated automation engine instance instead of sharing one
+- [x] This prevents concurrent sessions from overwriting each other's settings
 
-### 3. Separate WireProxy from IP Mode
-- [x] Move the WireProxy server toggle and dashboard out of the IP routing section so it reads as a separate feature
-- [x] Keep WireProxy as its own independent section in Network Settings, labeled as the on-device SOCKS5 tunnel forwarder
-- [x] Keep the WireGuard Tunnel dashboard link inside that WireProxy section
+**Apply snapshot network config**
+- [x] Build the correct network configuration (WireGuard, NodeMaven, SOCKS5, DNS, direct) from each session's variation snapshot
+- [x] Pass it directly to the web session so each session actually uses its unique network setting
 
-### 4. Only Show WireProxy When Compatible
-- [x] Only show the WireProxy server section when the connection mode is set to **WireGuard**
-- [x] Hide WireProxy entirely for DNS, SOCKS5 Proxy, OpenVPN, and other incompatible modes
-- [x] Only show the WireProxy dashboard navigation link when `wireProxyBridge.isActive`
+**Apply snapshot automation settings**
+- [x] Each session's engine gets its own copy of automation settings from the snapshot (typing speed, stealth, pattern priority, delays, etc.)
+- [x] No more race conditions between concurrent sessions
 
-### 5. Full Networking Review Pass
-- [x] Audit `NetworkSessionFactory` to keep WireProxy tunnel routing prioritized only when active and compatible
-- [x] Verify `DeviceProxyService` properly handles the renamed IP routing states and connection-mode changes
-- [x] Ensure `AppDataExportService` exports/imports the new IP routing naming and settings correctly
-- [x] Update banner view (`UnifiedIPBannerView`) to reflect the new naming — show "United IP" when app-wide mode is active, hide when per-session mode is active
-- [x] Confirm Super Test's WireProxy WebView phase checks tunnel availability before running
-- [x] Clean up stale surfaced references to the old "Unified IP Mode" naming across the main affected views
+**Proper credential rotation**
+- [x] Fix the credential index calculation so sessions correctly rotate through all provided credentials
 
-## Additional Requests
-
-### 6. Rename app branding and files to Sitchomatic
-- [x] Rename the app target, project references, app folder, entitlements file, and test targets from DualModeCarCheckApp to Sitchomatic
-
-### 7. Slow Debug Mode for Automation
-- [x] Add a slow debug mode in Automation Config that captures a screenshot every 2 seconds during login automation
-- [x] Force slow debug mode to run only 1 login session at a time across batch execution and dashboard controls
+**Result capture improvement**
+- [x] Ensure final screenshots and error messages are properly captured even when the engine times out or hits connection failures

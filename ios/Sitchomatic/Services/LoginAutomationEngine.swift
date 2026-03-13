@@ -21,6 +21,7 @@ class LoginAutomationEngine {
     var stealthEnabled: Bool = false
     var automationSettings: AutomationSettings = AutomationSettings()
     var proxyTarget: ProxyRotationService.ProxyTarget = .joe
+    var networkConfigOverride: ActiveNetworkConfig?
     private let logger = DebugLogger.shared
     private let visionML = VisionMLService.shared
     private let debugButtonService = DebugLoginButtonService.shared
@@ -75,9 +76,9 @@ class LoginAutomationEngine {
         logger.startSession(sessionId, category: .login, message: "Starting login test for \(attempt.credential.username) → \(targetURL.host ?? targetURL.absoluteString)")
         logger.log("Config: timeout=\(Int(timeout))s stealth=\(stealthEnabled) activeSessions=\(activeSessions)/\(maxConcurrency)", category: .login, level: .debug, sessionId: sessionId, metadata: ["url": targetURL.absoluteString, "username": attempt.credential.username])
 
-        let netConfig = networkFactory.nextConfig(for: proxyTarget)
-        logger.log("Network config: \(netConfig.label) for target \(proxyTarget.rawValue)", category: .network, level: .info, sessionId: sessionId)
-        attempt.logs.append(PPSRLogEntry(message: "Network: \(netConfig.label)", level: .info))
+        let netConfig = networkConfigOverride ?? networkFactory.nextConfig(for: proxyTarget)
+        logger.log("Network config: \(netConfig.label) for target \(proxyTarget.rawValue)\(networkConfigOverride != nil ? " (override)" : "")", category: .network, level: .info, sessionId: sessionId)
+        attempt.logs.append(PPSRLogEntry(message: "Network: \(netConfig.label)\(networkConfigOverride != nil ? " (override)" : "")", level: .info))
 
         let session = LoginSiteWebSession(targetURL: targetURL, networkConfig: netConfig)
         session.stealthEnabled = stealthEnabled
