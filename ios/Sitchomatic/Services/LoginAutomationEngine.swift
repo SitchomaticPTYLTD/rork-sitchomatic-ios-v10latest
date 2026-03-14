@@ -46,6 +46,7 @@ class LoginAutomationEngine {
     private let aiSessionHealth = AISessionHealthMonitorService.shared
     private let aiCredentialPriority = AICredentialPriorityScoringService.shared
     private let aiAntiDetection = AIAntiDetectionAdaptiveService.shared
+    private let customTools = AICustomToolsCoordinator.shared
     var onScreenshot: ((PPSRDebugScreenshot) -> Void)?
     var onPurgeScreenshots: (([String]) -> Void)?
     var onConnectionFailure: ((String) -> Void)?
@@ -274,6 +275,22 @@ class LoginAutomationEngine {
                 profileIndex: session.activeProfileIndex,
                 proxyType: netConfig.label
             )
+        }
+
+        if outcome == .connectionFailure || outcome == .timeout || outcome == .unsure {
+            Task {
+                let recentLogs = attempt.logs.suffix(10).map(\.message)
+                let _ = await customTools.analyzeRunHealth(
+                    sessionId: sessionId,
+                    logs: recentLogs,
+                    pageText: nil,
+                    screenshotAvailable: false,
+                    currentOutcome: "\(outcome)",
+                    host: host,
+                    attemptNumber: 1,
+                    elapsedMs: aiLatencyMs
+                )
+            }
         }
 
         replayLogger.log(sessionId: sessionId, action: "complete", detail: "outcome=\(outcome)", level: outcome == .success ? "success" : "error")

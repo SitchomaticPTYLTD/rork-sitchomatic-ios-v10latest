@@ -21,6 +21,35 @@ struct LoginMoreMenuView: View {
     private var aiInsightsSection: some View {
         Section {
             NavigationLink {
+                AICustomToolsDashboardView()
+            } label: {
+                HStack(spacing: 12) {
+                    ZStack {
+                        Circle()
+                            .fill(Color.indigo.opacity(0.12))
+                            .frame(width: 40, height: 40)
+                        Image(systemName: "wrench.and.screwdriver")
+                            .font(.body)
+                            .foregroundStyle(.indigo)
+                    }
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Custom AI Tools").font(.subheadline.bold())
+                        Text("Run health, checkpoint verification, batch tuning")
+                            .font(.caption2).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    let toolStats = AICustomToolsCoordinator.shared.stats()
+                    if toolStats.totalExecutions > 0 {
+                        Text("\(toolStats.totalExecutions)")
+                            .font(.system(.caption2, design: .monospaced, weight: .bold))
+                            .foregroundStyle(.indigo)
+                            .padding(.horizontal, 6).padding(.vertical, 2)
+                            .background(Color.indigo.opacity(0.12)).clipShape(Capsule())
+                    }
+                }
+            }
+
+            NavigationLink {
                 AIInsightsDashboardView()
             } label: {
                 HStack(spacing: 12) {

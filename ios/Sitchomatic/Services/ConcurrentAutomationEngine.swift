@@ -126,6 +126,7 @@ class ConcurrentAutomationEngine {
     private let aiCredentialPriority = AICredentialPriorityScoringService.shared
     private let proxyQualityDecay = ProxyQualityDecayService.shared
     private let preflightService = PreflightSmokeTestService.shared
+    private let customTools = AICustomToolsCoordinator.shared
     private(set) var isRunning: Bool = false
     private var cancelFlag: Bool = false
     private var deadAccounts: Set<String> = []
@@ -336,6 +337,23 @@ class ConcurrentAutomationEngine {
         let avgLatency = latencies.isEmpty ? 0 : latencies.reduce(0, +) / latencies.count
 
         logger.endSession(batchId, category: .ppsr, message: "ConcurrentEngine: batch complete — \(successCount) pass, \(failureCount) fail, avgLatency=\(avgLatency)ms, total=\(totalMs)ms")
+
+        if allResults.count >= 3 {
+            Task {
+                let batchResults = allResults.map { (cardId: $0.0, outcome: "\($0.1)", latencyMs: avgLatency) }
+                let _ = await customTools.summarizeBatchPerformance(
+                    batchId: batchId,
+                    results: batchResults,
+                    concurrency: maxConcurrency,
+                    proxyTarget: "ppsr",
+                    networkMode: "default",
+                    stealthEnabled: engine.stealthEnabled,
+                    fingerprintSpoofing: false,
+                    pageLoadTimeout: Int(timeout),
+                    submitRetryCount: engine.retrySubmitOnFail ? 1 : 0
+                )
+            }
+        }
 
         isRunning = false
         return ConcurrentBatchResult(
