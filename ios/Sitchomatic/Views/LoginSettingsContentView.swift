@@ -43,11 +43,11 @@ struct LoginSettingsContentView: View {
     private var siteToggleSection: some View {
         Section {
             Toggle(isOn: Binding(
-                get: { vm.dualSiteMode },
+                get: { vm.doubleSiteMode },
                 set: { newVal in
                     withAnimation(.spring(duration: 0.35, bounce: 0.15)) {
                         if newVal {
-                            vm.setSiteMode(.dual)
+                            vm.setSiteMode(.double)
                         } else {
                             vm.setSiteMode(vm.isIgnitionMode ? .ignition : .joe)
                         }
@@ -57,18 +57,18 @@ struct LoginSettingsContentView: View {
                 HStack(spacing: 10) {
                     Image(systemName: "arrow.triangle.branch").foregroundStyle(.cyan)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Dual Mode").font(.body)
+                        Text("Double Mode").font(.body)
                         Text("Test Joe + Ignition simultaneously").font(.caption2).foregroundStyle(.secondary)
                     }
                 }
             }
             .tint(.cyan)
-            .sensoryFeedback(.impact(weight: .medium), trigger: vm.dualSiteMode)
+            .sensoryFeedback(.impact(weight: .medium), trigger: vm.doubleSiteMode)
         } header: {
             Text("Site Mode")
         } footer: {
-            if vm.dualSiteMode {
-                Text("Dual mode — half sessions test Joe Fortune, half test Ignition simultaneously.")
+            if vm.doubleSiteMode {
+                Text("Double mode — equal sessions test Joe Fortune and Ignition simultaneously.")
             } else {
                 Text("\(vm.isIgnitionMode ? "Ignition" : "Joe") mode — URLs rotate through \(vm.isIgnitionMode ? "Ignition" : "Joe Fortune") domains.")
             }
@@ -423,8 +423,8 @@ struct LoginSettingsContentView: View {
                 HStack(spacing: 6) {
                     Text(vm.isIgnitionMode ? "Ignition" : "Joe Fortune")
                         .foregroundStyle(vm.isIgnitionMode ? .orange : .green)
-                    if vm.dualSiteMode {
-                        Text("DUAL").font(.system(.caption2, design: .monospaced, weight: .bold))
+                    if vm.doubleSiteMode {
+                        Text("DOUBLE").font(.system(.caption2, design: .monospaced, weight: .bold))
                             .foregroundStyle(.cyan).padding(.horizontal, 4).padding(.vertical, 2)
                             .background(Color.cyan.opacity(0.12)).clipShape(Capsule())
                     }

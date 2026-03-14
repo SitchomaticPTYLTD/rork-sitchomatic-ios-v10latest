@@ -32,6 +32,10 @@ class LoginViewModel {
         guard batchTotalCount > 0 else { return 0 }
         return Double(batchCompletedCount) / Double(batchTotalCount)
     }
+    var batchSuccessCount: Int = 0
+    var batchFailCount: Int = 0
+    var batchStartTime: Date?
+    var batchSiteLabel: String = ""
     var autoRetryEnabled: Bool = true
     var autoRetryMaxAttempts: Int = 3
     private var autoRetryBackoffCounts: [String: Int] = [:]
@@ -41,7 +45,7 @@ class LoginViewModel {
     var fingerprintAvgScore: Double { FingerprintValidationService.shared.averageScore }
     var fingerprintHistory: [FingerprintValidationService.FingerprintScore] { FingerprintValidationService.shared.scoreHistory }
     var lastFingerprintScore: FingerprintValidationService.FingerprintScore? { FingerprintValidationService.shared.lastScore }
-    var dualSiteMode: Bool = false
+    var doubleSiteMode: Bool = false
     var siteMode: SiteMode = .joe
     var savedCropRect: CGRect? = nil
     var automationSettings: AutomationSettings = AutomationSettings()
@@ -54,7 +58,7 @@ class LoginViewModel {
 
     nonisolated enum SiteMode: String, CaseIterable, Sendable {
         case joe = "Joe"
-        case dual = "Dual"
+        case double = "Double"
         case ignition = "Ignition"
     }
 
@@ -77,12 +81,12 @@ class LoginViewModel {
         switch mode {
         case .joe:
             isIgnitionMode = false
-            dualSiteMode = false
-        case .dual:
-            dualSiteMode = true
+            doubleSiteMode = false
+        case .double:
+            doubleSiteMode = true
         case .ignition:
             isIgnitionMode = true
-            dualSiteMode = false
+            doubleSiteMode = false
         }
         persistSettings()
     }
@@ -169,7 +173,7 @@ class LoginViewModel {
             _ = self
         }
         secondaryEngine.onLog = { [weak self] message, level in
-            self?.log("[DUAL] \(message)", level: level)
+            self?.log("[DOUBLE] \(message)", level: level)
         }
         secondaryEngine.onURLFailure = { [weak self] urlString in
             self?.urlRotation.reportFailure(urlString: urlString)
@@ -183,7 +187,7 @@ class LoginViewModel {
         secondaryEngine.onBlankScreenshot = { [weak self] urlString in
             guard let self else { return }
             self.urlRotation.reportFailure(urlString: urlString)
-            self.log("[DUAL] Blank screenshot on \(URL(string: urlString)?.host ?? urlString) — URL marked failed, rotating", level: .warning)
+            self.log("[DOUBLE] Blank screenshot on \(URL(string: urlString)?.host ?? urlString) — URL marked failed, rotating", level: .warning)
         }
 
         notifications.requestPermission()
@@ -739,10 +743,10 @@ class LoginViewModel {
         isStopping = false
         autoRetryBackoffCounts.removeAll()
 
-        if dualSiteMode {
-            log("Starting DUAL-SITE batch: \(credsToTest.count) creds, Joe + Ignition simultaneously")
-            logger.log("BATCH START (dual): \(credsToTest.count) creds, concurrency=\(effectiveMaxConcurrency), stealth=\(stealthEnabled)", category: .login, level: .info, metadata: ["mode": "dual", "count": "\(credsToTest.count)"])
-            testDualSite(credsToTest)
+        if doubleSiteMode {
+            log("Starting DOUBLE-SITE batch: \(credsToTest.count) creds, Joe + Ignition simultaneously")
+            logger.log("BATCH START (double): \(credsToTest.count) creds, concurrency=\(effectiveMaxConcurrency), stealth=\(stealthEnabled)", category: .login, level: .info, metadata: ["mode": "double", "count": "\(credsToTest.count)"])
+            testDoubleSite(credsToTest)
         } else {
             log("Starting batch test: \(credsToTest.count) credentials, max \(effectiveMaxConcurrency) concurrent, stealth: \(stealthEnabled ? "ON" : "OFF")")
             logger.log("BATCH START: \(credsToTest.count) creds, concurrency=\(effectiveMaxConcurrency), stealth=\(stealthEnabled), site=\(targetSite.rawValue)", category: .login, level: .info, metadata: ["mode": "single", "count": "\(credsToTest.count)", "site": targetSite.rawValue])
@@ -754,6 +758,10 @@ class LoginViewModel {
         isRunning = true
         batchTotalCount = credsToTest.count
         batchCompletedCount = 0
+        batchSuccessCount = 0
+        batchFailCount = 0
+        batchStartTime = Date()
+        batchSiteLabel = isIgnitionMode ? "Ignition" : "Joe"
         startHeartbeatMonitor()
         DeviceProxyService.shared.notifyBatchStart()
         backgroundService.beginExtendedBackgroundExecution(reason: "Login batch test")
@@ -806,8 +814,10 @@ class LoginViewModel {
                                 batchRequeued += 1
                             } else if outcome == .success {
                                 batchWorking += 1
+                                self.batchSuccessCount += 1
                             } else {
                                 batchDead += 1
+                                self.batchFailCount += 1
                             }
 
                             self.persistCredentials()
@@ -822,74 +832,110 @@ class LoginViewModel {
         }
     }
 
-    private func testDualSite(_ credsToTest: [LoginCredential]) {
+    private func testDoubleSite(_ credsToTest: [LoginCredential]) {
         isRunning = true
         batchTotalCount = credsToTest.count
         batchCompletedCount = 0
+        batchSuccessCount = 0
+        batchFailCount = 0
+        batchStartTime = Date()
+        batchSiteLabel = "Double"
         startHeartbeatMonitor()
         DeviceProxyService.shared.notifyBatchStart()
-        backgroundService.beginExtendedBackgroundExecution(reason: "Login dual-site batch test")
+        backgroundService.beginExtendedBackgroundExecution(reason: "Login double-site batch test")
         persistence.saveTestQueue(credentialIds: credsToTest.map(\.id))
-        let dualBatchURL = getNextTestURL()
-        recoveryService.beginBatch(credentials: credsToTest, siteMode: "Dual", targetURL: dualBatchURL)
+        let doubleBatchURL = getNextTestURL()
+        recoveryService.beginBatch(credentials: credsToTest, siteMode: "Double", targetURL: doubleBatchURL)
         var batchWorking = 0
         var batchDead = 0
         var batchRequeued = 0
 
-        let concurrencyLimit = effectiveMaxConcurrency
-        let halfConcurrency = max(1, concurrencyLimit / 2)
+        let concurrencyLimit = max(2, effectiveMaxConcurrency)
+        let halfConcurrency = concurrencyLimit / 2
+        let joeSlots = halfConcurrency
+        let ignSlots = concurrencyLimit - halfConcurrency
+
+        let midpoint = credsToTest.count / 2
+        let joeCreds = Array(credsToTest.prefix(midpoint))
+        let ignCreds = Array(credsToTest.suffix(from: midpoint))
+
+        log("Double Mode: \(joeCreds.count) creds → Joe (\(joeSlots) slots), \(ignCreds.count) creds → Ignition (\(ignSlots) slots)")
 
         batchTask = Task {
             configureEngine()
 
             await withTaskGroup(of: Void.self) { group in
-                var running = 0
+                var joeRunning = 0
+                var ignRunning = 0
+                var joeIndex = 0
+                var ignIndex = 0
 
-                for (index, cred) in credsToTest.enumerated() {
-                    if isStopping { break }
-
+                while (joeIndex < joeCreds.count || ignIndex < ignCreds.count) && !isStopping {
                     while isPaused && !isStopping {
                         try? await Task.sleep(for: .milliseconds(500))
                     }
                     if isStopping { break }
 
-                    if running >= concurrencyLimit {
-                        await group.next()
-                        running -= 1
+                    var launched = false
+
+                    if joeIndex < joeCreds.count && joeRunning < joeSlots {
+                        let cred = joeCreds[joeIndex]
+                        joeIndex += 1
+                        joeRunning += 1
+                        launched = true
+                        cred.status = .testing
+                        let attempt = LoginAttempt(credential: cred, sessionIndex: joeRunning)
+                        self.attempts.insert(attempt, at: 0)
+                        self.activeTestCount += 1
+                        let testURL = self.getNextTestURL(forSite: .joefortune)
+
+                        group.addTask { [testTimeout] in
+                            let outcome = await self.engine.runLoginTest(attempt, targetURL: testURL, timeout: testTimeout)
+                            await MainActor.run {
+                                self.activeTestCount = max(0, self.activeTestCount - 1)
+                                self.batchCompletedCount = min(self.batchCompletedCount + 1, self.batchTotalCount)
+                                attempt.logs.insert(PPSRLogEntry(message: "[JOE] Tested on \(testURL.host ?? "")", level: .info), at: 0)
+                                self.handleOutcome(outcome, credential: cred, attempt: attempt)
+                                self.updateRecoveryForOutcome(outcome, credential: cred, attempt: attempt)
+                                if outcome == .success { batchWorking += 1; self.batchSuccessCount += 1 }
+                                else if cred.status == .untested { batchRequeued += 1 }
+                                else { batchDead += 1; self.batchFailCount += 1 }
+                                joeRunning = max(0, joeRunning - 1)
+                                self.persistCredentials()
+                            }
+                        }
                     }
 
-                    running += 1
-                    cred.status = .testing
-                    let sessionIdx = running
+                    if ignIndex < ignCreds.count && ignRunning < ignSlots {
+                        let cred = ignCreds[ignIndex]
+                        ignIndex += 1
+                        ignRunning += 1
+                        launched = true
+                        cred.status = .testing
+                        let attempt = LoginAttempt(credential: cred, sessionIndex: ignRunning)
+                        self.attempts.insert(attempt, at: 0)
+                        self.activeTestCount += 1
+                        let testURL = self.getNextTestURL(forSite: .ignition)
 
-                    let useIgnition = concurrencyLimit == 1 ? !index.isMultiple(of: 2) : running > halfConcurrency
-                    let targetEngine = useIgnition ? secondaryEngine : engine
-                    let testURL = useIgnition ? getNextTestURL(forSite: .ignition) : getNextTestURL(forSite: .joefortune)
-                    let siteLabel = useIgnition ? "IGN" : "JOE"
-
-                    let attempt = LoginAttempt(credential: cred, sessionIndex: sessionIdx)
-                    attempts.insert(attempt, at: 0)
-                    activeTestCount += 1
-
-                    group.addTask { [testTimeout] in
-                        let outcome = await targetEngine.runLoginTest(attempt, targetURL: testURL, timeout: testTimeout)
-                        await MainActor.run {
-                            self.activeTestCount -= 1
-                            self.batchCompletedCount += 1
-                            attempt.logs.insert(PPSRLogEntry(message: "[\(siteLabel)] Tested on \(testURL.host ?? "")", level: .info), at: 0)
-                            self.handleOutcome(outcome, credential: cred, attempt: attempt)
-                            self.updateRecoveryForOutcome(outcome, credential: cred, attempt: attempt)
-
-                            if cred.status == .untested {
-                                batchRequeued += 1
-                            } else if outcome == .success {
-                                batchWorking += 1
-                            } else {
-                                batchDead += 1
+                        group.addTask { [testTimeout] in
+                            let outcome = await self.secondaryEngine.runLoginTest(attempt, targetURL: testURL, timeout: testTimeout)
+                            await MainActor.run {
+                                self.activeTestCount = max(0, self.activeTestCount - 1)
+                                self.batchCompletedCount = min(self.batchCompletedCount + 1, self.batchTotalCount)
+                                attempt.logs.insert(PPSRLogEntry(message: "[IGN] Tested on \(testURL.host ?? "")", level: .info), at: 0)
+                                self.handleOutcome(outcome, credential: cred, attempt: attempt)
+                                self.updateRecoveryForOutcome(outcome, credential: cred, attempt: attempt)
+                                if outcome == .success { batchWorking += 1; self.batchSuccessCount += 1 }
+                                else if cred.status == .untested { batchRequeued += 1 }
+                                else { batchDead += 1; self.batchFailCount += 1 }
+                                ignRunning = max(0, ignRunning - 1)
+                                self.persistCredentials()
                             }
-
-                            self.persistCredentials()
                         }
+                    }
+
+                    if !launched {
+                        await group.next()
                     }
                 }
 
@@ -942,6 +988,8 @@ class LoginViewModel {
         isPaused = false
         pauseCountdown = 0
         activeTestCount = 0
+        batchStartTime = nil
+        batchSiteLabel = ""
 
         let stoppedEarly = isStopping
         isStopping = false

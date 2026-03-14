@@ -56,7 +56,7 @@ struct DualWebStackView: View {
         .onAppear {
             if !initialSetupDone {
                 initialSetupDone = true
-                vm.setSiteMode(.dual)
+                vm.setSiteMode(.double)
             }
         }
         .sheet(isPresented: $showCredentialsSheet) {

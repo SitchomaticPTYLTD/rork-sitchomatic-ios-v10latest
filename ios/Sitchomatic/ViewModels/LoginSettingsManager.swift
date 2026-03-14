@@ -11,7 +11,7 @@ class LoginSettingsManager {
     var maxConcurrency: Int = 8
     var savedCropRect: CGRect? = nil
     var automationSettings: AutomationSettings = AutomationSettings()
-    var dualSiteMode: Bool = false
+    var doubleSiteMode: Bool = false
     var siteMode: LoginViewModel.SiteMode = .joe
 
     let urlRotation = LoginURLRotationService.shared
@@ -40,12 +40,12 @@ class LoginSettingsManager {
         switch mode {
         case .joe:
             isIgnitionMode = false
-            dualSiteMode = false
-        case .dual:
-            dualSiteMode = true
+            doubleSiteMode = false
+        case .double:
+            doubleSiteMode = true
         case .ignition:
             isIgnitionMode = true
-            dualSiteMode = false
+            doubleSiteMode = false
         }
         persistSettings()
     }

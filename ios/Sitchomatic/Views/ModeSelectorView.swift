@@ -58,9 +58,9 @@ struct ModeSelectorView: View {
                         }
                         HStack(spacing: cardSpacing) {
                             modeCard(
-                                mode: .dual,
+                                mode: .double,
                                 icon: "arrow.triangle.branch",
-                                title: "Dual\nMode",
+                                title: "Double\nMode",
                                 subtitle: "Joe + Ignition",
                                 color: .cyan,
                                 width: cardWidth,

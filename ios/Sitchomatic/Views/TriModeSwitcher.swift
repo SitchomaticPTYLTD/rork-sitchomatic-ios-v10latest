@@ -7,7 +7,7 @@ struct TriModeSwitcher: View {
     private var selectedIndex: Int {
         switch siteMode {
         case .joe: 0
-        case .dual: 1
+        case .double: 1
         case .ignition: 2
         }
     }
@@ -15,7 +15,7 @@ struct TriModeSwitcher: View {
     private var trackColor: Color {
         switch siteMode {
         case .joe: .green
-        case .dual: .cyan
+        case .double: .cyan
         case .ignition: .orange
         }
     }
@@ -52,8 +52,8 @@ struct TriModeSwitcher: View {
 
                     segmentButton(
                         icon: "arrow.triangle.branch",
-                        label: "DUAL",
-                        mode: .dual,
+                        label: "DOUBLE",
+                        mode: .double,
                         width: segmentWidth + 2
                     )
 

@@ -32,7 +32,7 @@ struct SplitTestView: View {
         .onAppear {
             if !initialSetupDone {
                 initialSetupDone = true
-                vm.setSiteMode(.dual)
+                vm.setSiteMode(.double)
             }
         }
         .safeAreaInset(edge: .top) {
@@ -85,7 +85,7 @@ struct SplitTestView: View {
 
                     let joeAttempts = vm.attempts.filter { attempt in
                         attempt.logs.contains { $0.message.contains("[JOE]") } ||
-                        (!attempt.logs.contains { $0.message.contains("[IGN]") } && !vm.dualSiteMode) ||
+                        (!attempt.logs.contains { $0.message.contains("[IGN]") } && !vm.doubleSiteMode) ||
                         attemptIsForSite(attempt, site: .joefortune)
                     }.prefix(50)
 
