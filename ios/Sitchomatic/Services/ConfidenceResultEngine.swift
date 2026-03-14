@@ -7,6 +7,7 @@ class ConfidenceResultEngine {
     static let shared = ConfidenceResultEngine()
 
     private let logger = DebugLogger.shared
+    private let aiAnalyzer = AIConfidenceAnalyzerService.shared
 
     nonisolated struct ConfidenceResult: Sendable {
         let outcome: LoginOutcome
@@ -64,6 +65,18 @@ class ConfidenceResultEngine {
         let httpSignal = evaluateHTTPStatus(httpStatus: httpStatus)
         contributions.append(httpSignal)
 
+        let host = URL(string: currentURL)?.host ?? currentURL
+        if let keywordBoost = aiAnalyzer.learnedKeywordBoost(host: host, pageContent: pageContent) {
+            let boostSignal = SignalContribution(
+                source: "AI_LEARNED_\(keywordBoost.outcome.uppercased())",
+                weight: 0.15,
+                rawScore: keywordBoost.boost / 0.15,
+                weightedScore: keywordBoost.boost,
+                detail: "AI learned keyword boost → \(keywordBoost.outcome)"
+            )
+            contributions.append(boostSignal)
+        }
+
         let compositeScore = contributions.reduce(0.0) { $0 + $1.weightedScore }
 
         let successThreshold = 0.55
@@ -75,9 +88,9 @@ class ConfidenceResultEngine {
         let incorrectScore = contributions.filter { $0.detail.contains("incorrect") || $0.detail.contains("invalid") || $0.detail.contains("wrong") }.reduce(0.0) { $0 + $1.weightedScore }
         let tempScore = contributions.filter { $0.detail.contains("temporarily") || $0.detail.contains("too many") }.reduce(0.0) { $0 + $1.weightedScore }
 
-        let outcome: LoginOutcome
-        let confidence: Double
-        let reasoning: String
+        var outcome: LoginOutcome
+        var confidence: Double
+        var reasoning: String
 
         if tempScore >= disabledThreshold {
             outcome = .tempDisabled
@@ -101,6 +114,49 @@ class ConfidenceResultEngine {
             reasoning = "AMBIGUOUS — defaulting to noAcc (success:\(String(format: "%.2f", successScore)) incorrect:\(String(format: "%.2f", incorrectScore)) disabled:\(String(format: "%.2f", disabledScore)))"
         }
 
+        if aiAnalyzer.shouldUseAIFallback(confidence: confidence) {
+            let staticOutcomeStr = outcomeToString(outcome)
+            logger.log("ConfidenceEngine: LOW CONFIDENCE \(String(format: "%.0f%%", confidence * 100)) — invoking AI fallback for \(host)", category: .evaluation, level: .warning)
+
+            if let aiResult = await aiAnalyzer.analyzeWithAI(
+                host: host,
+                pageContent: pageContent,
+                currentURL: currentURL,
+                pageTitle: pageTitle,
+                staticOutcome: staticOutcomeStr,
+                staticConfidence: confidence
+            ) {
+                let aiOutcome = stringToOutcome(aiResult.outcome)
+                if aiResult.confidence > confidence {
+                    outcome = aiOutcome
+                    confidence = aiResult.confidence
+                    reasoning = "AI OVERRIDE — \(aiResult.reasoning) (static was \(staticOutcomeStr) @ \(String(format: "%.0f%%", confidence * 100)))"
+
+                    let aiSignal = SignalContribution(
+                        source: "AI_FALLBACK",
+                        weight: 0.20,
+                        rawScore: aiResult.confidence,
+                        weightedScore: 0.20 * aiResult.confidence,
+                        detail: "AI classified as \(aiResult.outcome): \(aiResult.reasoning)"
+                    )
+                    contributions.append(aiSignal)
+
+                    aiAnalyzer.recordFeedback(
+                        host: host,
+                        predictedOutcome: aiResult.outcome,
+                        actualOutcome: aiResult.outcome,
+                        confidence: aiResult.confidence,
+                        pageContent: pageContent,
+                        newKeywords: aiResult.newKeywords
+                    )
+
+                    logger.log("ConfidenceEngine: AI upgraded \(staticOutcomeStr) → \(aiResult.outcome) (\(String(format: "%.0f%%", aiResult.confidence * 100)))", category: .evaluation, level: .success)
+                } else {
+                    logger.log("ConfidenceEngine: AI agreed with static or lower confidence — keeping \(staticOutcomeStr)", category: .evaluation, level: .debug)
+                }
+            }
+        }
+
         logger.log("ConfidenceEngine: \(outcome) confidence=\(String(format: "%.0f%%", confidence * 100)) composite=\(String(format: "%.3f", compositeScore)) — \(reasoning)", category: .evaluation, level: outcome == .success ? .success : .info)
 
         return ConfidenceResult(
@@ -110,6 +166,41 @@ class ConfidenceResultEngine {
             signalBreakdown: contributions,
             reasoning: reasoning
         )
+    }
+
+    func recordOutcomeFeedback(host: String, predictedOutcome: LoginOutcome, actualOutcome: LoginOutcome, confidence: Double, pageContent: String) {
+        aiAnalyzer.recordFeedback(
+            host: host,
+            predictedOutcome: outcomeToString(predictedOutcome),
+            actualOutcome: outcomeToString(actualOutcome),
+            confidence: confidence,
+            pageContent: pageContent
+        )
+    }
+
+    private func outcomeToString(_ outcome: LoginOutcome) -> String {
+        switch outcome {
+        case .success: return "success"
+        case .permDisabled: return "permDisabled"
+        case .tempDisabled: return "tempDisabled"
+        case .noAcc: return "noAcc"
+        case .unsure: return "unsure"
+        case .connectionFailure: return "connectionFailure"
+        case .timeout: return "timeout"
+        case .redBannerError: return "redBannerError"
+        case .smsDetected: return "smsDetected"
+        }
+    }
+
+    private func stringToOutcome(_ str: String) -> LoginOutcome {
+        switch str.lowercased() {
+        case "success": return .success
+        case "permdisabled": return .permDisabled
+        case "tempdisabled": return .tempDisabled
+        case "noacc": return .noAcc
+        case "unsure": return .unsure
+        default: return .noAcc
+        }
     }
 
     private func evaluatePageText(pageContent: String) -> SignalContribution {
