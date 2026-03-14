@@ -52,6 +52,9 @@ class HumanInteractionEngine {
 
     private let logger = DebugLogger.shared
     private let patternLearning = LoginPatternLearning.shared
+    private let aiTiming = AITimingOptimizerService.shared
+    private var currentHost: String = ""
+    private var currentPattern: String = ""
 
     private func gaussianRandom(mean: Double, stdDev: Double) -> Double {
         let u1 = Double.random(in: 0.0001...0.9999)
@@ -65,6 +68,11 @@ class HumanInteractionEngine {
         let stdDev = Double(maxMs - minMs) / 4.0
         let delay = gaussianRandom(mean: mean, stdDev: stdDev)
         return max(minMs, min(maxMs, Int(delay)))
+    }
+
+    private func aiOptimizedDelay(category: TimingCategory, fallbackMin: Int, fallbackMax: Int) -> Int {
+        guard !currentHost.isEmpty else { return humanDelay(minMs: fallbackMin, maxMs: fallbackMax) }
+        return aiTiming.optimizedDelay(for: currentHost, category: category, pattern: currentPattern)
     }
 
     func selectBestPattern(for url: String) -> LoginFormPattern {
@@ -89,9 +97,17 @@ class HumanInteractionEngine {
         username: String,
         password: String,
         executeJS: @escaping (String) async -> String?,
-        sessionId: String
+        sessionId: String,
+        targetURL: String? = nil
     ) async -> HumanPatternResult {
-        logger.log("HumanInteraction: executing pattern '\(pattern.rawValue)'", category: .automation, level: .info, sessionId: sessionId)
+        if let url = targetURL, let host = URL(string: url)?.host {
+            currentHost = host
+        } else if let host = URL(string: sessionId)?.host {
+            currentHost = host
+        }
+        currentPattern = pattern.rawValue
+
+        logger.log("HumanInteraction: executing pattern '\(pattern.rawValue)' host=\(currentHost)", category: .automation, level: .info, sessionId: sessionId)
         let startTime = Date()
 
         let result: HumanPatternResult
@@ -125,6 +141,20 @@ class HumanInteractionEngine {
         let elapsed = Date().timeIntervalSince(startTime)
         logger.log("HumanInteraction: pattern '\(pattern.rawValue)' completed in \(Int(elapsed * 1000))ms — fillSuccess:\(result.usernameFilled && result.passwordFilled) submitSuccess:\(result.submitTriggered)", category: .automation, level: result.submitTriggered ? .success : .warning, sessionId: sessionId, durationMs: Int(elapsed * 1000))
 
+        if !currentHost.isEmpty {
+            let profile = aiTiming.profileForHost(currentHost)
+            aiTiming.recordPatternTimingOutcome(
+                url: targetURL ?? sessionId,
+                pattern: pattern,
+                keystrokeDelayMs: Int(profile.keystroke.mean),
+                interFieldPauseMs: Int(profile.interField.mean),
+                preSubmitWaitMs: Int(profile.preSubmit.mean),
+                fillSuccess: result.usernameFilled && result.passwordFilled,
+                submitSuccess: result.submitTriggered,
+                detected: !result.submitTriggered && result.usernameFilled
+            )
+        }
+
         return result
     }
 
@@ -140,8 +170,9 @@ class HumanInteractionEngine {
             try? await Task.sleep(for: .milliseconds(300))
         }
 
-        logger.log("TrueDetection Pattern: hard pause 4000ms", category: .automation, level: .trace, sessionId: sessionId)
-        try? await Task.sleep(for: .milliseconds(4000))
+        let postDOMDelay = aiOptimizedDelay(category: .postDOMPause, fallbackMin: 2000, fallbackMax: 4000)
+        logger.log("TrueDetection Pattern: hard pause \(postDOMDelay)ms (AI-optimized)", category: .automation, level: .trace, sessionId: sessionId)
+        try? await Task.sleep(for: .milliseconds(postDOMDelay))
 
         let escapedUser = username.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "'", with: "\\'")
         let emailJS = """
@@ -165,7 +196,7 @@ class HumanInteractionEngine {
         logger.log("TrueDetection: #email fill → \(emailResult ?? "nil")", category: .automation, level: result.usernameFilled ? .success : .error, sessionId: sessionId)
 
         if !result.usernameFilled { return result }
-        try? await Task.sleep(for: .milliseconds(Int.random(in: 300...600)))
+        try? await Task.sleep(for: .milliseconds(aiOptimizedDelay(category: .interFieldPause, fallbackMin: 300, fallbackMax: 600)))
 
         let escapedPass = password.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "'", with: "\\'")
         let passJS = """
@@ -189,7 +220,7 @@ class HumanInteractionEngine {
         logger.log("TrueDetection: #login-password fill → \(passResult ?? "nil")", category: .automation, level: result.passwordFilled ? .success : .error, sessionId: sessionId)
 
         if !result.passwordFilled { return result }
-        try? await Task.sleep(for: .milliseconds(Int.random(in: 300...600)))
+        try? await Task.sleep(for: .milliseconds(aiOptimizedDelay(category: .preSubmitWait, fallbackMin: 300, fallbackMax: 600)))
 
         logger.log("TrueDetection: starting triple-click on #login-submit", category: .automation, level: .info, sessionId: sessionId)
         for i in 0..<3 {
@@ -246,13 +277,13 @@ class HumanInteractionEngine {
         }
         logger.log("TabNav: email field focused", category: .automation, level: .trace, sessionId: sessionId)
 
-        try? await Task.sleep(for: .milliseconds(humanDelay(minMs: 200, maxMs: 500)))
+        try? await Task.sleep(for: .milliseconds(aiOptimizedDelay(category: .preFocusPause, fallbackMin: 200, fallbackMax: 500)))
 
         let userTyped = await typeCharByChar(text: username, executeJS: executeJS, sessionId: sessionId, fieldName: "email", minDelayMs: 45, maxDelayMs: 160)
         result.usernameFilled = userTyped
         logger.log("TabNav: username typed char-by-char: \(userTyped)", category: .automation, level: userTyped ? .debug : .warning, sessionId: sessionId)
 
-        try? await Task.sleep(for: .milliseconds(humanDelay(minMs: 100, maxMs: 350)))
+        try? await Task.sleep(for: .milliseconds(aiOptimizedDelay(category: .interFieldPause, fallbackMin: 100, fallbackMax: 350)))
 
         let tabJS = """
         (function(){
@@ -274,13 +305,13 @@ class HumanInteractionEngine {
         let tabResult = await executeJS(tabJS)
         logger.log("TabNav: Tab key → \(tabResult ?? "nil")", category: .automation, level: .trace, sessionId: sessionId)
 
-        try? await Task.sleep(for: .milliseconds(humanDelay(minMs: 150, maxMs: 400)))
+        try? await Task.sleep(for: .milliseconds(aiOptimizedDelay(category: .preFocusPause, fallbackMin: 150, fallbackMax: 400)))
 
         let passTyped = await typeCharByChar(text: password, executeJS: executeJS, sessionId: sessionId, fieldName: "password", minDelayMs: 50, maxDelayMs: 180)
         result.passwordFilled = passTyped
         logger.log("TabNav: password typed char-by-char: \(passTyped)", category: .automation, level: passTyped ? .debug : .warning, sessionId: sessionId)
 
-        try? await Task.sleep(for: .milliseconds(humanDelay(minMs: 200, maxMs: 600)))
+        try? await Task.sleep(for: .milliseconds(aiOptimizedDelay(category: .preSubmitWait, fallbackMin: 200, fallbackMax: 600)))
 
         let enterJS = """
         (function(){
@@ -341,12 +372,12 @@ class HumanInteractionEngine {
             return result
         }
 
-        try? await Task.sleep(for: .milliseconds(humanDelay(minMs: 300, maxMs: 700)))
+        try? await Task.sleep(for: .milliseconds(aiOptimizedDelay(category: .preFocusPause, fallbackMin: 300, fallbackMax: 700)))
 
         let userTyped = await typeCharByChar(text: username, executeJS: executeJS, sessionId: sessionId, fieldName: "email", minDelayMs: 55, maxDelayMs: 200)
         result.usernameFilled = userTyped
 
-        try? await Task.sleep(for: .milliseconds(humanDelay(minMs: 400, maxMs: 900)))
+        try? await Task.sleep(for: .milliseconds(aiOptimizedDelay(category: .interFieldPause, fallbackMin: 400, fallbackMax: 900)))
 
         let blurAndClickPassJS = """
         (function(){
@@ -374,12 +405,12 @@ class HumanInteractionEngine {
         let passClick = await executeJS(blurAndClickPassJS)
         logger.log("ClickFocus: password field click → \(passClick ?? "nil")", category: .automation, level: .trace, sessionId: sessionId)
 
-        try? await Task.sleep(for: .milliseconds(humanDelay(minMs: 200, maxMs: 500)))
+        try? await Task.sleep(for: .milliseconds(aiOptimizedDelay(category: .preFocusPause, fallbackMin: 200, fallbackMax: 500)))
 
         let passTyped = await typeCharByChar(text: password, executeJS: executeJS, sessionId: sessionId, fieldName: "password", minDelayMs: 60, maxDelayMs: 190)
         result.passwordFilled = passTyped
 
-        try? await Task.sleep(for: .milliseconds(humanDelay(minMs: 300, maxMs: 800)))
+        try? await Task.sleep(for: .milliseconds(aiOptimizedDelay(category: .preSubmitWait, fallbackMin: 300, fallbackMax: 800)))
 
         let clickLoginResult = await humanClickLoginButton(executeJS: executeJS, sessionId: sessionId)
         result.submitTriggered = clickLoginResult
@@ -399,12 +430,12 @@ class HumanInteractionEngine {
             return result
         }
 
-        try? await Task.sleep(for: .milliseconds(humanDelay(minMs: 150, maxMs: 400)))
+        try? await Task.sleep(for: .milliseconds(aiOptimizedDelay(category: .preFocusPause, fallbackMin: 150, fallbackMax: 400)))
 
         let userTyped = await typeWithExecCommand(text: username, executeJS: executeJS, sessionId: sessionId, fieldName: "email", minDelayMs: 30, maxDelayMs: 120)
         result.usernameFilled = userTyped
 
-        try? await Task.sleep(for: .milliseconds(humanDelay(minMs: 200, maxMs: 500)))
+        try? await Task.sleep(for: .milliseconds(aiOptimizedDelay(category: .interFieldPause, fallbackMin: 200, fallbackMax: 500)))
 
         let focusPassJS = """
         (function(){
@@ -425,12 +456,12 @@ class HumanInteractionEngine {
             return result
         }
 
-        try? await Task.sleep(for: .milliseconds(humanDelay(minMs: 100, maxMs: 350)))
+        try? await Task.sleep(for: .milliseconds(aiOptimizedDelay(category: .preFocusPause, fallbackMin: 100, fallbackMax: 350)))
 
         let passTyped = await typeWithExecCommand(text: password, executeJS: executeJS, sessionId: sessionId, fieldName: "password", minDelayMs: 35, maxDelayMs: 130)
         result.passwordFilled = passTyped
 
-        try? await Task.sleep(for: .milliseconds(humanDelay(minMs: 300, maxMs: 700)))
+        try? await Task.sleep(for: .milliseconds(aiOptimizedDelay(category: .preSubmitWait, fallbackMin: 300, fallbackMax: 700)))
 
         let blurAndSubmitJS = """
         (function(){
@@ -462,12 +493,12 @@ class HumanInteractionEngine {
         let f = await executeJS(focusJS)
         guard f != "NOT_FOUND" else { return result }
 
-        try? await Task.sleep(for: .milliseconds(humanDelay(minMs: 500, maxMs: 1200)))
+        try? await Task.sleep(for: .milliseconds(aiOptimizedDelay(category: .preFocusPause, fallbackMin: 500, fallbackMax: 1200)))
 
         let userTyped = await typeSlowWithCorrections(text: username, executeJS: executeJS, sessionId: sessionId, fieldName: "email")
         result.usernameFilled = userTyped
 
-        try? await Task.sleep(for: .milliseconds(humanDelay(minMs: 600, maxMs: 1500)))
+        try? await Task.sleep(for: .milliseconds(aiOptimizedDelay(category: .interFieldPause, fallbackMin: 600, fallbackMax: 1500)))
 
         let tabToPassJS = """
         (function(){
@@ -488,12 +519,12 @@ class HumanInteractionEngine {
         let pf = await executeJS(tabToPassJS)
         guard pf != "NOT_FOUND" else { return result }
 
-        try? await Task.sleep(for: .milliseconds(humanDelay(minMs: 400, maxMs: 1000)))
+        try? await Task.sleep(for: .milliseconds(aiOptimizedDelay(category: .preFocusPause, fallbackMin: 400, fallbackMax: 1000)))
 
         let passTyped = await typeSlowWithCorrections(text: password, executeJS: executeJS, sessionId: sessionId, fieldName: "password")
         result.passwordFilled = passTyped
 
-        try? await Task.sleep(for: .milliseconds(humanDelay(minMs: 800, maxMs: 2000)))
+        try? await Task.sleep(for: .milliseconds(aiOptimizedDelay(category: .preSubmitWait, fallbackMin: 800, fallbackMax: 2000)))
 
         let clickResult = await humanClickLoginButton(executeJS: executeJS, sessionId: sessionId)
         result.submitTriggered = clickResult
@@ -532,12 +563,12 @@ class HumanInteractionEngine {
         let touchResult = await executeJS(touchFocusEmailJS)
         guard touchResult != "NOT_FOUND" else { return result }
 
-        try? await Task.sleep(for: .milliseconds(humanDelay(minMs: 100, maxMs: 300)))
+        try? await Task.sleep(for: .milliseconds(aiOptimizedDelay(category: .preFocusPause, fallbackMin: 100, fallbackMax: 300)))
 
         let userTyped = await typeCharByChar(text: username, executeJS: executeJS, sessionId: sessionId, fieldName: "email", minDelayMs: 25, maxDelayMs: 80)
         result.usernameFilled = userTyped
 
-        try? await Task.sleep(for: .milliseconds(humanDelay(minMs: 150, maxMs: 400)))
+        try? await Task.sleep(for: .milliseconds(aiOptimizedDelay(category: .interFieldPause, fallbackMin: 150, fallbackMax: 400)))
 
         let touchPassJS = """
         (function(){
@@ -567,12 +598,12 @@ class HumanInteractionEngine {
         let touchPass = await executeJS(touchPassJS)
         guard touchPass != "NOT_FOUND" else { return result }
 
-        try? await Task.sleep(for: .milliseconds(humanDelay(minMs: 80, maxMs: 250)))
+        try? await Task.sleep(for: .milliseconds(aiOptimizedDelay(category: .preFocusPause, fallbackMin: 80, fallbackMax: 250)))
 
         let passTyped = await typeCharByChar(text: password, executeJS: executeJS, sessionId: sessionId, fieldName: "password", minDelayMs: 20, maxDelayMs: 70)
         result.passwordFilled = passTyped
 
-        try? await Task.sleep(for: .milliseconds(humanDelay(minMs: 200, maxMs: 500)))
+        try? await Task.sleep(for: .milliseconds(aiOptimizedDelay(category: .preSubmitWait, fallbackMin: 200, fallbackMax: 500)))
 
         let touchSubmitJS = """
         (function(){
@@ -638,9 +669,9 @@ class HumanInteractionEngine {
                 return false
             }
 
-            let delay = humanDelay(minMs: minDelayMs, maxMs: maxDelayMs)
+            let delay = aiOptimizedDelay(category: .keystrokeDelay, fallbackMin: minDelayMs, fallbackMax: maxDelayMs)
             if index > 0 && index % Int.random(in: 4...8) == 0 {
-                let thinkPause = humanDelay(minMs: 200, maxMs: 600)
+                let thinkPause = aiOptimizedDelay(category: .thinkPause, fallbackMin: 200, fallbackMax: 600)
                 try? await Task.sleep(for: .milliseconds(delay + thinkPause))
             } else {
                 try? await Task.sleep(for: .milliseconds(delay))
@@ -691,7 +722,7 @@ class HumanInteractionEngine {
                 return false
             }
 
-            let delay = humanDelay(minMs: minDelayMs, maxMs: maxDelayMs)
+            let delay = aiOptimizedDelay(category: .keystrokeDelay, fallbackMin: minDelayMs, fallbackMax: maxDelayMs)
             try? await Task.sleep(for: .milliseconds(delay))
         }
 
@@ -726,7 +757,7 @@ class HumanInteractionEngine {
                 _ = await executeJS(typeTypoJS)
                 logger.log("SlowTyper: deliberate typo '\(typoChar)' at pos \(i) in \(fieldName)", category: .automation, level: .trace, sessionId: sessionId)
 
-                try? await Task.sleep(for: .milliseconds(humanDelay(minMs: 300, maxMs: 800)))
+                try? await Task.sleep(for: .milliseconds(aiOptimizedDelay(category: .thinkPause, fallbackMin: 300, fallbackMax: 800)))
 
                 let backspaceJS = """
                 (function(){
@@ -744,7 +775,7 @@ class HumanInteractionEngine {
                 """
                 _ = await executeJS(backspaceJS)
 
-                try? await Task.sleep(for: .milliseconds(humanDelay(minMs: 200, maxMs: 500)))
+                try? await Task.sleep(for: .milliseconds(aiOptimizedDelay(category: .thinkPause, fallbackMin: 200, fallbackMax: 500)))
             }
 
             let char = chars[i]
@@ -769,9 +800,9 @@ class HumanInteractionEngine {
             let r = await executeJS(typeJS)
             if r == "NO_EL" { return false }
 
-            let delay = humanDelay(minMs: 120, maxMs: 350)
+            let delay = aiOptimizedDelay(category: .keystrokeDelay, fallbackMin: 120, fallbackMax: 350)
             if i > 0 && i % Int.random(in: 3...6) == 0 {
-                try? await Task.sleep(for: .milliseconds(delay + humanDelay(minMs: 300, maxMs: 900)))
+                try? await Task.sleep(for: .milliseconds(delay + aiOptimizedDelay(category: .thinkPause, fallbackMin: 300, fallbackMax: 900)))
             } else {
                 try? await Task.sleep(for: .milliseconds(delay))
             }
@@ -799,7 +830,7 @@ class HumanInteractionEngine {
             }
         }
 
-        try? await Task.sleep(for: .milliseconds(humanDelay(minMs: 200, maxMs: 500)))
+        try? await Task.sleep(for: .milliseconds(aiOptimizedDelay(category: .interFieldPause, fallbackMin: 200, fallbackMax: 500)))
 
         let fillPassJS = buildCalibratedFillJS(calibration: cal, fieldType: "password", value: password)
         let passResult = await executeJS(fillPassJS)
@@ -813,7 +844,7 @@ class HumanInteractionEngine {
             }
         }
 
-        try? await Task.sleep(for: .milliseconds(humanDelay(minMs: 300, maxMs: 700)))
+        try? await Task.sleep(for: .milliseconds(aiOptimizedDelay(category: .preSubmitWait, fallbackMin: 300, fallbackMax: 700)))
 
         let clickResult = await humanClickLoginButton(executeJS: executeJS, sessionId: sessionId)
         result.submitTriggered = clickResult
@@ -833,11 +864,11 @@ class HumanInteractionEngine {
             _ = await executeJS(legacyFocus)
         }
 
-        try? await Task.sleep(for: .milliseconds(humanDelay(minMs: 150, maxMs: 400)))
+        try? await Task.sleep(for: .milliseconds(aiOptimizedDelay(category: .preFocusPause, fallbackMin: 150, fallbackMax: 400)))
         let userTyped = await typeCharByChar(text: username, executeJS: executeJS, sessionId: sessionId, fieldName: "email", minDelayMs: 45, maxDelayMs: 160)
         result.usernameFilled = userTyped
 
-        try? await Task.sleep(for: .milliseconds(humanDelay(minMs: 200, maxMs: 500)))
+        try? await Task.sleep(for: .milliseconds(aiOptimizedDelay(category: .interFieldPause, fallbackMin: 200, fallbackMax: 500)))
 
         let focusPassJS = buildCalibratedFocusJS(calibration: cal, fieldType: "password")
         let passFocused = await executeJS(focusPassJS)
@@ -846,11 +877,11 @@ class HumanInteractionEngine {
             _ = await executeJS(legacyFocus)
         }
 
-        try? await Task.sleep(for: .milliseconds(humanDelay(minMs: 150, maxMs: 400)))
+        try? await Task.sleep(for: .milliseconds(aiOptimizedDelay(category: .preFocusPause, fallbackMin: 150, fallbackMax: 400)))
         let passTyped = await typeCharByChar(text: password, executeJS: executeJS, sessionId: sessionId, fieldName: "password", minDelayMs: 50, maxDelayMs: 170)
         result.passwordFilled = passTyped
 
-        try? await Task.sleep(for: .milliseconds(humanDelay(minMs: 200, maxMs: 600)))
+        try? await Task.sleep(for: .milliseconds(aiOptimizedDelay(category: .preSubmitWait, fallbackMin: 200, fallbackMax: 600)))
 
         let enterJS = """
         (function(){
@@ -910,7 +941,7 @@ class HumanInteractionEngine {
             result.passwordFilled = json["pass"] ?? false
         }
 
-        try? await Task.sleep(for: .milliseconds(humanDelay(minMs: 200, maxMs: 500)))
+        try? await Task.sleep(for: .milliseconds(aiOptimizedDelay(category: .preSubmitWait, fallbackMin: 200, fallbackMax: 500)))
 
         let submitJS = """
         (function(){
@@ -952,7 +983,7 @@ class HumanInteractionEngine {
             """
             let f = await executeJS(clickFocusJS)
             if f != "NO_ELEMENT" {
-                try? await Task.sleep(for: .milliseconds(humanDelay(minMs: 100, maxMs: 300)))
+                try? await Task.sleep(for: .milliseconds(aiOptimizedDelay(category: .preFocusPause, fallbackMin: 100, fallbackMax: 300)))
                 let typed = await typeCharByChar(text: username, executeJS: executeJS, sessionId: sessionId, fieldName: "email", minDelayMs: 40, maxDelayMs: 140)
                 result.usernameFilled = typed
             }
@@ -960,13 +991,13 @@ class HumanInteractionEngine {
             let focusJS = "(function(){ \(buildFindEmailFieldJS()) if(!el) return 'NOT_FOUND'; el.focus(); el.click(); el.value=''; return 'OK'; })()"
             let f = await executeJS(focusJS)
             if f != "NOT_FOUND" {
-                try? await Task.sleep(for: .milliseconds(humanDelay(minMs: 100, maxMs: 300)))
+                try? await Task.sleep(for: .milliseconds(aiOptimizedDelay(category: .preFocusPause, fallbackMin: 100, fallbackMax: 300)))
                 let typed = await typeCharByChar(text: username, executeJS: executeJS, sessionId: sessionId, fieldName: "email", minDelayMs: 40, maxDelayMs: 140)
                 result.usernameFilled = typed
             }
         }
 
-        try? await Task.sleep(for: .milliseconds(humanDelay(minMs: 200, maxMs: 500)))
+        try? await Task.sleep(for: .milliseconds(aiOptimizedDelay(category: .interFieldPause, fallbackMin: 200, fallbackMax: 500)))
 
         if let passCoords = cal?.passwordField?.coordinates {
             let clickPassJS = """
@@ -981,7 +1012,7 @@ class HumanInteractionEngine {
             """
             let f = await executeJS(clickPassJS)
             if f != "NO_ELEMENT" {
-                try? await Task.sleep(for: .milliseconds(humanDelay(minMs: 100, maxMs: 300)))
+                try? await Task.sleep(for: .milliseconds(aiOptimizedDelay(category: .preFocusPause, fallbackMin: 100, fallbackMax: 300)))
                 let typed = await typeCharByChar(text: password, executeJS: executeJS, sessionId: sessionId, fieldName: "password", minDelayMs: 45, maxDelayMs: 150)
                 result.passwordFilled = typed
             }
@@ -989,13 +1020,13 @@ class HumanInteractionEngine {
             let focusJS = "(function(){ var el = document.querySelector('input[type=\"password\"]'); if(!el) return 'NOT_FOUND'; el.focus(); el.click(); el.value=''; return 'OK'; })()"
             let f = await executeJS(focusJS)
             if f != "NOT_FOUND" {
-                try? await Task.sleep(for: .milliseconds(humanDelay(minMs: 100, maxMs: 300)))
+                try? await Task.sleep(for: .milliseconds(aiOptimizedDelay(category: .preFocusPause, fallbackMin: 100, fallbackMax: 300)))
                 let typed = await typeCharByChar(text: password, executeJS: executeJS, sessionId: sessionId, fieldName: "password", minDelayMs: 45, maxDelayMs: 150)
                 result.passwordFilled = typed
             }
         }
 
-        try? await Task.sleep(for: .milliseconds(humanDelay(minMs: 300, maxMs: 700)))
+        try? await Task.sleep(for: .milliseconds(aiOptimizedDelay(category: .preSubmitWait, fallbackMin: 300, fallbackMax: 700)))
 
         if let btnCoords = cal?.loginButton?.coordinates {
             let clickBtnJS = """
@@ -1069,7 +1100,7 @@ class HumanInteractionEngine {
             result.passwordFilled = json["pass"] ?? false
         }
 
-        try? await Task.sleep(for: .milliseconds(humanDelay(minMs: 300, maxMs: 700)))
+        try? await Task.sleep(for: .milliseconds(aiOptimizedDelay(category: .preSubmitWait, fallbackMin: 300, fallbackMax: 700)))
 
         let clickResult = await humanClickLoginButton(executeJS: executeJS, sessionId: sessionId)
         result.submitTriggered = clickResult
@@ -1104,7 +1135,7 @@ class HumanInteractionEngine {
         let focusEmailJS = "(function(){ \(buildFindEmailFieldJS()) if(!el) return 'NOT_FOUND'; el.focus(); el.click(); el.value=''; return 'OK'; })()"
         let emailFocus = await executeJS(focusEmailJS)
         if emailFocus != "NOT_FOUND" {
-            try? await Task.sleep(for: .milliseconds(humanDelay(minMs: 150, maxMs: 400)))
+            try? await Task.sleep(for: .milliseconds(aiOptimizedDelay(category: .preFocusPause, fallbackMin: 150, fallbackMax: 400)))
             let userTyped = await typeCharByChar(text: username, executeJS: executeJS, sessionId: sessionId, fieldName: "email", minDelayMs: 40, maxDelayMs: 140)
             result.usernameFilled = userTyped
         } else {
@@ -1125,22 +1156,22 @@ class HumanInteractionEngine {
             """
             let fallback = await executeJS(coordClickJS)
             if fallback != "NOT_FOUND" {
-                try? await Task.sleep(for: .milliseconds(humanDelay(minMs: 150, maxMs: 400)))
+                try? await Task.sleep(for: .milliseconds(aiOptimizedDelay(category: .preFocusPause, fallbackMin: 150, fallbackMax: 400)))
                 let userTyped = await typeCharByChar(text: username, executeJS: executeJS, sessionId: sessionId, fieldName: "email", minDelayMs: 40, maxDelayMs: 140)
                 result.usernameFilled = userTyped
             }
         }
 
-        try? await Task.sleep(for: .milliseconds(humanDelay(minMs: 200, maxMs: 500)))
+        try? await Task.sleep(for: .milliseconds(aiOptimizedDelay(category: .interFieldPause, fallbackMin: 200, fallbackMax: 500)))
 
         let focusPassJS = "(function(){ var el = document.querySelector('input[type=\"password\"]'); if(!el) return 'NOT_FOUND'; el.focus(); el.click(); el.value=''; el.dispatchEvent(new Event('focus',{bubbles:true})); return 'OK'; })()"
         _ = await executeJS(focusPassJS)
 
-        try? await Task.sleep(for: .milliseconds(humanDelay(minMs: 150, maxMs: 400)))
+        try? await Task.sleep(for: .milliseconds(aiOptimizedDelay(category: .preFocusPause, fallbackMin: 150, fallbackMax: 400)))
         let passTyped = await typeCharByChar(text: password, executeJS: executeJS, sessionId: sessionId, fieldName: "password", minDelayMs: 45, maxDelayMs: 160)
         result.passwordFilled = passTyped
 
-        try? await Task.sleep(for: .milliseconds(humanDelay(minMs: 300, maxMs: 700)))
+        try? await Task.sleep(for: .milliseconds(aiOptimizedDelay(category: .preSubmitWait, fallbackMin: 300, fallbackMax: 700)))
 
         let clickResult = await humanClickLoginButton(executeJS: executeJS, sessionId: sessionId)
         result.submitTriggered = clickResult

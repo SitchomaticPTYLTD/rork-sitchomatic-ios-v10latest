@@ -6,6 +6,7 @@ class LoginPatternLearning {
 
     private let persistenceKey = "LoginPatternLearningData"
     private let logger = DebugLogger.shared
+    private let aiTiming = AITimingOptimizerService.shared
     private var data: LearningData
 
     private init() {
@@ -86,7 +87,10 @@ class LoginPatternLearning {
             let avgResponseSec = Double(stats.totalResponseTimeMs) / Double(stats.totalAttempts) / 1000.0
             let recencyBonus = min(1.0, max(0.0, 1.0 - (Date().timeIntervalSince(stats.lastUsed) / 86400.0)))
 
-            let score = (fillRate * 0.2 + submitRate * 0.35 + loginRate * 0.3 + recencyBonus * 0.05) * stats.weight
+            let timingProfile = aiTiming.profileForHost(host)
+            let timingBonus = timingProfile.totalSamples > 10 ? (1.0 - timingProfile.detectionRate) * 0.1 : 0.0
+
+            let score = (fillRate * 0.2 + submitRate * 0.30 + loginRate * 0.3 + recencyBonus * 0.05 + timingBonus) * stats.weight
             let speedPenalty = avgResponseSec > 30 ? 0.9 : 1.0
 
             if stats.consecutiveFailures >= 5 { continue }
