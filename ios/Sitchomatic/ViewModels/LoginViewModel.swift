@@ -862,9 +862,6 @@ class LoginViewModel {
         persistence.saveTestQueue(credentialIds: credsToTest.map(\.id))
         let doubleBatchURL = getNextTestURL()
         recoveryService.beginBatch(credentials: credsToTest, siteMode: "Double", targetURL: doubleBatchURL)
-        var batchWorking = 0
-        var batchDead = 0
-        var batchRequeued = 0
 
         let concurrencyLimit = max(2, effectiveMaxConcurrency)
         let halfConcurrency = concurrencyLimit / 2
@@ -880,9 +877,13 @@ class LoginViewModel {
         batchTask = Task {
             configureEngine()
 
+            var batchWorking = 0
+            var batchDead = 0
+            var batchRequeued = 0
+            var joeRunning = 0
+            var ignRunning = 0
+
             await withTaskGroup(of: Void.self) { group in
-                var joeRunning = 0
-                var ignRunning = 0
                 var joeIndex = 0
                 var ignIndex = 0
 
@@ -1133,6 +1134,16 @@ class LoginViewModel {
         backgroundService.endExtendedBackgroundExecution()
         log("Force-stop complete — all state reset", level: .warning)
         persistCredentials()
+    }
+
+    func emergencyStop() {
+        logger.log("LoginViewModel: EMERGENCY STOP triggered by crash protection", category: .system, level: .critical)
+        batchTask?.cancel()
+        secondaryBatchTask?.cancel()
+        batchTask = nil
+        secondaryBatchTask = nil
+        forceFinalizeBatch()
+        WebViewPool.shared.forceResetCount()
     }
 
     private func startPauseCountdown() {

@@ -175,7 +175,7 @@ class DebugLogger {
     let didChange = PassthroughSubject<Void, Never>()
 
     private(set) var entries: [DebugLogEntry] = []
-    var maxEntries: Int = 5000
+    var maxEntries: Int = 3000
     var minimumLevel: DebugLogLevel = .trace
     var enabledCategories: Set<DebugLogCategory> = Set(DebugLogCategory.allCases)
     var isRecording: Bool = true

@@ -654,6 +654,14 @@ class PPSRAutomationViewModel {
         persistCards()
     }
 
+    func emergencyStop() {
+        logger.log("PPSRAutomationViewModel: EMERGENCY STOP triggered by crash protection", category: .system, level: .critical)
+        batchTask?.cancel()
+        batchTask = nil
+        forceFinalizeBatch()
+        WebViewPool.shared.forceResetCount()
+    }
+
     private func syncActiveTestCount() {
         let actualActive = checks.filter({ !$0.status.isTerminal }).count
         if activeTestCount != actualActive {

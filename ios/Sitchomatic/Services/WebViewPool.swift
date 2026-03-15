@@ -12,12 +12,21 @@ class WebViewPool {
     private var preWarmedViews: [WKWebView] = []
     private let maxPreWarmed: Int = 3
     private(set) var preWarmCount: Int = 0
+    private let hardCapActiveWebViews: Int = 12
+    private var leakDetectionTask: Task<Void, Never>?
+    private var peakActiveCount: Int = 0
+    private var totalCreated: Int = 0
+    private var totalReleased: Int = 0
 
     var activeCount: Int { inUseCount }
     var preWarmedCount: Int { preWarmedViews.count }
 
     func preWarm(count: Int = 2, stealthEnabled: Bool = true, networkConfig: ActiveNetworkConfig = .direct, target: ProxyRotationService.ProxyTarget = .joe) {
-        let toCreate = min(count, maxPreWarmed - preWarmedViews.count)
+        guard inUseCount + preWarmedViews.count < hardCapActiveWebViews else {
+            logger.log("WebViewPool: pre-warm BLOCKED — at hard cap (\(inUseCount) active + \(preWarmedViews.count) pre-warmed >= \(hardCapActiveWebViews))", category: .webView, level: .warning)
+            return
+        }
+        let toCreate = min(count, maxPreWarmed - preWarmedViews.count, hardCapActiveWebViews - inUseCount - preWarmedViews.count)
         guard toCreate > 0 else { return }
 
         for _ in 0..<toCreate {
@@ -43,6 +52,7 @@ class WebViewPool {
             preWarmedViews.append(wv)
         }
         preWarmCount += toCreate
+        totalCreated += toCreate
         logger.log("WebViewPool: pre-warmed \(toCreate) WebViews (pool: \(preWarmedViews.count))", category: .webView, level: .info)
     }
 
@@ -50,7 +60,9 @@ class WebViewPool {
         guard !preWarmedViews.isEmpty else { return nil }
         let wv = preWarmedViews.removeFirst()
         inUseCount += 1
+        peakActiveCount = max(peakActiveCount, inUseCount)
         logger.log("WebViewPool: acquired pre-warmed WebView (remaining: \(preWarmedViews.count), active: \(inUseCount))", category: .webView, level: .trace)
+        startLeakDetectionIfNeeded()
         return wv
     }
 
@@ -67,6 +79,18 @@ class WebViewPool {
     }
 
     func acquire(stealthEnabled: Bool = false, viewportSize: CGSize = CGSize(width: 390, height: 844), networkConfig: ActiveNetworkConfig = .direct, target: ProxyRotationService.ProxyTarget = .joe) async -> WKWebView {
+        if inUseCount >= hardCapActiveWebViews {
+            logger.log("WebViewPool: HARD CAP reached (\(inUseCount)/\(hardCapActiveWebViews)) — waiting for release before creating new WebView", category: .webView, level: .critical)
+            for _ in 0..<30 {
+                try? await Task.sleep(for: .milliseconds(500))
+                if inUseCount < hardCapActiveWebViews { break }
+            }
+            if inUseCount >= hardCapActiveWebViews {
+                logger.log("WebViewPool: HARD CAP still reached after 15s wait — force-draining pre-warmed and proceeding", category: .webView, level: .critical)
+                drainPreWarmed()
+            }
+        }
+
         var effectiveConfig = networkConfig
         if case .socks5 = networkFactory.resolveEffectiveConfigPublic(networkConfig) {
             effectiveConfig = await networkFactory.preflightProxyCheck(for: networkConfig, target: target)
@@ -91,14 +115,20 @@ class WebViewPool {
             let wv = WKWebView(frame: CGRect(origin: .zero, size: CGSize(width: profile.viewport.width, height: profile.viewport.height)), configuration: config)
             wv.customUserAgent = profile.userAgent
             inUseCount += 1
+            totalCreated += 1
+            peakActiveCount = max(peakActiveCount, inUseCount)
             logger.log("WebViewPool: acquired stealth WKWebView network=\(effectiveConfig.label) (active:\(inUseCount))", category: .webView, level: .trace)
+            startLeakDetectionIfNeeded()
             return wv
         }
 
         let wv = WKWebView(frame: CGRect(origin: .zero, size: viewportSize), configuration: config)
         wv.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"
         inUseCount += 1
+        totalCreated += 1
+        peakActiveCount = max(peakActiveCount, inUseCount)
         logger.log("WebViewPool: created WKWebView network=\(effectiveConfig.label) (active:\(inUseCount))", category: .webView, level: .trace)
+        startLeakDetectionIfNeeded()
         return wv
     }
 
@@ -122,26 +152,37 @@ class WebViewPool {
             let wv = WKWebView(frame: CGRect(origin: .zero, size: CGSize(width: profile.viewport.width, height: profile.viewport.height)), configuration: config)
             wv.customUserAgent = profile.userAgent
             inUseCount += 1
+            totalCreated += 1
+            peakActiveCount = max(peakActiveCount, inUseCount)
             logger.log("WebViewPool: acquired stealth WKWebView network=\(networkConfig.label) (active:\(inUseCount))", category: .webView, level: .trace)
+            startLeakDetectionIfNeeded()
             return wv
         }
 
         let wv = WKWebView(frame: CGRect(origin: .zero, size: viewportSize), configuration: config)
         wv.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"
         inUseCount += 1
+        totalCreated += 1
+        peakActiveCount = max(peakActiveCount, inUseCount)
         logger.log("WebViewPool: created WKWebView network=\(networkConfig.label) (active:\(inUseCount))", category: .webView, level: .trace)
+        startLeakDetectionIfNeeded()
         return wv
     }
 
     func release(_ webView: WKWebView, wipeData: Bool = true) {
         guard inUseCount > 0 else {
-            logger.log("WebViewPool: release called but inUseCount already 0 — possible double-release", category: .webView, level: .warning)
+            logger.log("WebViewPool: release called but inUseCount already 0 — possible double-release (created:\(totalCreated) released:\(totalReleased))", category: .webView, level: .warning)
+            safeCleanupWebView(webView, wipeData: wipeData)
             return
         }
         inUseCount -= 1
+        totalReleased += 1
+        safeCleanupWebView(webView, wipeData: wipeData)
+        logger.log("WebViewPool: released (active:\(inUseCount))", category: .webView, level: .trace)
+    }
 
+    private func safeCleanupWebView(_ webView: WKWebView, wipeData: Bool) {
         webView.stopLoading()
-
         if wipeData {
             let dataStore = webView.configuration.websiteDataStore
             dataStore.proxyConfigurations = []
@@ -152,9 +193,7 @@ class WebViewPool {
             webView.configuration.userContentController.removeAllUserScripts()
             HTTPCookieStorage.shared.removeCookies(since: .distantPast)
         }
-
         webView.navigationDelegate = nil
-        logger.log("WebViewPool: released (active:\(inUseCount))", category: .webView, level: .trace)
     }
 
     func handleMemoryPressure() {
@@ -167,6 +206,15 @@ class WebViewPool {
         }
     }
 
+    func emergencyPurgeAll() {
+        let drained = preWarmedViews.count
+        drainPreWarmed()
+        logger.log("WebViewPool: EMERGENCY PURGE — drained \(drained) pre-warmed, \(inUseCount) still active (will be cleaned on release)", category: .webView, level: .critical)
+        if inUseCount > hardCapActiveWebViews {
+            logger.log("WebViewPool: inUseCount (\(inUseCount)) exceeds hard cap — possible leak detected (created:\(totalCreated) released:\(totalReleased))", category: .webView, level: .critical)
+        }
+    }
+
     func reportProcessTermination() {
         processTerminationCount += 1
         logger.log("WebViewPool: WebKit content process terminated (total: \(processTerminationCount))", category: .webView, level: .error)
@@ -175,5 +223,33 @@ class WebViewPool {
             title: "WebView Crash",
             message: "A WebKit content process was terminated. The session will be retried automatically."
         )
+    }
+
+    func forceResetCount() {
+        let oldCount = inUseCount
+        inUseCount = 0
+        logger.log("WebViewPool: force-reset inUseCount from \(oldCount) to 0 (created:\(totalCreated) released:\(totalReleased))", category: .webView, level: .warning)
+    }
+
+    private func startLeakDetectionIfNeeded() {
+        guard leakDetectionTask == nil else { return }
+        leakDetectionTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(60))
+                guard !Task.isCancelled, let self else { return }
+                if self.inUseCount > 0 && !LoginViewModel.shared.isRunning && !PPSRAutomationViewModel.shared.isRunning {
+                    self.logger.log("WebViewPool: LEAK DETECTED — \(self.inUseCount) active WebViews but no batch running (created:\(self.totalCreated) released:\(self.totalReleased)). Resetting count.", category: .webView, level: .error)
+                    self.inUseCount = 0
+                }
+                if self.inUseCount == 0 {
+                    self.leakDetectionTask = nil
+                    return
+                }
+            }
+        }
+    }
+
+    var diagnosticSummary: String {
+        "Active: \(inUseCount)/\(hardCapActiveWebViews) | PreWarmed: \(preWarmedViews.count) | Peak: \(peakActiveCount) | Created: \(totalCreated) | Released: \(totalReleased) | Crashes: \(processTerminationCount)"
     }
 }
