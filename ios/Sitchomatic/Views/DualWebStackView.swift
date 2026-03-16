@@ -6,9 +6,6 @@ struct DualWebStackView: View {
     @State private var vm = LoginViewModel()
     @State private var initialSetupDone: Bool = false
 
-    @State private var topProcessPool = WKProcessPool()
-    @State private var bottomProcessPool = WKProcessPool()
-
     @State private var topIsLoading: Bool = true
     @State private var bottomIsLoading: Bool = true
     @State private var topPageTitle: String = ""
@@ -105,7 +102,6 @@ struct DualWebStackView: View {
                 icon: "suit.spade.fill",
                 color: .green,
                 url: URL(string: "https://joefortune24.com/login")!,
-                processPool: topProcessPool,
                 isLoading: $topIsLoading,
                 pageTitle: $topPageTitle,
                 currentURL: $topCurrentURL,
@@ -121,7 +117,6 @@ struct DualWebStackView: View {
                 icon: "flame.fill",
                 color: .orange,
                 url: URL(string: "https://static.ignitioncasino.lat/?overlay=login")!,
-                processPool: bottomProcessPool,
                 isLoading: $bottomIsLoading,
                 pageTitle: $bottomPageTitle,
                 currentURL: $bottomCurrentURL,
@@ -143,7 +138,6 @@ struct DualWebStackView: View {
                 icon: "suit.spade.fill",
                 color: .green,
                 url: URL(string: "https://joefortune24.com/login")!,
-                processPool: topProcessPool,
                 isLoading: $topIsLoading,
                 pageTitle: $topPageTitle,
                 currentURL: $topCurrentURL,
@@ -159,7 +153,6 @@ struct DualWebStackView: View {
                 icon: "flame.fill",
                 color: .orange,
                 url: URL(string: "https://static.ignitioncasino.lat/?overlay=login")!,
-                processPool: bottomProcessPool,
                 isLoading: $bottomIsLoading,
                 pageTitle: $bottomPageTitle,
                 currentURL: $bottomCurrentURL,
@@ -174,7 +167,6 @@ struct DualWebStackView: View {
         icon: String,
         color: Color,
         url: URL,
-        processPool: WKProcessPool,
         isLoading: Binding<Bool>,
         pageTitle: Binding<String>,
         currentURL: Binding<String>,
@@ -183,7 +175,6 @@ struct DualWebStackView: View {
         ZStack(alignment: .top) {
             SplitWebViewRepresentable(
                 url: url,
-                processPool: processPool,
                 stealthEnabled: vm.stealthEnabled,
                 automationSettings: vm.automationSettings,
                 isLoading: isLoading,

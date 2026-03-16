@@ -3,7 +3,6 @@ import WebKit
 
 struct SplitWebViewRepresentable: UIViewRepresentable {
     let url: URL
-    let processPool: WKProcessPool
     let stealthEnabled: Bool
     let automationSettings: AutomationSettings
     @Binding var isLoading: Bool
@@ -17,7 +16,6 @@ struct SplitWebViewRepresentable: UIViewRepresentable {
 
     func makeUIView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
-        config.processPool = processPool
         config.websiteDataStore = .nonPersistent()
         config.allowsInlineMediaPlayback = true
         config.mediaTypesRequiringUserActionForPlayback = []
@@ -79,20 +77,23 @@ struct SplitWebViewRepresentable: UIViewRepresentable {
             guard let webView else { return }
 
             loadingObservation = webView.observe(\.isLoading, options: [.new]) { [weak self] wv, _ in
+                let loading = wv.isLoading
                 Task { @MainActor in
-                    self?.parent.isLoading = wv.isLoading
+                    self?.parent.isLoading = loading
                 }
             }
 
             titleObservation = webView.observe(\.title, options: [.new]) { [weak self] wv, _ in
+                let title = wv.title ?? ""
                 Task { @MainActor in
-                    self?.parent.pageTitle = wv.title ?? ""
+                    self?.parent.pageTitle = title
                 }
             }
 
             urlObservation = webView.observe(\.url, options: [.new]) { [weak self] wv, _ in
+                let urlString = wv.url?.host ?? wv.url?.absoluteString ?? ""
                 Task { @MainActor in
-                    self?.parent.currentURL = wv.url?.host ?? wv.url?.absoluteString ?? ""
+                    self?.parent.currentURL = urlString
                 }
             }
         }
