@@ -8,6 +8,7 @@ struct LoginWorkingListView: View {
     @State private var exportDocument: CardExportDocument?
     @State private var viewMode: ViewMode = .list
     @State private var selectedCredential: LoginCredential?
+    @State private var showReviewQueue: Bool = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -38,6 +39,25 @@ struct LoginWorkingListView: View {
         }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
+                Button { showReviewQueue = true } label: {
+                    let count = ReviewQueueService.shared.pendingCount
+                    Image(systemName: count > 0 ? "tray.full.fill" : "tray.fill")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(count > 0 ? .orange : .secondary)
+                        .overlay(alignment: .topTrailing) {
+                            if count > 0 {
+                                Text("\(count)")
+                                    .font(.system(size: 9, weight: .heavy))
+                                    .foregroundStyle(.white)
+                                    .padding(.horizontal, 4)
+                                    .padding(.vertical, 1)
+                                    .background(.orange, in: Capsule())
+                                    .offset(x: 8, y: -8)
+                            }
+                        }
+                }
+            }
+            ToolbarItem(placement: .topBarTrailing) {
                 ViewModeToggle(mode: $viewMode, accentColor: .green)
             }
             if !vm.workingCredentials.isEmpty {
@@ -48,6 +68,18 @@ struct LoginWorkingListView: View {
                     } label: { Image(systemName: "square.and.arrow.up") }
                 }
             }
+        }
+        .sheet(isPresented: $showReviewQueue) {
+            NavigationStack {
+                ReviewQueueView()
+                    .toolbar {
+                        ToolbarItem(placement: .topBarLeading) {
+                            Button("Done") { showReviewQueue = false }
+                        }
+                    }
+            }
+            .presentationDetents([.large])
+            .presentationDragIndicator(.visible)
         }
         .overlay(alignment: .bottom) {
             if showCopiedToast {

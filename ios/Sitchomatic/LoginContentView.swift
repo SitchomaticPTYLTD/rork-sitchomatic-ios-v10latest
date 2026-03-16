@@ -45,14 +45,6 @@ struct LoginContentView: View {
                 .withMainMenuButton()
             }
 
-            Tab("Review", systemImage: "eye.trianglebadge.exclamationmark") {
-                NavigationStack {
-                    ReviewQueueView()
-                }
-                .withMainMenuButton()
-                .badge(ReviewQueueService.shared.pendingCount)
-            }
-
             Tab("Sessions", systemImage: "rectangle.stack") {
                 NavigationStack {
                     LoginSessionMonitorContentView(vm: vm)
