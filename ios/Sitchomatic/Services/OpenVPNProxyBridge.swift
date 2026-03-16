@@ -19,6 +19,40 @@ nonisolated struct OpenVPNBridgeStats: Sendable {
     var lastValidatedAt: Date?
     var consecutiveFailures: Int = 0
     var resolutionSource: String = ""
+    var endpointPoolSize: Int = 0
+    var activeEndpointIndex: Int = 0
+    var poolRotations: Int = 0
+    var intelServerLoad: Int = -1
+}
+
+nonisolated struct SOCKS5EndpointSlot: Sendable {
+    let proxy: ProxyConfig
+    let hostname: String
+    let source: String
+    let resolvedAt: Date
+    let serverLoad: Int
+    var consecutiveFailures: Int = 0
+    var lastValidatedAt: Date?
+    var totalServed: Int = 0
+    var avgLatencyMs: Int = 0
+
+    var isHealthy: Bool {
+        consecutiveFailures < 3
+    }
+
+    var healthScore: Double {
+        if !isHealthy { return 0 }
+        let failScore = max(0, 1.0 - Double(consecutiveFailures) / 3.0) * 0.4
+        let loadScore = serverLoad >= 0 ? max(0, 1.0 - Double(serverLoad) / 100.0) * 0.3 : 0.15
+        let latencyScore = avgLatencyMs > 0 ? max(0, 1.0 - Double(avgLatencyMs) / 8000.0) * 0.2 : 0.1
+        let freshness: Double
+        if let last = lastValidatedAt {
+            freshness = max(0, 1.0 - Date().timeIntervalSince(last) / 600.0) * 0.1
+        } else {
+            freshness = 0.05
+        }
+        return failScore + loadScore + latencyScore + freshness
+    }
 }
 
 nonisolated struct SOCKS5RegionCacheEntry: Sendable {
@@ -39,7 +73,11 @@ class OpenVPNProxyBridge {
     private(set) var activeConfig: OpenVPNConfig?
     private(set) var activeSOCKS5Proxy: ProxyConfig?
 
+    private(set) var endpointPool: [SOCKS5EndpointSlot] = []
+    private var nextPoolIndex: Int = 0
+
     private let logger = DebugLogger.shared
+    private let intel = NordServerIntelligence.shared
     private var healthCheckTimer: Timer?
     private let healthCheckInterval: TimeInterval = 15
     private var reconnectAttempts: Int = 0
@@ -49,8 +87,13 @@ class OpenVPNProxyBridge {
     private let socks5Port: Int = 1080
     private let regionCacheTTL: TimeInterval = 300
     private var regionCache: [String: SOCKS5RegionCacheEntry] = [:]
+    private let targetPoolSize = 3
 
     var isActive: Bool { status == .established }
+
+    var activeEndpointCount: Int {
+        endpointPool.filter(\.isHealthy).count
+    }
 
     // MARK: - Start
 
@@ -61,11 +104,54 @@ class OpenVPNProxyBridge {
         status = .connecting
         lastError = nil
         reconnectAttempts = 0
+        endpointPool.removeAll()
+        nextPoolIndex = 0
 
         let startTime = CFAbsoluteTimeGetCurrent()
 
+        if let countryId = config.nordCountryId {
+            let resolved = await intel.resolveMultipleSOCKS5(forCountryId: countryId, count: targetPoolSize)
+            if !resolved.isEmpty {
+                let latencyMs = Int((CFAbsoluteTimeGetCurrent() - startTime) * 1000)
+                for entry in resolved {
+                    let slot = SOCKS5EndpointSlot(
+                        proxy: entry.proxy,
+                        hostname: entry.hostname,
+                        source: entry.source,
+                        resolvedAt: Date(),
+                        serverLoad: intel.serverHealth(hostname: entry.hostname)?.load ?? -1,
+                        lastValidatedAt: Date()
+                    )
+                    endpointPool.append(slot)
+                }
+
+                activeSOCKS5Proxy = endpointPool[0].proxy
+                status = .established
+                connectedSince = Date()
+                stats.handshakeLatencyMs = latencyMs
+                stats.lastValidatedAt = Date()
+                stats.consecutiveFailures = 0
+                stats.resolutionSource = endpointPool.map(\.source).joined(separator: " | ")
+                stats.endpointPoolSize = endpointPool.count
+                stats.intelServerLoad = endpointPool[0].serverLoad
+                startHealthCheck()
+                intel.startMonitoring()
+                logger.log("OpenVPNBridge: ESTABLISHED pool of \(endpointPool.count) endpoints via NordIntel (\(latencyMs)ms) — \(endpointPool.map { "\($0.hostname):\($0.serverLoad)%" }.joined(separator: ", "))", category: .vpn, level: .success)
+                return
+            }
+        }
+
         if let resolved = await resolveSOCKS5Endpoint(for: config) {
             let latencyMs = Int((CFAbsoluteTimeGetCurrent() - startTime) * 1000)
+            let slot = SOCKS5EndpointSlot(
+                proxy: resolved.proxy,
+                hostname: resolved.proxy.host,
+                source: resolved.source,
+                resolvedAt: Date(),
+                serverLoad: -1,
+                lastValidatedAt: Date()
+            )
+            endpointPool.append(slot)
             activeSOCKS5Proxy = resolved.proxy
             status = .established
             connectedSince = Date()
@@ -73,8 +159,9 @@ class OpenVPNProxyBridge {
             stats.lastValidatedAt = Date()
             stats.consecutiveFailures = 0
             stats.resolutionSource = resolved.source
+            stats.endpointPoolSize = 1
             startHealthCheck()
-            logger.log("OpenVPNBridge: ESTABLISHED via \(resolved.source) → \(resolved.proxy.host):\(resolved.proxy.port) (\(latencyMs)ms)", category: .vpn, level: .success)
+            logger.log("OpenVPNBridge: ESTABLISHED (single) via \(resolved.source) → \(resolved.proxy.host):\(resolved.proxy.port) (\(latencyMs)ms)", category: .vpn, level: .success)
             return
         }
 
@@ -93,8 +180,55 @@ class OpenVPNProxyBridge {
         activeSOCKS5Proxy = nil
         lastError = nil
         isReconnecting = false
+        endpointPool.removeAll()
+        nextPoolIndex = 0
         stats = OpenVPNBridgeStats()
         logger.log("OpenVPNBridge: stopped", category: .vpn, level: .info)
+    }
+
+    // MARK: - Pool Round-Robin
+
+    func nextEndpoint() -> ProxyConfig? {
+        let healthy = endpointPool.enumerated().filter { $0.element.isHealthy }
+        guard !healthy.isEmpty else { return activeSOCKS5Proxy }
+
+        let sorted = healthy.sorted { $0.element.healthScore > $1.element.healthScore }
+        let pick = sorted[nextPoolIndex % sorted.count]
+        nextPoolIndex += 1
+
+        activeSOCKS5Proxy = pick.element.proxy
+        stats.activeEndpointIndex = pick.offset
+        stats.poolRotations += 1
+        stats.intelServerLoad = pick.element.serverLoad
+
+        return pick.element.proxy
+    }
+
+    func recordEndpointServed(proxy: ProxyConfig) {
+        if let idx = endpointPool.firstIndex(where: { $0.proxy.host == proxy.host && $0.proxy.port == proxy.port }) {
+            endpointPool[idx].totalServed += 1
+            endpointPool[idx].consecutiveFailures = 0
+            endpointPool[idx].lastValidatedAt = Date()
+            intel.recordSuccess(hostname: endpointPool[idx].hostname, latencyMs: endpointPool[idx].avgLatencyMs)
+        }
+        stats.connectionsServed += 1
+    }
+
+    func recordEndpointFailed(proxy: ProxyConfig) {
+        if let idx = endpointPool.firstIndex(where: { $0.proxy.host == proxy.host && $0.proxy.port == proxy.port }) {
+            endpointPool[idx].consecutiveFailures += 1
+            intel.recordFailure(hostname: endpointPool[idx].hostname)
+
+            if !endpointPool[idx].isHealthy {
+                logger.log("OpenVPNBridge: endpoint \(endpointPool[idx].hostname) unhealthy after \(endpointPool[idx].consecutiveFailures) failures — pool has \(activeEndpointCount) healthy remaining", category: .vpn, level: .warning)
+
+                if activeEndpointCount == 0 {
+                    Task { await replenishPool() }
+                }
+            }
+        }
+        stats.connectionsFailed += 1
+        stats.consecutiveFailures += 1
     }
 
     // MARK: - Reconnect
@@ -128,7 +262,43 @@ class OpenVPNProxyBridge {
         }
     }
 
-    // MARK: - Stats Recording
+    // MARK: - Pool Replenishment
+
+    private func replenishPool() async {
+        guard let config = activeConfig, let countryId = config.nordCountryId else { return }
+
+        let existing = Set(endpointPool.map(\.hostname))
+        logger.log("OpenVPNBridge: replenishing pool — \(activeEndpointCount) healthy of \(endpointPool.count), excluding \(existing.count) known", category: .vpn, level: .info)
+
+        let needed = targetPoolSize - activeEndpointCount
+        guard needed > 0 else { return }
+
+        let resolved = await intel.resolveMultipleSOCKS5(forCountryId: countryId, count: needed)
+        for entry in resolved where !existing.contains(entry.hostname) {
+            let slot = SOCKS5EndpointSlot(
+                proxy: entry.proxy,
+                hostname: entry.hostname,
+                source: entry.source,
+                resolvedAt: Date(),
+                serverLoad: intel.serverHealth(hostname: entry.hostname)?.load ?? -1,
+                lastValidatedAt: Date()
+            )
+            endpointPool.append(slot)
+        }
+
+        endpointPool.removeAll(where: { !$0.isHealthy && Date().timeIntervalSince($0.resolvedAt) > 120 })
+
+        stats.endpointPoolSize = endpointPool.count
+
+        if let best = endpointPool.filter(\.isHealthy).max(by: { $0.healthScore < $1.healthScore }) {
+            activeSOCKS5Proxy = best.proxy
+            stats.intelServerLoad = best.serverLoad
+        }
+
+        logger.log("OpenVPNBridge: pool replenished — now \(endpointPool.count) endpoints (\(activeEndpointCount) healthy)", category: .vpn, level: .success)
+    }
+
+    // MARK: - Stats Recording (legacy compat)
 
     func recordConnectionServed() {
         stats.connectionsServed += 1
@@ -144,7 +314,7 @@ class OpenVPNProxyBridge {
         stats.bytesDownstream += down
     }
 
-    // MARK: - Endpoint Resolution
+    // MARK: - Endpoint Resolution (fallback when NordIntel unavailable)
 
     private func resolveSOCKS5Endpoint(for config: OpenVPNConfig) async -> (proxy: ProxyConfig, source: String)? {
         let nordService = NordVPNService.shared
@@ -157,11 +327,9 @@ class OpenVPNProxyBridge {
             if Date().timeIntervalSince(cached.resolvedAt) < regionCacheTTL {
                 let (alive, _) = await validateSOCKS5Endpoint(cached.proxy)
                 if alive {
-                    logger.log("OpenVPNBridge: using cached \(cached.source) endpoint for region \(regionKey)", category: .vpn, level: .debug)
                     return (cached.proxy, "cached(\(cached.source))")
                 }
                 regionCache.removeValue(forKey: regionKey)
-                logger.log("OpenVPNBridge: cached endpoint for \(regionKey) failed validation, re-resolving", category: .vpn, level: .warning)
             } else {
                 regionCache.removeValue(forKey: regionKey)
             }
@@ -170,44 +338,26 @@ class OpenVPNProxyBridge {
         if let countryId = config.nordCountryId {
             let apiServers = await nordService.fetchSOCKS5Servers(countryId: countryId, limit: 3)
             for server in apiServers {
-                let proxy = ProxyConfig(
-                    host: server.hostname,
-                    port: socks5Port,
-                    username: authUser,
-                    password: authPass
-                )
+                let proxy = ProxyConfig(host: server.hostname, port: socks5Port, username: authUser, password: authPass)
                 let (alive, validated) = await validateSOCKS5Endpoint(proxy)
                 if alive && (validated || !nordService.hasServiceCredentials) {
                     cacheEndpoint(proxy: proxy, regionKey: config.nordCountryCode, source: "NordAPI(\(server.hostname))")
                     return (proxy, "NordAPI(\(server.hostname))")
                 }
 
-                let stationProxy = ProxyConfig(
-                    host: server.station,
-                    port: socks5Port,
-                    username: authUser,
-                    password: authPass
-                )
+                let stationProxy = ProxyConfig(host: server.station, port: socks5Port, username: authUser, password: authPass)
                 let (stationAlive, stationValidated) = await validateSOCKS5Endpoint(stationProxy)
                 if stationAlive && (stationValidated || !nordService.hasServiceCredentials) {
                     cacheEndpoint(proxy: stationProxy, regionKey: config.nordCountryCode, source: "NordAPI-station(\(server.station))")
                     return (stationProxy, "NordAPI-station(\(server.station))")
                 }
             }
-            if !apiServers.isEmpty {
-                logger.log("OpenVPNBridge: all \(apiServers.count) API SOCKS5 servers unreachable for country \(countryId), trying hostname fallback", category: .vpn, level: .warning)
-            }
         }
 
         let serverHost = config.remoteHost
         guard !serverHost.isEmpty else { return nil }
 
-        let hostnameProxy = ProxyConfig(
-            host: serverHost,
-            port: socks5Port,
-            username: authUser,
-            password: authPass
-        )
+        let hostnameProxy = ProxyConfig(host: serverHost, port: socks5Port, username: authUser, password: authPass)
         let (hostAlive, hostValidated) = await validateSOCKS5Endpoint(hostnameProxy)
         if hostAlive && (hostValidated || !nordService.hasServiceCredentials) {
             cacheEndpoint(proxy: hostnameProxy, regionKey: config.nordCountryCode, source: "hostname(\(serverHost):1080)")
@@ -216,12 +366,7 @@ class OpenVPNProxyBridge {
 
         let stationIP = resolveStationIP(from: config)
         if !stationIP.isEmpty && stationIP != serverHost {
-            let stationProxy = ProxyConfig(
-                host: stationIP,
-                port: socks5Port,
-                username: authUser,
-                password: authPass
-            )
+            let stationProxy = ProxyConfig(host: stationIP, port: socks5Port, username: authUser, password: authPass)
             let (stationAlive, stationValidated) = await validateSOCKS5Endpoint(stationProxy)
             if stationAlive && (stationValidated || !nordService.hasServiceCredentials) {
                 cacheEndpoint(proxy: stationProxy, regionKey: config.nordCountryCode, source: "stationIP(\(stationIP):1080)")
@@ -230,12 +375,7 @@ class OpenVPNProxyBridge {
         }
 
         if config.remotePort != socks5Port {
-            let altProxy = ProxyConfig(
-                host: serverHost,
-                port: config.remotePort,
-                username: authUser,
-                password: authPass
-            )
+            let altProxy = ProxyConfig(host: serverHost, port: config.remotePort, username: authUser, password: authPass)
             let (altAlive, _) = await validateSOCKS5Endpoint(altProxy)
             if altAlive {
                 cacheEndpoint(proxy: altProxy, regionKey: config.nordCountryCode, source: "altPort(\(serverHost):\(config.remotePort))")
@@ -273,22 +413,45 @@ class OpenVPNProxyBridge {
     }
 
     private func performHealthCheck() async {
-        guard status == .established, let proxy = activeSOCKS5Proxy else { return }
+        guard status == .established else { return }
 
-        let (alive, _) = await validateSOCKS5Endpoint(proxy)
-        if alive {
+        var anyHealthy = false
+        for (idx, slot) in endpointPool.enumerated() {
+            let (alive, _) = await validateSOCKS5Endpoint(slot.proxy)
+            if alive {
+                endpointPool[idx].lastValidatedAt = Date()
+                endpointPool[idx].consecutiveFailures = 0
+                anyHealthy = true
+            } else {
+                endpointPool[idx].consecutiveFailures += 1
+                intel.recordFailure(hostname: slot.hostname)
+                logger.log("OpenVPNBridge: health check — \(slot.hostname) FAILED (consecutive: \(endpointPool[idx].consecutiveFailures))", category: .vpn, level: .warning)
+            }
+        }
+
+        stats.endpointPoolSize = endpointPool.count
+
+        if anyHealthy {
             stats.lastValidatedAt = Date()
             stats.consecutiveFailures = 0
+
+            if let best = endpointPool.filter(\.isHealthy).max(by: { $0.healthScore < $1.healthScore }) {
+                activeSOCKS5Proxy = best.proxy
+                stats.intelServerLoad = best.serverLoad
+            }
         } else {
             stats.consecutiveFailures += 1
-            logger.log("OpenVPNBridge: health check FAILED (consecutive: \(stats.consecutiveFailures))", category: .vpn, level: .warning)
+            logger.log("OpenVPNBridge: ALL \(endpointPool.count) endpoints failed health check (consecutive: \(stats.consecutiveFailures))", category: .vpn, level: .error)
 
-            if stats.consecutiveFailures >= 3 {
-                logger.log("OpenVPNBridge: 3+ failures — re-resolving endpoint", category: .vpn, level: .error)
-                if let config = activeConfig, let regionKey = config.nordCountryCode {
-                    regionCache.removeValue(forKey: regionKey)
+            if stats.consecutiveFailures >= 2 {
+                await replenishPool()
+
+                if activeEndpointCount == 0 {
+                    if let config = activeConfig, let regionKey = config.nordCountryCode {
+                        regionCache.removeValue(forKey: regionKey)
+                    }
+                    await reconnectPreservingSessions()
                 }
-                await reconnectPreservingSessions()
             }
         }
     }
@@ -463,7 +626,8 @@ class OpenVPNProxyBridge {
 
     var statusLabel: String {
         guard let proxy = activeSOCKS5Proxy else { return status.rawValue }
-        return "\(status.rawValue) → \(proxy.host):\(proxy.port)"
+        let poolInfo = endpointPool.count > 1 ? " [\(activeEndpointCount)/\(endpointPool.count) pool]" : ""
+        return "\(status.rawValue) → \(proxy.host):\(proxy.port)\(poolInfo)"
     }
 
     var activeProxyLabel: String? {
@@ -473,5 +637,12 @@ class OpenVPNProxyBridge {
 
     var resolutionSourceLabel: String {
         stats.resolutionSource.isEmpty ? "—" : stats.resolutionSource
+    }
+
+    var poolSummary: String {
+        guard !endpointPool.isEmpty else { return "No endpoints" }
+        let healthy = endpointPool.filter(\.isHealthy)
+        let loads = healthy.compactMap { $0.serverLoad >= 0 ? "\($0.hostname.components(separatedBy: ".").first ?? $0.hostname):\($0.serverLoad)%" : nil }
+        return "\(healthy.count)/\(endpointPool.count) healthy — \(loads.joined(separator: ", "))"
     }
 }

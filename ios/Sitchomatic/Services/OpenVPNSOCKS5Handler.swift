@@ -24,6 +24,7 @@ class OpenVPNSOCKS5Handler {
     private var errorType: ConnectionErrorType = .none
     private var upstreamHalfClosed: Bool = false
     private var clientHalfClosed: Bool = false
+    private var selectedProxy: ProxyConfig?
 
     init(id: UUID, clientConnection: NWConnection, queue: DispatchQueue, server: LocalProxyServer) {
         self.id = id
@@ -144,11 +145,12 @@ class OpenVPNSOCKS5Handler {
     // MARK: - Upstream SOCKS5 Connection
 
     private func connectToUpstreamSOCKS5(targetHost: String, targetPort: UInt16) {
-        guard let upstreamProxy = bridge.activeSOCKS5Proxy else {
+        guard let upstreamProxy = bridge.nextEndpoint() ?? bridge.activeSOCKS5Proxy else {
             bridge.recordConnectionFailed()
             sendClientSOCKS5Error(0x01)
             return
         }
+        selectedProxy = upstreamProxy
 
         let proxyEndpoint = NWEndpoint.hostPort(
             host: NWEndpoint.Host(upstreamProxy.host),
@@ -279,7 +281,11 @@ class OpenVPNSOCKS5Handler {
                     let rep = data != nil && data!.count >= 2 ? data![1] : UInt8(0x01)
                     self.bridge.recordConnectionFailed(); self.errorType = .handshake; self.sendClientSOCKS5Error(rep); return
                 }
-                self.bridge.recordConnectionServed()
+                if let proxy = self.selectedProxy {
+                    self.bridge.recordEndpointServed(proxy: proxy)
+                } else {
+                    self.bridge.recordConnectionServed()
+                }
                 self.sendClientSOCKS5Success()
             }
         }
@@ -387,6 +393,9 @@ class OpenVPNSOCKS5Handler {
         hadError = error || hadError
 
         bridge.recordBytes(up: bytesUploaded, down: bytesDownloaded)
+        if hadError, let proxy = selectedProxy {
+            bridge.recordEndpointFailed(proxy: proxy)
+        }
 
         clientConnection.cancel()
         upstreamConnection?.cancel()

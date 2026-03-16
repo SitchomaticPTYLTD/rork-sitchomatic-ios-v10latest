@@ -19,6 +19,12 @@ nonisolated struct WireProxyStats: Sendable {
     var bytesDownstream: UInt64 = 0
     var connectionsServed: Int = 0
     var connectionsFailed: Int = 0
+    var handshakeLatencyMs: Int = 0
+    var consecutiveHealthFailures: Int = 0
+    var lastValidatedAt: Date?
+    var resolutionSource: String = ""
+    var serverLoad: Int = -1
+    var apiReconnects: Int = 0
 }
 
 struct WireProxyTunnelSlot {
@@ -46,8 +52,10 @@ class WireProxyBridge {
     private let tcpManager = TCPSessionManager()
     private let dnsResolver = TunnelDNSResolver()
     private let logger = DebugLogger.shared
+    private let intel = NordServerIntelligence.shared
 
     private var activeConfig: WireGuardConfig?
+    private var activeCountryId: Int?
     private var localIP: UInt32 = 0
     private var tunnelConnections: [UUID: WireProxyTunnelConnection] = [:]
     private var reconnectAttempts: Int = 0
@@ -68,9 +76,12 @@ class WireProxyBridge {
         guard status == .stopped || status == .failed else { return }
 
         activeConfig = config
+        activeCountryId = extractNordCountryId(from: config)
         status = .connecting
         lastError = nil
         reconnectAttempts = 0
+
+        let startTime = CFAbsoluteTimeGetCurrent()
 
         let address = config.interfaceAddress.split(separator: "/").first.map(String.init) ?? config.interfaceAddress
         guard let ip = IPv4Packet.ipFromString(address) else {
@@ -114,12 +125,20 @@ class WireProxyBridge {
 
         try? await Task.sleep(for: .seconds(3))
 
+        let latencyMs = Int((CFAbsoluteTimeGetCurrent() - startTime) * 1000)
+
         if wgSession.isEstablished {
             status = .established
             connectedSince = Date()
             reconnectAttempts = 0
+            stats.handshakeLatencyMs = latencyMs
+            stats.lastValidatedAt = Date()
+            stats.resolutionSource = "config(\(config.serverName))"
+            stats.serverLoad = intel.serverHealth(hostname: config.endpointHost)?.load ?? -1
             dnsResolver.startBackgroundRefresh()
-            logger.log("WireProxyBridge: tunnel ESTABLISHED via \(config.peerEndpoint)", category: .vpn, level: .success)
+            intel.recordSuccess(hostname: config.endpointHost, latencyMs: latencyMs)
+            intel.startMonitoring()
+            logger.log("WireProxyBridge: tunnel ESTABLISHED via \(config.peerEndpoint) (\(latencyMs)ms)", category: .vpn, level: .success)
 
             let dnsOK = await dnsResolver.verifyDNS()
             if !dnsOK {
@@ -145,10 +164,16 @@ class WireProxyBridge {
                 status = .established
                 connectedSince = Date()
                 reconnectAttempts = 0
+                stats.handshakeLatencyMs = latencyMs
+                stats.lastValidatedAt = Date()
+                stats.resolutionSource = "config(\(config.serverName))-extended"
                 dnsResolver.startBackgroundRefresh()
+                intel.recordSuccess(hostname: config.endpointHost, latencyMs: latencyMs)
+                intel.startMonitoring()
                 logger.log("WireProxyBridge: tunnel ESTABLISHED on extended wait via \(config.peerEndpoint)", category: .vpn, level: .success)
                 startHealthCheck()
             } else {
+                intel.recordFailure(hostname: config.endpointHost)
                 status = .failed
                 lastError = wgSession.lastError ?? "Handshake timeout"
                 logger.log("WireProxyBridge: tunnel failed - \(lastError ?? "")", category: .vpn, level: .error)
@@ -183,6 +208,7 @@ class WireProxyBridge {
         status = .stopped
         connectedSince = nil
         activeConfig = nil
+        activeCountryId = nil
         isReconnecting = false
         stats = WireProxyStats()
         logger.log("WireProxyBridge: stopped", category: .vpn, level: .info)
@@ -205,10 +231,36 @@ class WireProxyBridge {
         tcpManager.shutdown()
         wgSession.disconnect()
 
-        let backoffDelay = min(Double(reconnectAttempts + 1) * 1.5, 8.0)
+        let jitter = Double.random(in: 0...1.0)
+        let backoffDelay = min(Double(reconnectAttempts + 1) * 1.5 + jitter, 10.0)
         try? await Task.sleep(for: .seconds(backoffDelay))
 
-        let address = config.interfaceAddress.split(separator: "/").first.map(String.init) ?? config.interfaceAddress
+        if let countryId = activeCountryId, reconnectAttempts >= 1 {
+            let failedHost = config.endpointHost
+            intel.recordFailure(hostname: failedHost)
+            logger.log("WireProxyBridge: attempting NordIntel API-driven reconnect for country \(countryId), excluding \(failedHost)", category: .vpn, level: .info)
+
+            if let freshServer = await intel.bestWireGuardServer(forCountryId: countryId, excluding: [failedHost]),
+               let freshConfig = intel.generateWireGuardConfig(from: freshServer) {
+                stats.apiReconnects += 1
+                logger.log("WireProxyBridge: NordIntel found fresh server \(freshServer.hostname) (load: \(freshServer.load)%) — replacing \(failedHost)", category: .vpn, level: .info)
+                activeConfig = freshConfig
+                isReconnecting = false
+                await start(with: freshConfig)
+                if status == .established {
+                    stats = preservedStats
+                    stats.apiReconnects += 1
+                    stats.resolutionSource = "NordIntel(\(freshServer.hostname), load:\(freshServer.load)%)"
+                    stats.serverLoad = freshServer.load
+                    pendingReconnectHosts.removeAll()
+                    return
+                }
+                isReconnecting = true
+            }
+        }
+
+        let reconnectConfig = activeConfig ?? config
+        let address = reconnectConfig.interfaceAddress.split(separator: "/").first.map(String.init) ?? reconnectConfig.interfaceAddress
         guard let ip = IPv4Packet.ipFromString(address) else {
             status = .failed
             lastError = "Invalid interface address on reconnect"
@@ -227,11 +279,11 @@ class WireProxyBridge {
         }
 
         let configured = wgSession.configure(
-            privateKey: config.interfacePrivateKey,
-            peerPublicKey: config.peerPublicKey,
-            preSharedKey: config.peerPreSharedKey,
-            endpoint: config.peerEndpoint,
-            keepalive: config.peerPersistentKeepalive ?? 25
+            privateKey: reconnectConfig.interfacePrivateKey,
+            peerPublicKey: reconnectConfig.peerPublicKey,
+            preSharedKey: reconnectConfig.peerPreSharedKey,
+            endpoint: reconnectConfig.peerEndpoint,
+            keepalive: reconnectConfig.peerPersistentKeepalive ?? 25
         )
 
         guard configured else {
@@ -252,15 +304,19 @@ class WireProxyBridge {
             status = .established
             stats = preservedStats
             reconnectAttempts = 0
+            stats.lastValidatedAt = Date()
+            stats.consecutiveHealthFailures = 0
             dnsResolver.startBackgroundRefresh()
             startHealthCheck()
+            intel.recordSuccess(hostname: reconnectConfig.endpointHost, latencyMs: 0)
 
             logger.log("WireProxyBridge: reconnect SUCCEEDED — tunnel re-established, \(pendingReconnectHosts.count) sessions were active", category: .vpn, level: .success)
             pendingReconnectHosts.removeAll()
         } else {
             reconnectAttempts += 1
+            intel.recordFailure(hostname: reconnectConfig.endpointHost)
             if reconnectAttempts < maxReconnectAttempts {
-                logger.log("WireProxyBridge: reconnect attempt \(reconnectAttempts)/\(maxReconnectAttempts) failed, retrying with \(String(format: "%.1f", min(Double(reconnectAttempts + 1) * 1.5, 8.0)))s backoff...", category: .vpn, level: .warning)
+                logger.log("WireProxyBridge: reconnect attempt \(reconnectAttempts)/\(maxReconnectAttempts) failed, retrying...", category: .vpn, level: .warning)
                 isReconnecting = false
                 await reconnectPreservingSessions()
                 return
@@ -294,44 +350,75 @@ class WireProxyBridge {
             var anyDown = false
             for (i, slot) in tunnelSlots.enumerated() where slot.isEstablished {
                 if !slot.wgSession.isEstablished {
-                    logger.log("WireProxyBridge: health check — slot \(i) (\(slot.serverName)) DOWN — attempting slot reconnect", category: .vpn, level: .error)
+                    logger.log("WireProxyBridge: health check — slot \(i) (\(slot.serverName)) DOWN — attempting API-driven slot reconnect", category: .vpn, level: .error)
                     tunnelSlots[i].isEstablished = false
                     anyDown = true
+                    intel.recordFailure(hostname: slot.config.endpointHost)
                     Task {
-                        await self.reconnectSlot(i)
+                        await self.reconnectSlotWithIntel(i)
                     }
                 }
             }
             let activeCount = tunnelSlots.filter(\.isEstablished).count
             if activeCount == 0 {
-                logger.log("WireProxyBridge: all multi-tunnel slots DOWN — initiating full reconnect", category: .vpn, level: .error)
+                stats.consecutiveHealthFailures += 1
+                logger.log("WireProxyBridge: all multi-tunnel slots DOWN (consecutive: \(stats.consecutiveHealthFailures)) — initiating full reconnect", category: .vpn, level: .error)
                 Task { await reconnectPreservingSessions() }
-            } else if anyDown {
-                logger.log("WireProxyBridge: \(activeCount)/\(tunnelSlots.count) slots still active", category: .vpn, level: .warning)
+            } else {
+                stats.consecutiveHealthFailures = 0
+                stats.lastValidatedAt = Date()
+                if anyDown {
+                    logger.log("WireProxyBridge: \(activeCount)/\(tunnelSlots.count) slots still active", category: .vpn, level: .warning)
+                }
             }
             return
         }
 
-        if !wgSession.isEstablished {
-            logger.log("WireProxyBridge: health check detected tunnel DOWN — initiating reconnect", category: .vpn, level: .error)
+        if wgSession.isEstablished {
+            stats.lastValidatedAt = Date()
+            stats.consecutiveHealthFailures = 0
+        } else {
+            stats.consecutiveHealthFailures += 1
+            if let config = activeConfig {
+                intel.recordFailure(hostname: config.endpointHost)
+            }
+            logger.log("WireProxyBridge: health check detected tunnel DOWN (consecutive: \(stats.consecutiveHealthFailures)) — initiating reconnect", category: .vpn, level: .error)
             Task {
                 await reconnectPreservingSessions()
             }
         }
     }
 
-    private func reconnectSlot(_ index: Int) async {
+    private func reconnectSlotWithIntel(_ index: Int) async {
         guard index < tunnelSlots.count else { return }
         let slot = tunnelSlots[index]
-        let config = slot.config
+        let failedHost = slot.config.endpointHost
 
         slot.wgSession.disconnect()
         slot.tcpManager.shutdown()
         try? await Task.sleep(for: .seconds(2))
 
+        if let countryId = activeCountryId {
+            let existingHosts = Set(tunnelSlots.map(\.config.endpointHost))
+            if let freshServer = await intel.bestWireGuardServer(forCountryId: countryId, excluding: existingHosts),
+               let freshConfig = intel.generateWireGuardConfig(from: freshServer) {
+                logger.log("WireProxyBridge: NordIntel replacing slot \(index) (\(failedHost)) with \(freshServer.hostname) (load: \(freshServer.load)%)", category: .vpn, level: .info)
+                stats.apiReconnects += 1
+                await connectSlot(index, config: freshConfig)
+                return
+            }
+        }
+
+        await connectSlot(index, config: slot.config)
+    }
+
+    private func connectSlot(_ index: Int, config: WireGuardConfig) async {
+        guard index < tunnelSlots.count else { return }
+
         let address = config.interfaceAddress.split(separator: "/").first.map(String.init) ?? config.interfaceAddress
         guard let ip = IPv4Packet.ipFromString(address) else { return }
 
+        let slot = tunnelSlots[index]
         slot.tcpManager.configure(localIP: ip)
         let slotSession = slot.wgSession
         slot.tcpManager.sendPacketHandler = { packet in
@@ -349,7 +436,7 @@ class WireProxyBridge {
             keepalive: config.peerPersistentKeepalive ?? 25
         )
         guard configured else {
-            logger.log("WireProxyBridge: slot \(index) reconnect config failed", category: .vpn, level: .error)
+            logger.log("WireProxyBridge: slot \(index) reconnect config failed for \(config.serverName)", category: .vpn, level: .error)
             return
         }
 
@@ -359,8 +446,10 @@ class WireProxyBridge {
         if slot.wgSession.isEstablished {
             tunnelSlots[index].isEstablished = true
             slot.dnsResolver.startBackgroundRefresh()
+            intel.recordSuccess(hostname: config.endpointHost, latencyMs: 0)
             logger.log("WireProxyBridge: slot \(index) (\(config.serverName)) RECONNECTED", category: .vpn, level: .success)
         } else {
+            intel.recordFailure(hostname: config.endpointHost)
             logger.log("WireProxyBridge: slot \(index) (\(config.serverName)) reconnect FAILED", category: .vpn, level: .error)
         }
     }
@@ -625,4 +714,42 @@ class WireProxyBridge {
         if hrs > 0 { return String(format: "%d:%02d:%02d", hrs, mins, secs) }
         return String(format: "%d:%02d", mins, secs)
     }
+
+    var resolutionSourceLabel: String {
+        stats.resolutionSource.isEmpty ? "—" : stats.resolutionSource
+    }
+
+    var statusLabel: String {
+        guard let config = activeConfig else { return status.rawValue }
+        let loadInfo = stats.serverLoad >= 0 ? " (load: \(stats.serverLoad)%)" : ""
+        return "\(status.rawValue) → \(config.serverName)\(loadInfo)"
+    }
+
+    // MARK: - Nord Country Extraction
+
+    private func extractNordCountryId(from config: WireGuardConfig) -> Int? {
+        let host = config.endpointHost.lowercased()
+        guard host.contains(".nordvpn.com") || host.contains("nord") else { return nil }
+        let prefix = host.replacingOccurrences(of: ".nordvpn.com", with: "")
+        let letters = prefix.filter { $0.isLetter }
+        guard letters.count >= 2 else { return nil }
+        let code = String(letters.prefix(2)).uppercased()
+        return Self.nordCountryCodeToId[code]
+    }
+
+    private static let nordCountryCodeToId: [String: Int] = [
+        "AL": 2, "AR": 10, "AU": 13, "AT": 14, "AZ": 15,
+        "BE": 21, "BA": 27, "BR": 30, "BG": 33, "CA": 38,
+        "CL": 43, "CO": 47, "CR": 52, "HR": 54, "CY": 56,
+        "CZ": 57, "DK": 58, "EE": 68, "FI": 73, "FR": 74,
+        "GE": 80, "DE": 81, "GR": 84, "HK": 97, "HU": 98,
+        "IS": 99, "IN": 100, "ID": 101, "IE": 104, "IL": 105,
+        "IT": 106, "JP": 108, "LV": 119, "LT": 125, "LU": 126,
+        "MY": 131, "MX": 140, "MD": 142, "NL": 153, "NZ": 156,
+        "MK": 128, "NO": 163, "PA": 170, "PE": 172, "PH": 174,
+        "PL": 176, "PT": 177, "RO": 179, "RS": 192, "SG": 195,
+        "SK": 196, "SI": 197, "ZA": 200, "KR": 114, "ES": 202,
+        "SE": 208, "CH": 209, "TW": 211, "TH": 214, "TR": 220,
+        "UA": 225, "AE": 226, "GB": 227, "US": 228, "VN": 234
+    ]
 }

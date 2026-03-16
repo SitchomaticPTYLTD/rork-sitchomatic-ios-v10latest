@@ -7,6 +7,7 @@ class HybridNetworkingService {
 
     private let proxyService = ProxyRotationService.shared
     private let aiStrategy = AIProxyStrategyService.shared
+    private let intel = NordServerIntelligence.shared
     private let logger = DebugLogger.shared
 
     private var sessionIndex: Int = 0
@@ -113,7 +114,7 @@ class HybridNetworkingService {
         return configs
     }
 
-    func recordOutcome(method: HybridMethod, success: Bool, latencyMs: Int) {
+    func recordOutcome(method: HybridMethod, success: Bool, latencyMs: Int, hostname: String? = nil) {
         var stat = methodStats[method] ?? MethodStat()
         stat.attempts += 1
         if success { stat.successes += 1 } else { stat.failures += 1 }
@@ -125,6 +126,14 @@ class HybridNetworkingService {
         let score = calculateHealthScore(for: stat)
         methodHealthScores[method] = score
         persistHealthScores()
+
+        if let host = hostname {
+            if success {
+                intel.recordSuccess(hostname: host, latencyMs: latencyMs)
+            } else {
+                intel.recordFailure(hostname: host)
+            }
+        }
 
         if stat.failures >= 3 && stat.successRate < 0.2 {
             logger.log("Hybrid: \(method.rawValue) degraded — SR:\(Int(stat.successRate * 100))% after \(stat.attempts) attempts, AI deprioritizing", category: .network, level: .warning)

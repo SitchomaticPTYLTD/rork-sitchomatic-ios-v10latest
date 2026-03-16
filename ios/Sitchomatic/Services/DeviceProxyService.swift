@@ -89,6 +89,7 @@ class DeviceProxyService {
     private let scoring = ProxyScoringService.shared
     private let connectionPool = ProxyConnectionPool.shared
     private let aiProxyStrategy = AIProxyStrategyService.shared
+    private let intel = NordServerIntelligence.shared
     private let logger = DebugLogger.shared
 
     var localProxyEnabled: Bool = true {
@@ -303,6 +304,7 @@ class DeviceProxyService {
             localProxy.start()
         }
         resilience.resetBackoff()
+        intel.startMonitoring()
         performRotation(reason: "Activated")
         restartRotationTimer()
 
@@ -335,6 +337,7 @@ class DeviceProxyService {
         localProxy.enableWireProxyMode(false)
         localProxy.enableOpenVPNProxyMode(false)
         localProxy.stop()
+        intel.stopMonitoring()
         resilience.stopVerificationLoop()
         resilience.resetBackoff()
         resilience.resetThrottling()
@@ -968,6 +971,7 @@ class DeviceProxyService {
         perSessionOpenVPNActive = false
         perSessionOVPNConfig = nil
         perSessionOpenVPNStarting = false
+        intel.clearAll()
 
         activeConfig = nil
         activeEndpointLabel = nil
