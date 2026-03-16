@@ -24,10 +24,10 @@ struct MainMenuView: View {
                 Color.black.opacity(0.3)
 
                 VStack(spacing: 0) {
-                    Spacer().frame(height: geo.safeAreaInsets.top + 20)
+                    Spacer().frame(height: geo.safeAreaInsets.top + 8)
 
                     profileSwitcher
-                        .padding(.horizontal, 20)
+                        .padding(.horizontal, dynamicIslandHPadding(geo: geo))
                         .padding(.bottom, 12)
                         .zIndex(10)
 
@@ -597,6 +597,11 @@ struct MainMenuView: View {
         case .nodeMaven: .teal
         case .hybrid: .mint
         }
+    }
+
+    private func dynamicIslandHPadding(geo: GeometryProxy) -> CGFloat {
+        let hasDynamicIsland = geo.safeAreaInsets.top > 51
+        return hasDynamicIsland ? 56 : 20
     }
 
     private var profileSwitcher: some View {
