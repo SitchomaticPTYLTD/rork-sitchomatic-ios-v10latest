@@ -58,6 +58,7 @@ class LocalProxyServer {
     var connectionTimeoutSeconds: TimeInterval = 30
     var enableConnectionPooling: Bool = true
     private(set) var wireProxyMode: Bool = false
+    private(set) var openVPNProxyMode: Bool = false
 
     private var listener: NWListener?
     private var connections: [UUID: LocalProxyConnection] = [:]
@@ -132,6 +133,7 @@ class LocalProxyServer {
         isRunning = false
         listeningPort = 0
         wireProxyMode = false
+        openVPNProxyMode = false
         statusMessage = "Stopped"
         stats = LocalProxyStats()
         connectionDurations.removeAll()
@@ -143,11 +145,28 @@ class LocalProxyServer {
     func enableWireProxyMode(_ enabled: Bool) {
         wireProxyMode = enabled
         if enabled {
+            openVPNProxyMode = false
             upstreamLabel = "WireProxy (WG Tunnel)"
             logger.log("LocalProxy: WireProxy tunnel mode ENABLED", category: .vpn, level: .info)
         } else {
-            upstreamLabel = upstreamProxy?.displayString ?? "None (direct)"
+            if !openVPNProxyMode {
+                upstreamLabel = upstreamProxy?.displayString ?? "None (direct)"
+            }
             logger.log("LocalProxy: WireProxy tunnel mode DISABLED", category: .vpn, level: .info)
+        }
+    }
+
+    func enableOpenVPNProxyMode(_ enabled: Bool) {
+        openVPNProxyMode = enabled
+        if enabled {
+            wireProxyMode = false
+            upstreamLabel = "OpenVPN Bridge (SOCKS5)"
+            logger.log("LocalProxy: OpenVPN proxy bridge mode ENABLED", category: .vpn, level: .info)
+        } else {
+            if !wireProxyMode {
+                upstreamLabel = upstreamProxy?.displayString ?? "None (direct)"
+            }
+            logger.log("LocalProxy: OpenVPN proxy bridge mode DISABLED", category: .vpn, level: .info)
         }
     }
 

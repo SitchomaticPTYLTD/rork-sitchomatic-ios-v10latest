@@ -65,6 +65,8 @@ nonisolated struct NordMetadata: Codable, Sendable {
 
 nonisolated struct NordCredentials: Codable, Sendable {
     let nordlynx_private_key: String?
+    let username: String?
+    let password: String?
 }
 
 nonisolated enum NordKeyProfile: String, CaseIterable, Codable, Sendable {
@@ -86,6 +88,8 @@ class NordVPNService {
 
     var accessKey: String = ""
     var privateKey: String = ""
+    var serviceUsername: String = ""
+    var servicePassword: String = ""
     var isLoadingServers: Bool = false
     var isLoadingKey: Bool = false
     var lastError: String?
@@ -94,11 +98,15 @@ class NordVPNService {
     var activeKeyProfile: NordKeyProfile = .nick
     var hasSelectedProfile: Bool = false
 
+    var hasServiceCredentials: Bool { !serviceUsername.isEmpty && !servicePassword.isEmpty }
+
     private let accessKeyPersistKey = "nordvpn_access_key_v1"
     private let privateKeyPersistKey = "nordvpn_private_key_v1"
     private let keyProfilePersistKey = "nordvpn_key_profile_v1"
     private let nickPrivateKeyPersistKey = "nordvpn_nick_private_key_v1"
     private let poliPrivateKeyPersistKey = "nordvpn_poli_private_key_v1"
+    private let serviceUsernamePersistKey = "nordvpn_service_username_v1"
+    private let servicePasswordPersistKey = "nordvpn_service_password_v1"
     private let profileStorageSeedKey = "profile_network_storage_seed_v2"
     private let profileStorageSeedVersion = "2"
     private let logger = DebugLogger.shared
@@ -114,6 +122,8 @@ class NordVPNService {
         }
         accessKey = NordVPNKeyStore.shared.keyForProfile(activeKeyProfile)
         privateKey = UserDefaults.standard.string(forKey: privateKeyPersistKey(for: activeKeyProfile)) ?? ""
+        serviceUsername = UserDefaults.standard.string(forKey: serviceUsernamePersistKey) ?? ""
+        servicePassword = UserDefaults.standard.string(forKey: servicePasswordPersistKey) ?? ""
     }
 
     private func privateKeyPersistKey(for profile: NordKeyProfile) -> String {
@@ -179,6 +189,17 @@ class NordVPNService {
 
     var hasAccessKey: Bool { !accessKey.isEmpty }
     var hasPrivateKey: Bool { !privateKey.isEmpty }
+
+    func storeServiceCredentials(_ creds: NordCredentials) {
+        if let u = creds.username, !u.isEmpty {
+            serviceUsername = u
+            UserDefaults.standard.set(u, forKey: serviceUsernamePersistKey)
+        }
+        if let p = creds.password, !p.isEmpty {
+            servicePassword = p
+            UserDefaults.standard.set(p, forKey: servicePasswordPersistKey)
+        }
+    }
 
     private let maxRetryAttempts = 3
     private let retryBaseDelay: TimeInterval = 2
@@ -260,9 +281,10 @@ class NordVPNService {
                     if let creds = try? JSONDecoder().decode(NordCredentials.self, from: data),
                        let pk = creds.nordlynx_private_key, !pk.isEmpty {
                         setPrivateKey(pk)
+                        storeServiceCredentials(creds)
                         isTokenExpired = false
                         tokenTestResult = .success(privateKeyPrefix: String(pk.prefix(8)))
-                        logger.log("NordVPN: token test SUCCESS — private key obtained", category: .vpn, level: .success)
+                        logger.log("NordVPN: token test SUCCESS — private key obtained, service creds \(hasServiceCredentials ? "SET" : "EMPTY")", category: .vpn, level: .success)
                     } else {
                         let body = String(data: data, encoding: .utf8) ?? ""
                         tokenTestResult = .failed(reason: "API returned 200 but no nordlynx_private_key in response. Body: \(body.prefix(200))")
@@ -342,10 +364,11 @@ class NordVPNService {
                     return
                 }
                 let creds = try JSONDecoder().decode(NordCredentials.self, from: data)
+                storeServiceCredentials(creds)
                 if let pk = creds.nordlynx_private_key, !pk.isEmpty {
                     setPrivateKey(pk)
                     isTokenExpired = false
-                    logger.log("NordVPN: private key fetched successfully\(attempt > 1 ? " (attempt \(attempt))" : "")", category: .vpn, level: .success)
+                    logger.log("NordVPN: private key fetched successfully\(attempt > 1 ? " (attempt \(attempt))" : ""), service creds \(hasServiceCredentials ? "SET" : "EMPTY")", category: .vpn, level: .success)
                 } else {
                     lastError = "No private key in response. Token may not have NordLynx access."
                     logger.log("NordVPN: response missing nordlynx_private_key", category: .vpn, level: .error)

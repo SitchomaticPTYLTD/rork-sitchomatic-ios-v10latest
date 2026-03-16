@@ -84,6 +84,7 @@ class DeviceProxyService {
     private let vpnTunnel = VPNTunnelManager.shared
     private let healthMonitor = ProxyHealthMonitor.shared
     private let wireProxyBridge = WireProxyBridge.shared
+    private let ovpnBridge = OpenVPNProxyBridge.shared
     private let resilience = NetworkResilienceService.shared
     private let scoring = ProxyScoringService.shared
     private let connectionPool = ProxyConnectionPool.shared
@@ -125,6 +126,22 @@ class DeviceProxyService {
 
     var isWireProxyCompatibleMode: Bool {
         proxyService.unifiedConnectionMode == .wireguard
+    }
+
+    var isOpenVPNProxyCompatibleMode: Bool {
+        proxyService.unifiedConnectionMode == .openvpn
+    }
+
+    var isOpenVPNBridgeActive: Bool {
+        ovpnBridge.isActive
+    }
+
+    var openVPNBridgeStatus: OpenVPNBridgeStatus {
+        ovpnBridge.status
+    }
+
+    var openVPNBridgeStats: OpenVPNBridgeStats {
+        ovpnBridge.stats
     }
 
     var shouldShowWireProxySection: Bool {
@@ -286,7 +303,9 @@ class DeviceProxyService {
         activeSince = nil
         isActive = false
         wireProxyBridge.stop()
+        ovpnBridge.stop()
         localProxy.enableWireProxyMode(false)
+        localProxy.enableOpenVPNProxyMode(false)
         localProxy.stop()
         resilience.stopVerificationLoop()
         resilience.resetBackoff()
@@ -334,6 +353,11 @@ class DeviceProxyService {
         if wireProxyBridge.isActive {
             wireProxyBridge.stop()
             localProxy.enableWireProxyMode(false)
+        }
+
+        if ovpnBridge.isActive {
+            ovpnBridge.stop()
+            localProxy.enableOpenVPNProxyMode(false)
         }
 
         let config = resolveNextConfig()
@@ -398,8 +422,10 @@ class DeviceProxyService {
         switch activeConfig {
         case .socks5(let proxy):
             localProxy.enableWireProxyMode(false)
+            localProxy.enableOpenVPNProxyMode(false)
             localProxy.updateUpstream(proxy)
         case .wireGuardDNS:
+            localProxy.enableOpenVPNProxyMode(false)
             guard isWireProxyCompatibleMode else {
                 wireProxyBridge.stop()
                 localProxy.enableWireProxyMode(false)
@@ -407,10 +433,74 @@ class DeviceProxyService {
                 return
             }
             syncWireProxyTunnel()
+        case .openVPNProxy(let ovpn):
+            localProxy.enableWireProxyMode(false)
+            syncOpenVPNProxyBridge(ovpn)
         default:
             localProxy.enableWireProxyMode(false)
+            localProxy.enableOpenVPNProxyMode(false)
             localProxy.updateUpstream(nil)
         }
+    }
+
+    private func syncOpenVPNProxyBridge(_ config: OpenVPNConfig) {
+        guard localProxyEnabled else {
+            ovpnBridge.stop()
+            localProxy.enableOpenVPNProxyMode(false)
+            return
+        }
+
+        if ovpnBridge.isActive {
+            ovpnBridge.stop()
+        }
+
+        Task {
+            await ovpnBridge.start(with: config)
+            if ovpnBridge.isActive, let socksProxy = ovpnBridge.activeSOCKS5Proxy {
+                localProxy.updateUpstream(socksProxy)
+                localProxy.enableOpenVPNProxyMode(true)
+                logger.log("DeviceProxy: OpenVPN bridge active → \(socksProxy.host):\(socksProxy.port) for \(config.serverName)", category: .vpn, level: .success)
+            } else {
+                localProxy.enableOpenVPNProxyMode(false)
+                logger.log("DeviceProxy: OpenVPN bridge failed for \(config.serverName) — retrying with next config", category: .vpn, level: .error)
+                await retryOpenVPNBridgeWithNextConfig(failedServer: config.serverName)
+            }
+        }
+    }
+
+    private func retryOpenVPNBridgeWithNextConfig(failedServer: String) async {
+        let targets: [ProxyRotationService.ProxyTarget] = [.joe, .ignition, .ppsr]
+        let allOVPN = collectUniqueOVPN(targets: targets)
+        let candidates = allOVPN.filter { $0.serverName != failedServer }
+        guard !candidates.isEmpty else {
+            logger.log("DeviceProxy: no alternative OVPN configs for retry", category: .vpn, level: .error)
+            return
+        }
+
+        let maxRetries = min(candidates.count, 4)
+        for attempt in 0..<maxRetries {
+            let nextOVPN = candidates[(ovpnIndex + attempt) % candidates.count]
+            activeConfig = .openVPNProxy(nextOVPN)
+            activeEndpointLabel = "OVPN: \(nextOVPN.fileName)"
+            activeConnectionType = "OpenVPN"
+
+            ovpnBridge.stop()
+            try? await Task.sleep(for: .seconds(Double(attempt) * 0.5 + 0.5))
+
+            await ovpnBridge.start(with: nextOVPN)
+            if ovpnBridge.isActive, let socksProxy = ovpnBridge.activeSOCKS5Proxy {
+                ovpnIndex += attempt + 1
+                localProxy.updateUpstream(socksProxy)
+                localProxy.enableOpenVPNProxyMode(true)
+                logger.log("DeviceProxy: OpenVPN bridge retry succeeded with \(nextOVPN.serverName) on attempt \(attempt + 1)/\(maxRetries)", category: .vpn, level: .success)
+                return
+            }
+            logger.log("DeviceProxy: OpenVPN bridge retry attempt \(attempt + 1)/\(maxRetries) failed for \(nextOVPN.serverName)", category: .vpn, level: .warning)
+        }
+
+        ovpnIndex += maxRetries
+        localProxy.enableOpenVPNProxyMode(false)
+        logger.log("DeviceProxy: OpenVPN bridge all \(maxRetries) retry attempts exhausted", category: .vpn, level: .error)
     }
 
     private func syncWireProxyTunnel() {
@@ -525,6 +615,11 @@ class DeviceProxyService {
             wireProxyBridge.stop()
             localProxy.enableWireProxyMode(false)
             stopPerSessionWireProxy()
+        }
+
+        if !isOpenVPNProxyCompatibleMode {
+            ovpnBridge.stop()
+            localProxy.enableOpenVPNProxyMode(false)
         }
 
         if isEnabled {
@@ -692,7 +787,9 @@ class DeviceProxyService {
 
     func handleProfileSwitch() {
         wireProxyBridge.stop()
+        ovpnBridge.stop()
         localProxy.enableWireProxyMode(false)
+        localProxy.enableOpenVPNProxyMode(false)
         localProxy.updateUpstream(nil)
         perSessionWireProxyActive = false
         perSessionWGConfig = nil
@@ -763,7 +860,10 @@ class DeviceProxyService {
             }
             return nil
         case .openVPNProxy:
-            return localProxy.localProxyConfig
+            if ovpnBridge.isActive {
+                return localProxy.localProxyConfig
+            }
+            return nil
         case .direct, .none:
             return nil
         }

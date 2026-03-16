@@ -59,12 +59,18 @@ class NetworkSessionFactory {
 
     private let localProxy = LocalProxyServer.shared
     private let wireProxyBridge = WireProxyBridge.shared
+    private let ovpnBridge = OpenVPNProxyBridge.shared
 
     func nextConfig(for target: ProxyRotationService.ProxyTarget) -> ActiveNetworkConfig {
         if deviceProxy.isEnabled, let config = deviceProxy.activeConfig {
             if deviceProxy.isWireProxyActive, localProxy.isRunning, localProxy.wireProxyMode {
                 let localConfig = localProxy.localProxyConfig
                 logger.log("NetworkFactory: WireProxy tunnel active → 127.0.0.1:\(localConfig.port) for \(target.rawValue)", category: .vpn, level: .debug)
+                return .socks5(localConfig)
+            }
+            if deviceProxy.isOpenVPNBridgeActive, localProxy.isRunning, localProxy.openVPNProxyMode {
+                let localConfig = localProxy.localProxyConfig
+                logger.log("NetworkFactory: OpenVPN bridge active → 127.0.0.1:\(localConfig.port) for \(target.rawValue)", category: .vpn, level: .debug)
                 return .socks5(localConfig)
             }
             if let localConfig = deviceProxy.effectiveProxyConfig, localProxy.isRunning {
@@ -119,6 +125,11 @@ class NetworkSessionFactory {
             return .direct
 
         case .openvpn:
+            if ovpnBridge.isActive, localProxy.isRunning, localProxy.openVPNProxyMode {
+                let localConfig = localProxy.localProxyConfig
+                logger.log("NetworkFactory: OpenVPN bridge active → 127.0.0.1:\(localConfig.port) for \(target.rawValue)", category: .vpn, level: .debug)
+                return .socks5(localConfig)
+            }
             if let ovpn = nextOVPNConfig(for: target) {
                 logger.log("NetworkFactory: assigned OVPN \(ovpn.displayString) for \(target.rawValue)", category: .vpn, level: .debug)
                 return .openVPNProxy(ovpn)
@@ -197,17 +208,30 @@ class NetworkSessionFactory {
             }
 
         case .openVPNProxy(let ovpn):
-            logger.log("WKWebView OVPN: \(ovpn.displayString) — applying SOCKS5 fallback for IP protection", category: .vpn, level: .warning)
-            if let fallbackProxy = proxyService.nextWorkingProxy(for: target) {
-                applySOCKS5ToDataStore(dataStore, proxy: fallbackProxy)
+            if !bypassTunnel, ovpnBridge.isActive, localProxy.isRunning, localProxy.openVPNProxyMode {
+                let localConfig = localProxy.localProxyConfig
+                applySOCKS5ToDataStore(dataStore, proxy: localConfig)
                 wkConfig.websiteDataStore = dataStore
-                logger.log("WKWebView OVPN: SOCKS5 fallback \(fallbackProxy.displayString) applied to WebView", category: .proxy, level: .info)
+                logger.log("WKWebView OVPN: \(ovpn.displayString) — routed via OpenVPN bridge 127.0.0.1:\(localConfig.port)", category: .vpn, level: .info)
+                return true
+            } else if ovpnBridge.isActive, let bridgeProxy = ovpnBridge.activeSOCKS5Proxy {
+                applySOCKS5ToDataStore(dataStore, proxy: bridgeProxy)
+                wkConfig.websiteDataStore = dataStore
+                logger.log("WKWebView OVPN: \(ovpn.displayString) — direct bridge proxy \(bridgeProxy.displayString)", category: .vpn, level: .info)
                 return true
             } else {
-                applySOCKS5ToDataStore(dataStore, proxy: failClosedProxy)
-                wkConfig.websiteDataStore = dataStore
-                logger.log("WKWebView OVPN: BLOCKED — no proxy available for \(target.rawValue), fail-closed proxy applied to prevent real IP leak", category: .vpn, level: .error)
-                return false
+                logger.log("WKWebView OVPN: \(ovpn.displayString) — bridge not active, applying SOCKS5 fallback", category: .vpn, level: .warning)
+                if let fallbackProxy = proxyService.nextWorkingProxy(for: target) {
+                    applySOCKS5ToDataStore(dataStore, proxy: fallbackProxy)
+                    wkConfig.websiteDataStore = dataStore
+                    logger.log("WKWebView OVPN: SOCKS5 fallback \(fallbackProxy.displayString) applied to WebView", category: .proxy, level: .info)
+                    return true
+                } else {
+                    applySOCKS5ToDataStore(dataStore, proxy: failClosedProxy)
+                    wkConfig.websiteDataStore = dataStore
+                    logger.log("WKWebView OVPN: BLOCKED — no proxy available for \(target.rawValue), fail-closed proxy applied", category: .vpn, level: .error)
+                    return false
+                }
             }
 
         case .direct:
@@ -224,6 +248,10 @@ class NetworkSessionFactory {
             return .socks5(localProxy.localProxyConfig)
         }
 
+        if ovpnBridge.isActive, localProxy.isRunning, localProxy.openVPNProxyMode {
+            return .socks5(localProxy.localProxyConfig)
+        }
+
         if deviceProxy.isEnabled {
             if let localConfig = deviceProxy.effectiveProxyConfig, localProxy.isRunning {
                 return .socks5(localConfig)
@@ -233,7 +261,15 @@ class NetworkSessionFactory {
         switch config {
         case .socks5:
             return config
-        case .wireGuardDNS, .openVPNProxy:
+        case .wireGuardDNS:
+            if localProxy.isRunning, localProxy.upstreamProxy != nil {
+                return .socks5(localProxy.localProxyConfig)
+            }
+            return config
+        case .openVPNProxy:
+            if ovpnBridge.isActive, let bridgeProxy = ovpnBridge.activeSOCKS5Proxy {
+                return .socks5(bridgeProxy)
+            }
             if localProxy.isRunning, localProxy.upstreamProxy != nil {
                 return .socks5(localProxy.localProxyConfig)
             }
@@ -266,7 +302,14 @@ class NetworkSessionFactory {
             }
 
         case .openVPNProxy(let ovpn):
-            if let fallbackProxy = proxyService.nextWorkingProxy(for: target) {
+            if ovpnBridge.isActive, localProxy.isRunning, localProxy.openVPNProxyMode {
+                let localConfig = localProxy.localProxyConfig
+                applySOCKS5ToDataStore(dataStore, proxy: localConfig)
+                logger.log("DataStore OVPN: routed via OpenVPN bridge 127.0.0.1:\(localConfig.port) for \(ovpn.displayString)", category: .vpn, level: .debug)
+            } else if ovpnBridge.isActive, let bridgeProxy = ovpnBridge.activeSOCKS5Proxy {
+                applySOCKS5ToDataStore(dataStore, proxy: bridgeProxy)
+                logger.log("DataStore OVPN: direct bridge proxy \(bridgeProxy.displayString) for \(ovpn.displayString)", category: .vpn, level: .debug)
+            } else if let fallbackProxy = proxyService.nextWorkingProxy(for: target) {
                 applySOCKS5ToDataStore(dataStore, proxy: fallbackProxy)
                 logger.log("DataStore OVPN: SOCKS5 fallback \(fallbackProxy.displayString) applied for \(ovpn.displayString)", category: .proxy, level: .info)
             } else {
@@ -375,13 +418,22 @@ class NetworkSessionFactory {
             }
 
         case .openVPNProxy(let ovpn):
-            logger.log("URLSession OVPN: \(ovpn.remoteHost):\(ovpn.remotePort) — applying SOCKS5 fallback", category: .vpn, level: .warning)
-            if let fallbackProxy = proxyService.nextWorkingProxy(for: target) {
-                applySOCKS5Dict(to: sessionConfig, proxy: fallbackProxy)
-                logger.log("URLSession OVPN: SOCKS5 fallback \(fallbackProxy.displayString) for \(target.rawValue)", category: .proxy, level: .info)
+            if ovpnBridge.isActive, localProxy.isRunning, localProxy.openVPNProxyMode {
+                let localConfig = localProxy.localProxyConfig
+                applySOCKS5Dict(to: sessionConfig, proxy: localConfig)
+                logger.log("URLSession OVPN: routed via OpenVPN bridge 127.0.0.1:\(localConfig.port) for \(ovpn.remoteHost)", category: .vpn, level: .info)
+            } else if ovpnBridge.isActive, let bridgeProxy = ovpnBridge.activeSOCKS5Proxy {
+                applySOCKS5Dict(to: sessionConfig, proxy: bridgeProxy)
+                logger.log("URLSession OVPN: direct bridge proxy \(bridgeProxy.displayString) for \(ovpn.remoteHost)", category: .vpn, level: .info)
             } else {
-                applySOCKS5Dict(to: sessionConfig, proxy: failClosedProxy)
-                logger.log("URLSession OVPN: no SOCKS5 fallback for \(target.rawValue) — fail-closed proxy applied to block real IP traffic", category: .vpn, level: .error)
+                logger.log("URLSession OVPN: \(ovpn.remoteHost):\(ovpn.remotePort) — bridge not active, applying SOCKS5 fallback", category: .vpn, level: .warning)
+                if let fallbackProxy = proxyService.nextWorkingProxy(for: target) {
+                    applySOCKS5Dict(to: sessionConfig, proxy: fallbackProxy)
+                    logger.log("URLSession OVPN: SOCKS5 fallback \(fallbackProxy.displayString) for \(target.rawValue)", category: .proxy, level: .info)
+                } else {
+                    applySOCKS5Dict(to: sessionConfig, proxy: failClosedProxy)
+                    logger.log("URLSession OVPN: no fallback for \(target.rawValue) — fail-closed proxy applied", category: .vpn, level: .error)
+                }
             }
         }
     }
