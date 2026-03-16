@@ -249,10 +249,6 @@ class NetworkSessionFactory {
     }
 
     private func resolveEffectiveConfig(_ config: ActiveNetworkConfig) -> ActiveNetworkConfig {
-        if let localConfig = deviceProxy.effectiveProxyConfig, localProxy.isRunning {
-            return .socks5(localConfig)
-        }
-
         switch config {
         case .socks5:
             return config

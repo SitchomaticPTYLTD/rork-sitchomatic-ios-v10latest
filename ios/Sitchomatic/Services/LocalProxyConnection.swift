@@ -76,6 +76,9 @@ class LocalProxyConnection {
             connectionPool.releaseConnection(id: poolId, hadError: hadError)
             pooledConnectionId = nil
         } else {
+            if upstream != nil {
+                connectionPool.recordUpstreamConnectionFinished(hadError: hadError)
+            }
             upstreamConnection?.cancel()
         }
         server?.connectionFinished(
@@ -246,32 +249,22 @@ class LocalProxyConnection {
     }
 
     private func connectViaUpstream(_ proxy: ProxyConfig, targetHost: String, targetPort: UInt16, addressType: UInt8) {
-        connectionPool.recordUpstreamConnectionCreated()
-
-        let proxyEndpoint = NWEndpoint.hostPort(
-            host: NWEndpoint.Host(proxy.host),
-            port: NWEndpoint.Port(integerLiteral: UInt16(proxy.port))
-        )
-        let conn = NWConnection(to: proxyEndpoint, using: .tcp)
-        self.upstreamConnection = conn
-
-        conn.stateUpdateHandler = { [weak self] state in
+        connectionPool.acquireUpstream(targetHost: targetHost, targetPort: targetPort, upstream: proxy) { [weak self] conn, poolId in
             Task { @MainActor [weak self] in
-                guard let self, !self.isCancelled else { return }
-                switch state {
-                case .ready:
+                guard let self, !self.isCancelled else {
+                    if let poolId { self?.connectionPool.releaseConnection(id: poolId, hadError: true) }
+                    return
+                }
+                if let conn, let poolId {
+                    self.upstreamConnection = conn
+                    self.pooledConnectionId = poolId
                     self.performUpstreamSOCKS5Handshake(proxy: proxy, targetHost: targetHost, targetPort: targetPort, addressType: addressType)
-                case .failed:
+                } else {
                     self.errorType = .connection
                     self.sendSOCKS5Error(0x05)
-                case .cancelled:
-                    break
-                default:
-                    break
                 }
             }
         }
-        conn.start(queue: queue)
     }
 
     private func performUpstreamSOCKS5Handshake(proxy: ProxyConfig, targetHost: String, targetPort: UInt16, addressType: UInt8) {
@@ -364,6 +357,12 @@ class LocalProxyConnection {
     }
 
     private func retryUpstreamWithNoAuth(proxy: ProxyConfig, targetHost: String, targetPort: UInt16, addressType: UInt8) {
+        if let poolId = pooledConnectionId {
+            connectionPool.releaseConnection(id: poolId, hadError: true)
+            pooledConnectionId = nil
+        }
+        connectionPool.recordUpstreamConnectionCreated()
+
         let proxyEndpoint = NWEndpoint.hostPort(
             host: NWEndpoint.Host(proxy.host),
             port: NWEndpoint.Port(integerLiteral: UInt16(proxy.port))

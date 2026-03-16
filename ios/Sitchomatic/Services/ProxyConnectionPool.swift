@@ -5,6 +5,7 @@ nonisolated struct PooledConnectionInfo: Sendable {
     let id: UUID
     let targetHost: String
     let targetPort: UInt16
+    let routeKey: String
     let createdAt: Date
     var lastUsedAt: Date
     var bytesTransferred: UInt64
@@ -39,6 +40,13 @@ class ProxyConnectionPool {
     private var prewarmTasks: [UUID: Task<Void, Never>] = [:]
 
     init() {}
+
+    private func makePoolKey(targetHost: String, targetPort: UInt16, upstream: ProxyConfig?) -> String {
+        if let upstream {
+            return "upstream:\(upstream.id.uuidString)->\(targetHost):\(targetPort)"
+        }
+        return "direct:\(targetHost):\(targetPort)"
+    }
 
     func prewarmConnections(count: Int, upstream: ProxyConfig?, targetHost: String = "warmup", targetPort: UInt16 = 443) {
         guard count > 0 else { return }
@@ -83,9 +91,9 @@ class ProxyConnectionPool {
             startCleanupTimer()
             startKeepaliveTimer()
         }
-        let poolKey = "\(targetHost):\(targetPort)"
+        let poolKey = makePoolKey(targetHost: targetHost, targetPort: targetPort, upstream: upstream)
 
-        for (id, info) in pooledConnections where info.isIdle && "\(info.targetHost):\(info.targetPort)" == poolKey {
+        for (id, info) in pooledConnections where info.isIdle && info.routeKey == poolKey {
             if let conn = upstreamConnections[id], conn.state == .ready {
                 var updated = info
                 updated.lastUsedAt = Date()
@@ -101,6 +109,9 @@ class ProxyConnectionPool {
         }
 
         totalPoolMisses += 1
+        if upstream != nil {
+            totalUpstreamConnections += 1
+        }
 
         if pooledConnections.count >= maxPoolSize {
             evictOldest()
@@ -111,6 +122,7 @@ class ProxyConnectionPool {
             id: id,
             targetHost: targetHost,
             targetPort: targetPort,
+            routeKey: poolKey,
             createdAt: Date(),
             lastUsedAt: Date(),
             bytesTransferred: 0,

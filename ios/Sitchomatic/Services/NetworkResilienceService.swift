@@ -433,19 +433,19 @@ class NetworkResilienceService {
     }
 
     func preflightDNSCheck(hostnames: [String]) async -> (healthy: Int, failed: Int) {
-        let poolResult = await dnsPool.preflightTestAllActive()
+        let (healthy, failed, _) = await dnsPool.preflightTestAllActive()
         for hostname in hostnames {
             let _ = await dnsPool.resolveWithFullFallback(hostname: hostname)
         }
-        return (poolResult.healthy, poolResult.failed)
+        return (healthy, failed)
     }
 
     func preflightDNSCheckDetailed(hostnames: [String]) async -> (healthy: Int, failed: Int, autoDisabled: [String]) {
-        let poolResult = await dnsPool.preflightTestAllActive()
+        let (healthy, failed, autoDisabled) = await dnsPool.preflightTestAllActive()
         for hostname in hostnames {
             let _ = await dnsPool.resolveWithFullFallback(hostname: hostname)
         }
-        return (poolResult.healthy, poolResult.failed, poolResult.autoDisabledDuringTest)
+        return (healthy, failed, autoDisabled)
     }
 
     func dnsResolverStatus() -> [(label: String, healthy: Bool)] {
@@ -486,8 +486,8 @@ class NetworkResilienceService {
 
         let config = URLSessionConfiguration.ephemeral
         config.httpMaximumConnectionsPerHost = 4
-        config.timeoutIntervalForRequest = TimeoutResolver.resolveRequestTimeout(15)
-        config.timeoutIntervalForResource = TimeoutResolver.resolveResourceTimeout(30)
+        config.timeoutIntervalForRequest = TimeoutResolver.resolveRequestTimeout(30)
+        config.timeoutIntervalForResource = TimeoutResolver.resolveResourceTimeout(60)
         config.httpShouldUsePipelining = true
 
         if let proxy = proxyConfig {

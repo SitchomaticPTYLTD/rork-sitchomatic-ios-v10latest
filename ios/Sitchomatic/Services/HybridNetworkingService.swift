@@ -334,16 +334,18 @@ class HybridNetworkingService {
     }
 
     private func calculateHealthScore(for stat: MethodStat) -> Double {
-        let srScore = stat.successRate * 0.50
-        let latScore = max(0, 1.0 - (Double(stat.avgLatencyMs) / 15000.0)) * 0.25
-        var recency = 0.5
+        let successScore = stat.successRate * 0.55
+        let latencyScore = max(0, 1.0 - (Double(stat.avgLatencyMs) / 15000.0)) * 0.25
+        let recencyBase: Double
         if let last = stat.lastUsed {
-            let ago = Date().timeIntervalSince(last)
-            recency = max(0, 1.0 - (ago / 3600.0))
+            let ageSeconds = Date().timeIntervalSince(last)
+            recencyBase = max(0, 1.0 - (ageSeconds / 3600.0))
+        } else {
+            recencyBase = 0.5
         }
-        let recencyScore = recency * 0.15
-        let volumeScore = stat.attempts < 3 ? 0.05 : 0.10
-        return srScore + latScore + recencyScore + volumeScore
+        let recencyScore = recencyBase * 0.15
+        let confidenceScore = min(Double(stat.attempts), 3.0) / 3.0 * 0.05
+        return min(1.0, successScore + latencyScore + recencyScore + confidenceScore)
     }
 
     private func persistHealthScores() {
