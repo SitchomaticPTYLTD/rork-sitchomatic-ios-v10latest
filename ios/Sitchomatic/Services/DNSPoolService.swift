@@ -1,5 +1,5 @@
 import Foundation
-import Network
+@preconcurrency import Network
 import os
 
 nonisolated enum DNSProtocolType: String, Codable, Sendable, CaseIterable {
@@ -57,7 +57,7 @@ nonisolated struct DNSServerEntry: Sendable {
     }
 }
 
-struct ManagedDNSServer: Identifiable {
+nonisolated struct ManagedDNSServer: Identifiable, Sendable {
     let id: UUID = UUID()
     let name: String
     let protocolType: DNSProtocolType

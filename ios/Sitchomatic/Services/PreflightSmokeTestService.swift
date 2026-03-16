@@ -27,7 +27,7 @@ class PreflightSmokeTestService {
         timeout: TimeInterval = 15
     ) async -> SmokeTestResult {
         let startTime = Date()
-        let batchId = "preflight_\(UUID().uuidString.prefix(6))"
+        _ = "preflight_\(UUID().uuidString.prefix(6))"
 
         logger.log("Preflight: starting smoke test → \(targetURL.host ?? targetURL.absoluteString) network=\(networkConfig.label)", category: .automation, level: .info)
 

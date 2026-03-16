@@ -35,8 +35,6 @@ class ScreenshotCacheService {
 
         let fileURL = fileURL(for: key)
         let jpegData = compressed.jpegData(compressionQuality: 0.4)
-        let diskMax = maxDiskCacheCount
-        let sizeMax = maxDiskCacheSizeBytes
         Task.detached(priority: .utility) {
             if let data = jpegData {
                 try? data.write(to: fileURL, options: .atomic)

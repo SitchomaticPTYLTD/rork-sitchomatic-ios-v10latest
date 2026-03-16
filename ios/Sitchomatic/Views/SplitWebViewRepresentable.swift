@@ -78,21 +78,24 @@ struct SplitWebViewRepresentable: UIViewRepresentable {
 
             loadingObservation = webView.observe(\.isLoading, options: [.new]) { [weak self] wv, _ in
                 let loading = wv.isLoading
-                Task { @MainActor in
+                guard let self else { return }
+                Task { @MainActor [weak self] in
                     self?.parent.isLoading = loading
                 }
             }
 
             titleObservation = webView.observe(\.title, options: [.new]) { [weak self] wv, _ in
                 let title = wv.title ?? ""
-                Task { @MainActor in
+                guard let self else { return }
+                Task { @MainActor [weak self] in
                     self?.parent.pageTitle = title
                 }
             }
 
             urlObservation = webView.observe(\.url, options: [.new]) { [weak self] wv, _ in
                 let urlString = wv.url?.host ?? wv.url?.absoluteString ?? ""
-                Task { @MainActor in
+                guard let self else { return }
+                Task { @MainActor [weak self] in
                     self?.parent.currentURL = urlString
                 }
             }

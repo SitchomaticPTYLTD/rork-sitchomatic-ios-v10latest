@@ -111,7 +111,7 @@ class LoginAutomationEngine {
             attempt.logs.append(PPSRLogEntry(message: "PreCondition: overriding page load extra delay → \(extraMs)ms (was \(automationSettings.pageLoadExtraDelayMs)ms)", level: .info))
         }
         var interactionActions: [InteractionAction] = []
-        let interactionStartTime = Date()
+        _ = Date()
 
         let netConfig = networkConfigOverride ?? networkFactory.nextConfig(for: proxyTarget)
         logger.log("Network config: \(netConfig.label) for target \(proxyTarget.rawValue)\(networkConfigOverride != nil ? " (override)" : "")", category: .network, level: .info, sessionId: sessionId)
@@ -183,11 +183,9 @@ class LoginAutomationEngine {
         }
         let totalMs = logger.stopTimer(key: sessionId)
 
-        let wasIdleTimeout: Bool
         if outcome == .timeout {
             let idleStatus = activityMonitor.checkIdleStatus(sessionId: sessionId)
             if case .idle(let secs) = idleStatus {
-                wasIdleTimeout = true
                 attempt.status = .failed
                 attempt.errorMessage = "Idle timeout — zero network activity for \(Int(secs))s, retrying with different config"
                 attempt.completedAt = Date()
@@ -195,7 +193,6 @@ class LoginAutomationEngine {
                 logger.log("IDLE TIMEOUT after \(Int(secs))s idle for \(attempt.credential.username) — AI will pick fallback", category: .login, level: .error, sessionId: sessionId, durationMs: totalMs)
                 onUnusualFailure?("Idle timeout for \(attempt.credential.username) — no activity for \(Int(secs))s")
             } else {
-                wasIdleTimeout = false
                 attempt.status = .failed
                 attempt.errorMessage = "Test timed out after \(Int(timeout))s — auto-requeuing"
                 attempt.completedAt = Date()
@@ -203,8 +200,6 @@ class LoginAutomationEngine {
                 logger.log("TIMEOUT after \(Int(timeout))s for \(attempt.credential.username)", category: .login, level: .error, sessionId: sessionId, durationMs: totalMs)
                 onUnusualFailure?("Timeout for \(attempt.credential.username) after \(Int(timeout))s")
             }
-        } else {
-            wasIdleTimeout = false
         }
 
         if outcome == .connectionFailure {
@@ -264,7 +259,6 @@ class LoginAutomationEngine {
         }
 
         let aiLatencyMs = attempt.startedAt.map { Int(Date().timeIntervalSince($0) * 1000) } ?? 0
-        let aiIsSuccess = outcome == .success || outcome == .noAcc || outcome == .permDisabled || outcome == .tempDisabled
         let aiIsBlocked = outcome == .connectionFailure
         let aiIsChallenge = outcome == .redBannerError || outcome == .smsDetected
         aiURLOptimizer.recordOutcome(

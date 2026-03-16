@@ -70,7 +70,7 @@ class TaskMetricsCollectionService {
             let totalMs = Int(Date().timeIntervalSince(start) * 1000)
             let httpStatus = (response as? HTTPURLResponse)?.statusCode
 
-            let metrics = await delegate.collectedMetrics
+            let metrics = delegate.collectedMetrics
             let proxyLabel = proxyConfig.map { "\($0.host):\($0.port)" }
 
             let result = buildMetrics(url: urlString, totalMs: totalMs, httpStatus: httpStatus, success: true, metrics: metrics, proxyUsed: proxyLabel)

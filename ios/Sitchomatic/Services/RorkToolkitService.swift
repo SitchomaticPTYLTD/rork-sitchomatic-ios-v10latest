@@ -20,7 +20,7 @@ class RorkToolkitService {
 
     private let logger = DebugLogger.shared
     private var baseURL: String {
-        let url = Config.EXPO_PUBLIC_TOOLKIT_URL
+        let url = (Bundle.main.infoDictionary?["EXPO_PUBLIC_TOOLKIT_URL"] as? String) ?? ""
         if url.isEmpty { return "https://toolkit.rork.com" }
         return url.hasSuffix("/") ? String(url.dropLast()) : url
     }

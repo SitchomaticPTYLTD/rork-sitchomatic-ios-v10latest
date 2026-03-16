@@ -1,5 +1,5 @@
-import Foundation
-import Network
+@preconcurrency import Foundation
+@preconcurrency import Network
 import Observation
 
 nonisolated enum OpenVPNBridgeStatus: String, Sendable {
@@ -466,11 +466,11 @@ class OpenVPNProxyBridge {
             )
             let connection = NWConnection(to: endpoint, using: .tcp)
             let queue = DispatchQueue(label: "ovpn-bridge-validate.\(UUID().uuidString.prefix(6))")
-            var completed = false
+            let completedBox = UnsafeSendableBox(false)
 
             let timeoutWork = DispatchWorkItem { [weak connection] in
-                guard !completed else { return }
-                completed = true
+                guard !completedBox.value else { return }
+                completedBox.value = true
                 connection?.cancel()
                 continuation.resume(returning: (false, false))
             }
@@ -488,8 +488,8 @@ class OpenVPNProxyBridge {
 
                     connection.send(content: greeting, completion: .contentProcessed { sendError in
                         if sendError != nil {
-                            guard !completed else { return }
-                            completed = true
+                            guard !completedBox.value else { return }
+                            completedBox.value = true
                             timeoutWork.cancel()
                             connection.cancel()
                             continuation.resume(returning: (true, false))
@@ -497,10 +497,10 @@ class OpenVPNProxyBridge {
                         }
 
                         connection.receive(minimumIncompleteLength: 2, maximumLength: 16) { data, _, _, recvError in
-                            guard !completed else { return }
+                            guard !completedBox.value else { return }
 
                             if recvError != nil {
-                                completed = true
+                                completedBox.value = true
                                 timeoutWork.cancel()
                                 connection.cancel()
                                 continuation.resume(returning: (true, false))
@@ -508,7 +508,7 @@ class OpenVPNProxyBridge {
                             }
 
                             guard let data, data.count >= 2, data[0] == 0x05 else {
-                                completed = true
+                                completedBox.value = true
                                 timeoutWork.cancel()
                                 connection.cancel()
                                 continuation.resume(returning: (true, false))
@@ -528,8 +528,8 @@ class OpenVPNProxyBridge {
 
                                 connection.send(content: authPacket, completion: .contentProcessed { authSendError in
                                     if authSendError != nil {
-                                        guard !completed else { return }
-                                        completed = true
+                                        guard !completedBox.value else { return }
+                                        completedBox.value = true
                                         timeoutWork.cancel()
                                         connection.cancel()
                                         continuation.resume(returning: (true, false))
@@ -537,8 +537,8 @@ class OpenVPNProxyBridge {
                                     }
 
                                     connection.receive(minimumIncompleteLength: 2, maximumLength: 4) { authData, _, _, authRecvError in
-                                        guard !completed else { return }
-                                        completed = true
+                                        guard !completedBox.value else { return }
+                                        completedBox.value = true
                                         timeoutWork.cancel()
                                         connection.cancel()
                                         if authRecvError != nil {
@@ -554,17 +554,17 @@ class OpenVPNProxyBridge {
                                     }
                                 })
                             } else if authMethod == 0x00 {
-                                completed = true
+                                completedBox.value = true
                                 timeoutWork.cancel()
                                 connection.cancel()
                                 continuation.resume(returning: (true, true))
                             } else if authMethod == 0xFF {
-                                completed = true
+                                completedBox.value = true
                                 timeoutWork.cancel()
                                 connection.cancel()
                                 continuation.resume(returning: (true, false))
                             } else {
-                                completed = true
+                                completedBox.value = true
                                 timeoutWork.cancel()
                                 connection.cancel()
                                 continuation.resume(returning: (true, true))
@@ -573,15 +573,15 @@ class OpenVPNProxyBridge {
                     })
 
                 case .failed:
-                    guard !completed else { return }
-                    completed = true
+                    guard !completedBox.value else { return }
+                    completedBox.value = true
                     timeoutWork.cancel()
                     connection.cancel()
                     continuation.resume(returning: (false, false))
 
                 case .cancelled:
-                    guard !completed else { return }
-                    completed = true
+                    guard !completedBox.value else { return }
+                    completedBox.value = true
                     timeoutWork.cancel()
                     continuation.resume(returning: (false, false))
 

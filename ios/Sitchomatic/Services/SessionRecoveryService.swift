@@ -51,7 +51,7 @@ class SessionRecoveryService {
         lastFailureReason: String? = nil,
         lastFailureOutcome: String? = nil
     ) {
-        guard var batch = activeBatch else { return }
+        guard let batch = activeBatch else { return }
 
         let networkSnapshot = captureNetworkState()
 
@@ -84,7 +84,7 @@ class SessionRecoveryService {
     }
 
     func markCompleted(credentialId: String) {
-        guard var batch = activeBatch else { return }
+        guard let batch = activeBatch else { return }
 
         var snapshots = batch.snapshots
         snapshots.removeAll { $0.credentialId == credentialId }
@@ -174,7 +174,7 @@ class SessionRecoveryService {
                 } else {
                     return NetworkState(networkMode: "SOCKS5", proxyHost: proxy.host, proxyPort: proxy.port, tunnelActive: false, wireProxyActive: false)
                 }
-            case .wireGuardDNS(let wg):
+            case .wireGuardDNS(_):
                 if wpActive && lpRunning && localProxy.wireProxyMode {
                     return NetworkState(networkMode: "WireGuard→WireProxy", proxyHost: "127.0.0.1", proxyPort: Int(lpPort), tunnelActive: true, wireProxyActive: true)
                 } else {

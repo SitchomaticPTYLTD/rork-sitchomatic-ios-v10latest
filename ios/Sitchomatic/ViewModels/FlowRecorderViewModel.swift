@@ -89,7 +89,8 @@ class FlowRecorderViewModel {
         statusMessage = "Recording..."
 
         durationTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
-            Task { @MainActor in
+            guard let self else { return }
+            Task { @MainActor [weak self] in
                 guard let self, self.isRecording else { return }
                 self.recordingDurationMs = ProcessInfo.processInfo.systemUptime * 1000 - self.recordingStartTime
             }
@@ -108,7 +109,8 @@ class FlowRecorderViewModel {
         statusMessage = "Recording (continuing from step \(playFromStepIndex))..."
 
         durationTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
-            Task { @MainActor in
+            guard let self else { return }
+            Task { @MainActor [weak self] in
                 guard let self, self.isRecording else { return }
                 self.recordingDurationMs = ProcessInfo.processInfo.systemUptime * 1000 - self.recordingStartTime
             }

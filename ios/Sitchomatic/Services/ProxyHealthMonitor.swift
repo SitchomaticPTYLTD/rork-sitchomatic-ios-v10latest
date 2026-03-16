@@ -1,5 +1,5 @@
-import Foundation
-import Network
+@preconcurrency import Foundation
+@preconcurrency import Network
 import Observation
 
 nonisolated struct UpstreamHealthStatus: Sendable {
@@ -174,10 +174,10 @@ class ProxyHealthMonitor {
             let endpoint = NWEndpoint.hostPort(host: NWEndpoint.Host(host), port: NWEndpoint.Port(integerLiteral: port))
             let connection = NWConnection(to: endpoint, using: .tcp)
 
-            var completed = false
+            let completedBox = UnsafeSendableBox(false)
             let timeoutWork = DispatchWorkItem { [weak connection] in
-                guard !completed else { return }
-                completed = true
+                guard !completedBox.value else { return }
+                completedBox.value = true
                 connection?.cancel()
                 continuation.resume(returning: (false, "Timeout (\(Int(timeout))s)"))
             }
@@ -189,16 +189,16 @@ class ProxyHealthMonitor {
                     let greeting = Data([0x05, 0x01, 0x00])
                     connection.send(content: greeting, completion: .contentProcessed { sendError in
                         if let sendError {
-                            guard !completed else { return }
-                            completed = true
+                            guard !completedBox.value else { return }
+                            completedBox.value = true
                             timeoutWork.cancel()
                             connection.cancel()
                             continuation.resume(returning: (false, "Send failed: \(sendError.localizedDescription)"))
                             return
                         }
                         connection.receive(minimumIncompleteLength: 2, maximumLength: 2) { data, _, _, recvError in
-                            guard !completed else { return }
-                            completed = true
+                            guard !completedBox.value else { return }
+                            completedBox.value = true
                             timeoutWork.cancel()
                             connection.cancel()
 
@@ -215,15 +215,15 @@ class ProxyHealthMonitor {
                     })
 
                 case .failed(let error):
-                    guard !completed else { return }
-                    completed = true
+                    guard !completedBox.value else { return }
+                    completedBox.value = true
                     timeoutWork.cancel()
                     connection.cancel()
                     continuation.resume(returning: (false, "Connection failed: \(error.localizedDescription)"))
 
                 case .cancelled:
-                    guard !completed else { return }
-                    completed = true
+                    guard !completedBox.value else { return }
+                    completedBox.value = true
                     timeoutWork.cancel()
                     continuation.resume(returning: (false, "Cancelled"))
 
