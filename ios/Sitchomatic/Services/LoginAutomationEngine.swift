@@ -599,11 +599,14 @@ class LoginAutomationEngine {
         let pageHost = session.targetURL.host ?? ""
         let _ = await hostFingerprint.captureSignature(from: session, host: pageHost)
 
-        let extraDelay = automationSettings.pageLoadExtraDelayMs
-        if extraDelay > 0 {
-            attempt.logs.append(PPSRLogEntry(message: "Waiting \(extraDelay)ms for page stabilization...", level: .info))
-            try? await Task.sleep(for: .milliseconds(extraDelay))
+        await session.injectSettlementMonitor()
+        let settlementResult = await session.waitForSmartSettlement(host: pageHost, sessionId: sessionId, maxTimeoutMs: max(15000, automationSettings.pageLoadExtraDelayMs * 3))
+        if settlementResult.settled {
+            attempt.logs.append(PPSRLogEntry(message: "Smart page settlement: SETTLED in \(settlementResult.durationMs)ms — \(settlementResult.reason)", level: .success))
+        } else {
+            attempt.logs.append(PPSRLogEntry(message: "Smart page settlement: TIMEOUT after \(settlementResult.durationMs)ms — \(settlementResult.reason) (proceeding anyway)", level: .warning))
         }
+        logger.log("PageSettlement: \(settlementResult.settled ? "settled" : "timeout") in \(settlementResult.durationMs)ms — net:\(settlementResult.signals.networkIdle) dom:\(settlementResult.signals.domStable) anim:\(settlementResult.signals.animationsComplete) form:\(settlementResult.signals.loginFormReady)", category: .automation, level: settlementResult.settled ? .success : .warning, sessionId: sessionId, durationMs: settlementResult.durationMs)
 
         let pageTitle = await session.getPageTitle()
         attempt.logs.append(PPSRLogEntry(message: "Page loaded: \"\(pageTitle)\"", level: .info))
@@ -726,6 +729,7 @@ class LoginAutomationEngine {
         var usedPatterns: [LoginFormPattern] = []
         var lastContentHash: Int = 0
         var duplicateContentCount: Int = 0
+        var buttonFingerprint: SmartButtonRecoveryService.ButtonFingerprint?
 
         let priorityPatterns: [LoginFormPattern]
         if automationSettings.trueDetectionEnabled && automationSettings.trueDetectionPriority {
@@ -761,21 +765,46 @@ class LoginAutomationEngine {
             attempt.logs.append(PPSRLogEntry(message: "Cycle \(cycle): selected pattern '\(selectedPattern.rawValue)' — \(selectedPattern.description)", level: .info))
 
             if cycle > 1 {
-                let buttonCheck = await session.checkLoginButtonReadiness()
-                if !buttonCheck.isReady {
-                    let buttonReadyTimeout = TimeoutResolver.resolveAutomationTimeout(15)
-                    attempt.logs.append(PPSRLogEntry(message: "Cycle \(cycle): login button not ready (\(buttonCheck.detail)) — waiting up to \(Int(buttonReadyTimeout))s", level: .warning))
-                    let waitResult = await session.waitForLoginButtonReady(timeout: buttonReadyTimeout)
-                    if waitResult.timedOut {
-                        attempt.logs.append(PPSRLogEntry(message: "Cycle \(cycle): login button hung — requeuing", level: .warning))
-                        attempt.status = .failed
-                        attempt.errorMessage = "Login button hung in loading state — requeued"
-                        attempt.completedAt = Date()
-                        await captureDebugScreenshot(session: session, attempt: attempt, step: "button_hung", note: "Login button stuck in translucent/loading state", autoResult: .unknown)
-                        return .unsure
+                if let savedFingerprint = buttonFingerprint {
+                    let recoveryResult = await session.waitForSmartButtonRecovery(originalFingerprint: savedFingerprint, host: pageHost, sessionId: sessionId)
+                    if recoveryResult.recovered {
+                        attempt.logs.append(PPSRLogEntry(message: "Cycle \(cycle): button RECOVERED in \(recoveryResult.durationMs)ms — \(recoveryResult.reason)", level: .success))
+                    } else {
+                        attempt.logs.append(PPSRLogEntry(message: "Cycle \(cycle): button recovery TIMEOUT after \(recoveryResult.durationMs)ms — \(recoveryResult.reason)", level: .warning))
+                        let fallbackCheck = await session.checkLoginButtonReadiness()
+                        if !fallbackCheck.isReady {
+                            let buttonReadyTimeout = TimeoutResolver.resolveAutomationTimeout(15)
+                            let waitResult = await session.waitForLoginButtonReady(timeout: buttonReadyTimeout)
+                            if waitResult.timedOut {
+                                attempt.logs.append(PPSRLogEntry(message: "Cycle \(cycle): login button hung after smart+legacy check — requeuing", level: .warning))
+                                attempt.status = .failed
+                                attempt.errorMessage = "Login button hung in loading state — requeued"
+                                attempt.completedAt = Date()
+                                await captureDebugScreenshot(session: session, attempt: attempt, step: "button_hung", note: "Login button stuck in translucent/loading state", autoResult: .unknown)
+                                return .unsure
+                            }
+                        }
                     }
+                    if !recoveryResult.intermediateStates.isEmpty {
+                        logger.log("ButtonRecovery cycle \(cycle): intermediate states: \(recoveryResult.intermediateStates.joined(separator: " → "))", category: .automation, level: .trace, sessionId: sessionId)
+                    }
+                } else {
+                    let buttonCheck = await session.checkLoginButtonReadiness()
+                    if !buttonCheck.isReady {
+                        let buttonReadyTimeout = TimeoutResolver.resolveAutomationTimeout(15)
+                        attempt.logs.append(PPSRLogEntry(message: "Cycle \(cycle): login button not ready (\(buttonCheck.detail)) — waiting up to \(Int(buttonReadyTimeout))s", level: .warning))
+                        let waitResult = await session.waitForLoginButtonReady(timeout: buttonReadyTimeout)
+                        if waitResult.timedOut {
+                            attempt.logs.append(PPSRLogEntry(message: "Cycle \(cycle): login button hung — requeuing", level: .warning))
+                            attempt.status = .failed
+                            attempt.errorMessage = "Login button hung in loading state — requeued"
+                            attempt.completedAt = Date()
+                            await captureDebugScreenshot(session: session, attempt: attempt, step: "button_hung", note: "Login button stuck in translucent/loading state", autoResult: .unknown)
+                            return .unsure
+                        }
+                    }
+                    try? await Task.sleep(for: .milliseconds(Int.random(in: 500...1500)))
                 }
-                try? await Task.sleep(for: .milliseconds(Int.random(in: 500...1500)))
             }
 
             await session.dismissCookieNotices()
@@ -822,10 +851,9 @@ class LoginAutomationEngine {
 
             advanceTo(.submitting, attempt: attempt, message: "Cycle \(cycle)/\(maxSubmitCycles) — evaluating submit...")
 
-            let submitWaitDelay = automationSettings.submitButtonWaitDelayMs
-            if submitWaitDelay > 0 {
-                attempt.logs.append(PPSRLogEntry(message: "Waiting \(submitWaitDelay)ms for submit button readiness...", level: .info))
-                try? await Task.sleep(for: .milliseconds(submitWaitDelay))
+            buttonFingerprint = await session.captureButtonFingerprint(sessionId: sessionId)
+            if let bf = buttonFingerprint {
+                attempt.logs.append(PPSRLogEntry(message: "Cycle \(cycle): captured button fingerprint — text='\(bf.textContent)' bg=\(bf.bgColor) opacity=\(String(format: "%.2f", bf.opacity))", level: .info))
             }
 
             if !patternResult.submitTriggered {

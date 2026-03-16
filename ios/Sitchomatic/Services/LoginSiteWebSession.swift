@@ -1825,6 +1825,42 @@ class LoginSiteWebSession: NSObject {
     func getViewportSize() -> CGSize {
         webView?.frame.size ?? CGSize(width: 390, height: 844)
     }
+
+    func injectSettlementMonitor() async {
+        let settlement = SmartPageSettlementService.shared
+        await settlement.injectMonitor(executeJS: { [weak self] js in
+            await self?.executeJS(js)
+        })
+    }
+
+    func waitForSmartSettlement(host: String, sessionId: String, maxTimeoutMs: Int = 15000) async -> SmartPageSettlementService.SettlementResult {
+        let settlement = SmartPageSettlementService.shared
+        return await settlement.waitForSettlement(
+            executeJS: { [weak self] js in await self?.executeJS(js) },
+            host: host,
+            sessionId: sessionId,
+            maxTimeoutMs: maxTimeoutMs
+        )
+    }
+
+    func captureButtonFingerprint(sessionId: String) async -> SmartButtonRecoveryService.ButtonFingerprint? {
+        let recovery = SmartButtonRecoveryService.shared
+        return await recovery.captureFingerprint(
+            executeJS: { [weak self] js in await self?.executeJS(js) },
+            sessionId: sessionId
+        )
+    }
+
+    func waitForSmartButtonRecovery(originalFingerprint: SmartButtonRecoveryService.ButtonFingerprint, host: String, sessionId: String, maxTimeoutMs: Int = 12000) async -> SmartButtonRecoveryService.RecoveryResult {
+        let recovery = SmartButtonRecoveryService.shared
+        return await recovery.waitForRecovery(
+            originalFingerprint: originalFingerprint,
+            executeJS: { [weak self] js in await self?.executeJS(js) },
+            host: host,
+            sessionId: sessionId,
+            maxTimeoutMs: maxTimeoutMs
+        )
+    }
 }
 
 extension LoginSiteWebSession: WKNavigationDelegate {

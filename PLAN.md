@@ -1,84 +1,50 @@
-# OpenVPN SOCKS5 Bridge — Complete
+# Smart AI Page Settlement & Button Recovery Detection
 
-## Part 1 (Done): Core Engine Rewrite + Connection Handler
+## What Changes
 
-- [x] Rewrite `OpenVPNProxyBridge` — NordVPN API lookup + hostname:1080 fallback + region cache + health checks
-- [x] Create `OpenVPNSOCKS5Handler` — dedicated per-connection SOCKS5 chaining handler
-- [x] Add `nordCountryCode`/`nordCountryId` to `OpenVPNConfig`
-- [x] Add `fetchSOCKS5Servers(countryId:)` to `NordVPNService`
+Two focused improvements replacing fixed wait times with smart AI-driven detection, learned from the attached working script:
 
-## Part 2 (Done): Wiring + Bulletproofing Hybrid Network
+---
 
-- [x] `LocalProxyServer.handleNewConnection` — routes through `OpenVPNSOCKS5Handler` when `openVPNProxyMode` active (parallel to WireProxy path)
-- [x] `LocalProxyServer` — added `ovpnConnections` dictionary for OpenVPN handler lifecycle tracking
-- [x] `DeviceProxyService.syncOpenVPNProxyBridge` — enables handler mode (no upstream proxy needed, handler chains directly)
-- [x] `DeviceProxyService` — added full per-session OpenVPN support mirroring WireGuard (activate/retry/stop/rotate/reconnect)
-- [x] `DeviceProxyService.effectiveProxyConfig` — returns local proxy config for per-session OpenVPN mode
-- [x] `DeviceProxyService` — updated `ipRoutingMode` didSet, `notifyBatchStart`, `handleUnifiedConnectionModeChange`, `handleProfileSwitch` for OpenVPN
-- [x] `NetworkSessionFactory.nextConfig` — picks up per-session tunnel configs before falling through to per-target mode
-- [x] `NetworkSessionFactory.resolveEffectiveConfig` — prioritizes handler-based OpenVPN routing over direct bridge proxy
-- [x] `HybridNetworkingService.resolveConfig` — OpenVPN method now checks for active bridge+handler before returning raw config
-- [x] `HybridNetworkingService.resolveConfig` — WireProxy method now checks for active tunnel before returning raw WG config
+### **Improvement 1: Smart Page Settlement Detection**
 
-## Part 3 (Done): Cross-Pollination + NordServerIntelligence
+**Problem:** After page load, the app blindly waits a fixed 2000ms hoping the page has settled. JavaScript-heavy sites may need 500ms or 8000ms — the fixed wait is either too long (wasting time) or too short (interacting with unready pages).
 
-### NordServerIntelligence (new shared service)
-- [x] Load-aware server selection via Nord API `/v1/servers/recommendations`
-- [x] Region pool management with per-server health tracking (load, latency, failures, blacklist)
-- [x] Health score algorithm: 40% load + 30% failure rate + 20% latency + 10% freshness
-- [x] Failed server blacklisting with cooldown TTL (scales with consecutive failures, max 10min)
-- [x] Round-robin selection within region pools
-- [x] SOCKS5 endpoint resolution with validation (single + batch)
-- [x] WireGuard config generation from NordServerHealth entries
-- [x] Auto-refresh of stale regions (5min TTL)
-- [x] Shared between both OpenVPN and WireProxy protocols
+**Solution:** Replace the fixed `pageLoadExtraDelayMs` wait with an intelligent multi-signal page settlement detector that monitors:
 
-### OpenVPNProxyBridge upgrades (learned from WireProxy)
-- [x] Multi-endpoint pool — resolves up to 3 SOCKS5 endpoints upfront via NordIntel, round-robins between them
-- [x] Per-endpoint health tracking (consecutive failures, latency, server load, health score)
-- [x] Auto-replenishment — when all pool endpoints fail, fetches fresh ones from NordIntel
-- [x] Pool-aware health checks — validates all endpoints, promotes healthiest to active
-- [x] Extended stats: pool size, active index, pool rotations, server load
+- **Network idle detection** — Injects a JS observer that hooks `XMLHttpRequest` and `fetch` to track in-flight requests. Page is "network idle" when zero requests are pending for 500ms
+- **DOM mutation stability** — Uses a `MutationObserver` to detect when the DOM stops changing. Page is "DOM stable" when no mutations occur for 400ms
+- **Animation completion** — Checks `document.getAnimations()` to see if CSS/JS animations are still running
+- **Document readyState** — Still checked but as one signal among many, not the only one
+- **Login form presence** — Specifically waits until the email/password fields are present AND interactable (not just in DOM but visible, not disabled, not obscured)
 
-### OpenVPNSOCKS5Handler upgrades
-- [x] Uses `bridge.nextEndpoint()` for pool round-robin instead of always using `activeSOCKS5Proxy`
-- [x] Reports success/failure back to pool with `recordEndpointServed/Failed`
-- [x] Failure feedback flows through to NordServerIntelligence for cross-protocol blacklisting
+The detector waits until **all signals agree** the page is settled, with a maximum timeout of 15 seconds. If settlement happens in 400ms, it proceeds in 400ms. If the page is slow, it waits as long as needed.
 
-### WireProxyBridge upgrades (learned from OpenVPN)
-- [x] Nord API-driven reconnection — when tunnel fails, asks NordIntel for fresh server in same region instead of retrying same config
-- [x] Handshake latency tracking (`stats.handshakeLatencyMs`)
-- [x] Resolution source tracking (`stats.resolutionSource`)
-- [x] Server load tracking via NordIntel (`stats.serverLoad`)
-- [x] Consecutive health failure counting (`stats.consecutiveHealthFailures`)
-- [x] API reconnect counter (`stats.apiReconnects`)
-- [x] Per-slot API-driven reconnection in multi-tunnel mode — replaces failed slots with fresh NordIntel servers
-- [x] Nord country ID extraction from WireGuard endpoint hostnames
-- [x] Intel success/failure reporting on connect, reconnect, and health check
+This replaces the fixed `pageLoadExtraDelayMs` everywhere it's used.
 
-### DeviceProxyService + HybridNetworkingService wiring
-- [x] NordServerIntelligence monitoring starts/stops with unified mode lifecycle
-- [x] Intel cleared on profile switch
-- [x] HybridNetworkingService reports outcomes to NordIntel for cross-protocol server health
+---
 
-## Architecture
+### **Improvement 2: Smart Login Button State Recovery**
 
-```
-App (WKWebView/URLSession)
-  → SOCKS5 to LocalProxyServer (127.0.0.1:18080)
-    → openVPNProxyMode?
-      → OpenVPNSOCKS5Handler (per-connection)
-        → pool round-robin selects endpoint from OpenVPNProxyBridge.endpointPool
-          → SOCKS5 handshake to NordVPN SOCKS5 endpoint
-            → bidirectional relay to target
-    → wireProxyMode?
-      → WireProxySOCKS5Handler → WireProxy tunnel
-    → else
-      → LocalProxyConnection → upstream SOCKS5 proxy
+**Problem:** Between submit cycles, the app checks if the button's opacity > 0.8 and isn't disabled, but doesn't detect if the button has returned to its **original visual state** (color, text, size). After a failed login, buttons often go through: original color → loading spinner/translucent → error flash → back to original. The app doesn't wait for that full cycle.
 
-NordServerIntelligence (shared)
-  → Feeds both OpenVPNProxyBridge and WireProxyBridge
-  → Load-aware server selection from Nord API
-  → Cross-protocol server health tracking + blacklisting
-  → Auto-refresh stale region pools every 5 minutes
-```
+**Solution:** Replace fixed post-submit waits with a button state fingerprint system:
+
+- **Before clicking:** Capture the button's full visual fingerprint — background color (RGB), text content, width/height, opacity, border color, box-shadow, cursor style
+- **After clicking:** Poll the button every 300ms comparing current state to the saved fingerprint
+- **"Recovered" = button matches its original fingerprint** (within tolerance for minor animation jitter)
+- **Also detects intermediate states:** loading spinner text ("Loading...", "Please wait..."), reduced opacity, changed cursor, pointer-events: none — these are all "not yet recovered" signals
+- **Timeout safety:** If the button doesn't recover within 12 seconds, proceed anyway (with a log warning)
+- **AI learning:** Records how long recovery typically takes per host, so future cycles can set tighter expected windows
+
+This replaces the fixed `submitButtonWaitDelayMs` and improves the existing `checkLoginButtonReadiness` / `waitForLoginButtonReady` functions.
+
+---
+
+### **Where These Changes Apply**
+
+- The page settlement detector is used after initial page load AND after any page reload/recovery
+- The button state recovery is used between every submit cycle (cycles 2+)
+- Both feed timing data back to `AITimingOptimizerService` so the AI learns optimal windows per host
+- Existing fixed delay settings become **maximum fallback timeouts** rather than primary waits
+- All existing automation patterns benefit automatically since the changes are at the session/engine level
