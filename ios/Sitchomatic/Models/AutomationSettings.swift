@@ -7,6 +7,8 @@ nonisolated struct AutomationSettings: Codable, Sendable {
     var trueDetectionHardPauseMs: Int = 4500
     var trueDetectionTripleClickCount: Int = 4
     var trueDetectionTripleClickDelayMs: Int = 1600
+    var trueDetectionSubmitCycleCount: Int = 4
+    var trueDetectionButtonRecoveryTimeoutMs: Int = 12000
     var trueDetectionMaxAttempts: Int = 4
     var trueDetectionAlwaysForceEnabled: Bool = true
     var trueDetectionPostClickWaitMs: Int = 3250

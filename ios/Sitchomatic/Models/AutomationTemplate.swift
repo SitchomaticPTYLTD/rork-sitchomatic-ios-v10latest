@@ -32,6 +32,8 @@ nonisolated struct AutomationTemplate: Codable, Sendable, Identifiable {
             s.trueDetectionHardPauseMs = 4000
             s.trueDetectionTripleClickCount = 3
             s.trueDetectionTripleClickDelayMs = 1100
+            s.trueDetectionSubmitCycleCount = 4
+            s.trueDetectionButtonRecoveryTimeoutMs = 12000
             s.trueDetectionMaxAttempts = 4
             s.trueDetectionPostClickWaitMs = 2500
             s.trueDetectionCooldownMinutes = 15

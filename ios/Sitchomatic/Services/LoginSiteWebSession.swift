@@ -479,7 +479,7 @@ class LoginSiteWebSession: NSObject {
         return (false, "TRUE DETECTION: Password fill failed on #login-password — \(result ?? "nil")")
     }
 
-    func trueDetectionTripleClickSubmit(clickCount: Int = 4, delayMs: Int = 1100) async -> (success: Bool, detail: String) {
+    func trueDetectionTripleClickSubmit(clickCount: Int = 4, delayMs: Int = 1100, cycleCount: Int = 4, buttonRecoveryTimeoutMs: Int = 12000) async -> (success: Bool, detail: String) {
         let checkJS = """
         (function() {
             var btn = document.querySelector('#login-submit');
@@ -492,30 +492,58 @@ class LoginSiteWebSession: NSObject {
             return (false, "TRUE DETECTION: Submit button #login-submit NOT_FOUND")
         }
 
-        for i in 0..<clickCount {
-            let clickJS = """
-            (function() {
-                var btn = document.querySelector('#login-submit');
-                if (!btn) return 'NOT_FOUND';
-                btn.scrollIntoView({behavior:'instant',block:'center'});
-                var r = btn.getBoundingClientRect();
-                var cx = r.left + r.width * (0.3 + Math.random() * 0.4);
-                var cy = r.top + r.height * (0.3 + Math.random() * 0.4);
-                btn.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,cancelable:true,view:window,clientX:cx,clientY:cy,pointerId:1,pointerType:'mouse',button:0,buttons:1}));
-                btn.dispatchEvent(new MouseEvent('mousedown',{bubbles:true,cancelable:true,view:window,clientX:cx,clientY:cy,button:0,buttons:1}));
-                btn.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,cancelable:true,view:window,clientX:cx,clientY:cy,pointerId:1,pointerType:'mouse',button:0}));
-                btn.dispatchEvent(new MouseEvent('mouseup',{bubbles:true,cancelable:true,view:window,clientX:cx,clientY:cy,button:0}));
-                btn.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true,view:window,clientX:cx,clientY:cy,button:0}));
-                btn.click();
-                return 'CLICKED';
-            })();
-            """
-            _ = await executeJS(clickJS)
-            if i < clickCount - 1 {
-                try? await Task.sleep(for: .milliseconds(delayMs))
+        let effectiveCycles = max(1, cycleCount)
+        let buttonRecovery = SmartButtonRecoveryService.shared
+        let currentURL = await getCurrentURL()
+        let host = URL(string: currentURL)?.host ?? "unknown"
+        let sessionId = monitoringSessionId ?? ""
+
+        for cycle in 0..<effectiveCycles {
+            let preClickFingerprint = await buttonRecovery.captureFingerprint(
+                executeJS: { [weak self] js in await self?.executeJS(js) },
+                sessionId: sessionId
+            )
+
+            for i in 0..<clickCount {
+                let clickJS = """
+                (function() {
+                    var btn = document.querySelector('#login-submit');
+                    if (!btn) return 'NOT_FOUND';
+                    btn.scrollIntoView({behavior:'instant',block:'center'});
+                    var r = btn.getBoundingClientRect();
+                    var cx = r.left + r.width * (0.3 + Math.random() * 0.4);
+                    var cy = r.top + r.height * (0.3 + Math.random() * 0.4);
+                    btn.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,cancelable:true,view:window,clientX:cx,clientY:cy,pointerId:1,pointerType:'mouse',button:0,buttons:1}));
+                    btn.dispatchEvent(new MouseEvent('mousedown',{bubbles:true,cancelable:true,view:window,clientX:cx,clientY:cy,button:0,buttons:1}));
+                    btn.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,cancelable:true,view:window,clientX:cx,clientY:cy,pointerId:1,pointerType:'mouse',button:0}));
+                    btn.dispatchEvent(new MouseEvent('mouseup',{bubbles:true,cancelable:true,view:window,clientX:cx,clientY:cy,button:0}));
+                    btn.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true,view:window,clientX:cx,clientY:cy,button:0}));
+                    btn.click();
+                    return 'CLICKED';
+                })();
+                """
+                _ = await executeJS(clickJS)
+                if i < clickCount - 1 {
+                    try? await Task.sleep(for: .milliseconds(delayMs))
+                }
+            }
+
+            if cycle < effectiveCycles - 1 {
+                if let fingerprint = preClickFingerprint {
+                    _ = await buttonRecovery.waitForRecovery(
+                        originalFingerprint: fingerprint,
+                        executeJS: { [weak self] js in await self?.executeJS(js) },
+                        host: host,
+                        sessionId: sessionId,
+                        maxTimeoutMs: buttonRecoveryTimeoutMs
+                    )
+                } else {
+                    try? await Task.sleep(for: .milliseconds(2000))
+                }
+                try? await Task.sleep(for: .milliseconds(Int.random(in: 200...500)))
             }
         }
-        return (true, "TRUE DETECTION: Triple-click on #login-submit (\(clickCount) clicks, \(delayMs)ms apart)")
+        return (true, "TRUE DETECTION: Cycled triple-click on #login-submit (\(effectiveCycles) cycles x \(clickCount) clicks, \(delayMs)ms apart)")
     }
 
     func trueDetectionValidateSuccess() async -> (success: Bool, marker: String?) {

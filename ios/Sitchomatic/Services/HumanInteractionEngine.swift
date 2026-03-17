@@ -264,38 +264,69 @@ class HumanInteractionEngine {
         if !result.passwordFilled { return result }
         try? await Task.sleep(for: .milliseconds(aiOptimizedDelay(category: .preSubmitWait, fallbackMin: 300, fallbackMax: 600)))
 
-        logger.log("TrueDetection: starting triple-click on #login-submit", category: .automation, level: .info, sessionId: sessionId)
-        for i in 0..<4 {
-            let clickJS = """
-            (function() {
-                var btn = document.querySelector('#login-submit');
-                if (!btn) return 'NOT_FOUND';
-                btn.scrollIntoView({behavior: 'instant', block: 'center'});
-                var r = btn.getBoundingClientRect();
-                var cx = r.left + r.width * (0.3 + Math.random() * 0.4);
-                var cy = r.top + r.height * (0.3 + Math.random() * 0.4);
-                btn.dispatchEvent(new PointerEvent('pointerdown', {bubbles:true,cancelable:true,view:window,clientX:cx,clientY:cy,pointerId:1,pointerType:'mouse',button:0,buttons:1}));
-                btn.dispatchEvent(new MouseEvent('mousedown', {bubbles:true,cancelable:true,view:window,clientX:cx,clientY:cy,button:0,buttons:1}));
-                btn.dispatchEvent(new PointerEvent('pointerup', {bubbles:true,cancelable:true,view:window,clientX:cx,clientY:cy,pointerId:1,pointerType:'mouse',button:0}));
-                btn.dispatchEvent(new MouseEvent('mouseup', {bubbles:true,cancelable:true,view:window,clientX:cx,clientY:cy,button:0}));
-                btn.dispatchEvent(new MouseEvent('click', {bubbles:true,cancelable:true,view:window,clientX:cx,clientY:cy,button:0}));
-                btn.click();
-                return 'CLICKED_' + \(i);
-            })();
-            """
-            let clickResult = await executeJS(clickJS)
-            logger.log("TrueDetection: triple-click \(i + 1)/4 → \(clickResult ?? "nil")", category: .automation, level: .trace, sessionId: sessionId)
-            if clickResult == "NOT_FOUND" && i == 0 {
-                return result
+        let submitCycles = 4
+        let clicksPerCycle = 4
+        let clickDelayMs = 1100
+        let buttonRecoveryTimeoutMs = 12000
+        let buttonRecovery = SmartButtonRecoveryService.shared
+
+        logger.log("TrueDetection: starting \(submitCycles)-cycle submit on #login-submit (\(clicksPerCycle) clicks/cycle)", category: .automation, level: .info, sessionId: sessionId)
+
+        for cycle in 0..<submitCycles {
+            let preClickFingerprint = await buttonRecovery.captureFingerprint(
+                executeJS: executeJS,
+                sessionId: sessionId
+            )
+
+            for i in 0..<clicksPerCycle {
+                let clickJS = """
+                (function() {
+                    var btn = document.querySelector('#login-submit');
+                    if (!btn) return 'NOT_FOUND';
+                    btn.scrollIntoView({behavior: 'instant', block: 'center'});
+                    var r = btn.getBoundingClientRect();
+                    var cx = r.left + r.width * (0.3 + Math.random() * 0.4);
+                    var cy = r.top + r.height * (0.3 + Math.random() * 0.4);
+                    btn.dispatchEvent(new PointerEvent('pointerdown', {bubbles:true,cancelable:true,view:window,clientX:cx,clientY:cy,pointerId:1,pointerType:'mouse',button:0,buttons:1}));
+                    btn.dispatchEvent(new MouseEvent('mousedown', {bubbles:true,cancelable:true,view:window,clientX:cx,clientY:cy,button:0,buttons:1}));
+                    btn.dispatchEvent(new PointerEvent('pointerup', {bubbles:true,cancelable:true,view:window,clientX:cx,clientY:cy,pointerId:1,pointerType:'mouse',button:0}));
+                    btn.dispatchEvent(new MouseEvent('mouseup', {bubbles:true,cancelable:true,view:window,clientX:cx,clientY:cy,button:0}));
+                    btn.dispatchEvent(new MouseEvent('click', {bubbles:true,cancelable:true,view:window,clientX:cx,clientY:cy,button:0}));
+                    btn.click();
+                    return 'CLICKED_' + \(i);
+                })();
+                """
+                let clickResult = await executeJS(clickJS)
+                logger.log("TrueDetection: cycle \(cycle + 1) click \(i + 1)/\(clicksPerCycle) \u{2192} \(clickResult ?? "nil")", category: .automation, level: .trace, sessionId: sessionId)
+                if clickResult == "NOT_FOUND" && i == 0 && cycle == 0 {
+                    return result
+                }
+                if i < clicksPerCycle - 1 {
+                    try? await Task.sleep(for: .milliseconds(clickDelayMs))
+                }
             }
-            if i < 3 {
-                try? await Task.sleep(for: .milliseconds(1100))
+
+            if cycle < submitCycles - 1 {
+                logger.log("TrueDetection: cycle \(cycle + 1) done — AI smart button color change detection...", category: .automation, level: .info, sessionId: sessionId)
+                if let fingerprint = preClickFingerprint {
+                    let recovery = await buttonRecovery.waitForRecovery(
+                        originalFingerprint: fingerprint,
+                        executeJS: executeJS,
+                        host: currentHost,
+                        sessionId: sessionId,
+                        maxTimeoutMs: buttonRecoveryTimeoutMs
+                    )
+                    logger.log("TrueDetection: button recovery \(recovery.recovered ? "OK" : "TIMEOUT") in \(recovery.durationMs)ms", category: .automation, level: recovery.recovered ? .success : .warning, sessionId: sessionId)
+                } else {
+                    try? await Task.sleep(for: .milliseconds(2000))
+                }
+                try? await Task.sleep(for: .milliseconds(Int.random(in: 200...500)))
             }
         }
 
         result.submitTriggered = true
-        result.submitMethod = "TRUE_DETECTION_TRIPLE_CLICK"
-        logger.log("TrueDetection: triple-click complete", category: .automation, level: .success, sessionId: sessionId)
+        result.submitMethod = "TRUE_DETECTION_CYCLED_TRIPLE_CLICK_\(submitCycles)x\(clicksPerCycle)"
+        logger.log("TrueDetection: all \(submitCycles) submit cycles complete", category: .automation, level: .success, sessionId: sessionId)
         return result
     }
 

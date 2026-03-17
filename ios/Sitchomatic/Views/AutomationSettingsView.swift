@@ -297,6 +297,8 @@ struct AutomationSettingsView: View {
                     Stepper("Hard Pause: \(vm.automationSettings.trueDetectionHardPauseMs)ms", value: $vm.automationSettings.trueDetectionHardPauseMs, in: 1000...8000, step: 500)
                     Stepper("Click Count: \(vm.automationSettings.trueDetectionTripleClickCount)", value: $vm.automationSettings.trueDetectionTripleClickCount, in: 1...10)
                     Stepper("Click Delay: \(vm.automationSettings.trueDetectionTripleClickDelayMs)ms", value: $vm.automationSettings.trueDetectionTripleClickDelayMs, in: 200...3000, step: 100)
+                    Stepper("Submit Cycles: \(vm.automationSettings.trueDetectionSubmitCycleCount)", value: $vm.automationSettings.trueDetectionSubmitCycleCount, in: 1...8)
+                    Stepper("Button Recovery Timeout: \(vm.automationSettings.trueDetectionButtonRecoveryTimeoutMs)ms", value: $vm.automationSettings.trueDetectionButtonRecoveryTimeoutMs, in: 2000...30000, step: 1000)
                     Stepper("Max Attempts: \(vm.automationSettings.trueDetectionMaxAttempts)", value: $vm.automationSettings.trueDetectionMaxAttempts, in: 1...10)
                     Stepper("Post-Click Wait: \(vm.automationSettings.trueDetectionPostClickWaitMs)ms", value: $vm.automationSettings.trueDetectionPostClickWaitMs, in: 500...5000, step: 250)
                     Stepper("Cooldown: \(vm.automationSettings.trueDetectionCooldownMinutes) min", value: $vm.automationSettings.trueDetectionCooldownMinutes, in: 1...60)

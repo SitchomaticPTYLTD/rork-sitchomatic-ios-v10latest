@@ -37,6 +37,8 @@ class TrueDetectionService {
         var hardPauseMs: Int = 4000
         var tripleClickDelayMs: Int = 1100
         var tripleClickCount: Int = 4
+        var submitCycleCount: Int = 4
+        var buttonRecoveryTimeoutMs: Int = 12000
         var maxAttempts: Int = 4
         var postClickWaitMs: Int = 2500
         var cooldownMinutes: Int = 15
@@ -203,11 +205,13 @@ class TrueDetectionService {
         onLog?("TRUE DETECTION: Password filled via \(config.passwordSelector)", .success)
         try? await Task.sleep(for: .milliseconds(Int.random(in: 300...600)))
 
-        let submitResult = await tripleClickSubmit(
+        let submitResult = await cycledTripleClickWithButtonDetection(
             session: session,
             selector: config.submitSelector,
             clickCount: config.tripleClickCount,
             delayMs: config.tripleClickDelayMs,
+            cycleCount: config.submitCycleCount,
+            buttonRecoveryTimeoutMs: config.buttonRecoveryTimeoutMs,
             sessionId: sessionId,
             onLog: onLog
         )
@@ -291,7 +295,7 @@ class TrueDetectionService {
         """
 
         let result = await session.executeJS(js)
-        logger.log("TrueDetection: fill \(fieldName) via \(selector) → \(result ?? "nil")", category: .automation, level: result == "OK" ? .success : .warning, sessionId: sessionId)
+        logger.log("TrueDetection: fill \(fieldName) via \(selector) \u{2192} \(result ?? "nil")", category: .automation, level: result == "OK" ? .success : .warning, sessionId: sessionId)
 
         if result == "OK" || result == "VALUE_MISMATCH" {
             return true
@@ -299,11 +303,15 @@ class TrueDetectionService {
         return false
     }
 
-    private func tripleClickSubmit(
+    // MARK: - 4-Cycle Submit: Triple Click → Smart Button Color Detection → Triple Click → Detection → Triple Click → Detection → Triple Click
+
+    private func cycledTripleClickWithButtonDetection(
         session: LoginSiteWebSession,
         selector: String,
         clickCount: Int,
         delayMs: Int,
+        cycleCount: Int,
+        buttonRecoveryTimeoutMs: Int,
         sessionId: String,
         onLog: ((String, PPSRLogEntry.Level) -> Void)?
     ) async -> (success: Bool, method: String) {
@@ -325,53 +333,93 @@ class TrueDetectionService {
             return (false, "NOT_FOUND")
         }
 
-        onLog?("TRUE DETECTION: Starting triple-click on \(selector) (\(clickCount) clicks, \(delayMs)ms apart)", .info)
+        let effectiveCycles = max(1, cycleCount)
+        onLog?("TRUE DETECTION: Starting \(effectiveCycles)-cycle submit (triple-click \u{2192} button color detection \u{2192} triple-click \u{2192} ...) on \(selector)", .info)
+        logger.log("TrueDetection: \(effectiveCycles)-cycle submit sequence starting (\(clickCount) clicks/cycle, \(delayMs)ms apart)", category: .automation, level: .info, sessionId: sessionId)
 
-        for i in 0..<clickCount {
-            let clickJS = """
-            (function() {
-                var btn = document.querySelector('\(escapedSelector)');
-                if (!btn) return 'NOT_FOUND';
-                btn.scrollIntoView({behavior: 'instant', block: 'center'});
-                var rect = btn.getBoundingClientRect();
-                var cx = rect.left + rect.width * (0.3 + Math.random() * 0.4);
-                var cy = rect.top + rect.height * (0.3 + Math.random() * 0.4);
+        let buttonRecovery = SmartButtonRecoveryService.shared
+        let currentURL = await session.getCurrentURL()
+        let host = URL(string: currentURL)?.host ?? "unknown"
 
-                btn.dispatchEvent(new PointerEvent('pointerdown', {
-                    bubbles: true, cancelable: true, view: window,
-                    clientX: cx, clientY: cy, pointerId: 1, pointerType: 'mouse',
-                    button: 0, buttons: 1
-                }));
-                btn.dispatchEvent(new MouseEvent('mousedown', {
-                    bubbles: true, cancelable: true, view: window,
-                    clientX: cx, clientY: cy, button: 0, buttons: 1
-                }));
-                btn.dispatchEvent(new PointerEvent('pointerup', {
-                    bubbles: true, cancelable: true, view: window,
-                    clientX: cx, clientY: cy, pointerId: 1, pointerType: 'mouse', button: 0
-                }));
-                btn.dispatchEvent(new MouseEvent('mouseup', {
-                    bubbles: true, cancelable: true, view: window,
-                    clientX: cx, clientY: cy, button: 0
-                }));
-                btn.dispatchEvent(new MouseEvent('click', {
-                    bubbles: true, cancelable: true, view: window,
-                    clientX: cx, clientY: cy, button: 0
-                }));
-                btn.click();
-                return 'CLICKED_' + \(i);
-            })();
-            """
-            let clickResult = await session.executeJS(clickJS)
-            onLog?("TRUE DETECTION: Click \(i + 1)/\(clickCount) → \(clickResult ?? "nil")", .info)
-            logger.log("TrueDetection: triple-click \(i + 1)/\(clickCount) → \(clickResult ?? "nil")", category: .automation, level: .trace, sessionId: sessionId)
+        for cycle in 0..<effectiveCycles {
+            onLog?("TRUE DETECTION: Cycle \(cycle + 1)/\(effectiveCycles) — triple-click submit", .info)
+            logger.log("TrueDetection: cycle \(cycle + 1)/\(effectiveCycles) triple-click", category: .automation, level: .info, sessionId: sessionId)
 
-            if i < clickCount - 1 {
-                try? await Task.sleep(for: .milliseconds(delayMs))
+            let preClickFingerprint = await buttonRecovery.captureFingerprint(
+                executeJS: { js in await session.executeJS(js) },
+                sessionId: sessionId
+            )
+
+            for i in 0..<clickCount {
+                let clickJS = """
+                (function() {
+                    var btn = document.querySelector('\(escapedSelector)');
+                    if (!btn) return 'NOT_FOUND';
+                    btn.scrollIntoView({behavior: 'instant', block: 'center'});
+                    var rect = btn.getBoundingClientRect();
+                    var cx = rect.left + rect.width * (0.3 + Math.random() * 0.4);
+                    var cy = rect.top + rect.height * (0.3 + Math.random() * 0.4);
+
+                    btn.dispatchEvent(new PointerEvent('pointerdown', {
+                        bubbles: true, cancelable: true, view: window,
+                        clientX: cx, clientY: cy, pointerId: 1, pointerType: 'mouse',
+                        button: 0, buttons: 1
+                    }));
+                    btn.dispatchEvent(new MouseEvent('mousedown', {
+                        bubbles: true, cancelable: true, view: window,
+                        clientX: cx, clientY: cy, button: 0, buttons: 1
+                    }));
+                    btn.dispatchEvent(new PointerEvent('pointerup', {
+                        bubbles: true, cancelable: true, view: window,
+                        clientX: cx, clientY: cy, pointerId: 1, pointerType: 'mouse', button: 0
+                    }));
+                    btn.dispatchEvent(new MouseEvent('mouseup', {
+                        bubbles: true, cancelable: true, view: window,
+                        clientX: cx, clientY: cy, button: 0
+                    }));
+                    btn.dispatchEvent(new MouseEvent('click', {
+                        bubbles: true, cancelable: true, view: window,
+                        clientX: cx, clientY: cy, button: 0
+                    }));
+                    btn.click();
+                    return 'CLICKED_' + \(i);
+                })();
+                """
+                let clickResult = await session.executeJS(clickJS)
+                onLog?("TRUE DETECTION: Cycle \(cycle + 1) Click \(i + 1)/\(clickCount) \u{2192} \(clickResult ?? "nil")", .info)
+                logger.log("TrueDetection: cycle \(cycle + 1) click \(i + 1)/\(clickCount) \u{2192} \(clickResult ?? "nil")", category: .automation, level: .trace, sessionId: sessionId)
+
+                if i < clickCount - 1 {
+                    try? await Task.sleep(for: .milliseconds(delayMs))
+                }
+            }
+
+            if cycle < effectiveCycles - 1 {
+                onLog?("TRUE DETECTION: Cycle \(cycle + 1) complete — AI smart button color change detection...", .info)
+                logger.log("TrueDetection: cycle \(cycle + 1) done, waiting for smart button color change detection", category: .automation, level: .info, sessionId: sessionId)
+
+                if let fingerprint = preClickFingerprint {
+                    let recovery = await buttonRecovery.waitForRecovery(
+                        originalFingerprint: fingerprint,
+                        executeJS: { js in await session.executeJS(js) },
+                        host: host,
+                        sessionId: sessionId,
+                        maxTimeoutMs: buttonRecoveryTimeoutMs
+                    )
+                    onLog?("TRUE DETECTION: Button detection — recovered=\(recovery.recovered) duration=\(recovery.durationMs)ms reason=\(recovery.reason)", recovery.recovered ? .success : .warning)
+                    logger.log("TrueDetection: button recovery \(recovery.recovered ? "OK" : "TIMEOUT") in \(recovery.durationMs)ms — \(recovery.reason)", category: .automation, level: recovery.recovered ? .success : .warning, sessionId: sessionId)
+                } else {
+                    onLog?("TRUE DETECTION: No button fingerprint captured — fixed delay fallback", .warning)
+                    try? await Task.sleep(for: .milliseconds(2000))
+                }
+
+                try? await Task.sleep(for: .milliseconds(Int.random(in: 200...500)))
             }
         }
 
-        return (true, "TRIPLE_CLICK_\(selector)")
+        onLog?("TRUE DETECTION: All \(effectiveCycles) submit cycles complete", .success)
+        logger.log("TrueDetection: all \(effectiveCycles) submit cycles complete", category: .automation, level: .success, sessionId: sessionId)
+        return (true, "CYCLED_TRIPLE_CLICK_\(effectiveCycles)x\(clickCount)_\(selector)")
     }
 
     func validateSuccess(
