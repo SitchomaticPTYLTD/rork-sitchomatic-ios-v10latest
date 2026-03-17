@@ -201,6 +201,10 @@ struct SitchomaticApp: App {
                 DebugLogger.shared.persistLatestLog()
                 LoginViewModel.shared.persistCredentialsNow()
                 PPSRAutomationViewModel.shared.persistCardsNow()
+                BackgroundTaskService.shared.handleAppDidEnterBackground()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
+                BackgroundTaskService.shared.handleAppWillEnterForeground()
             }
         }
     }
