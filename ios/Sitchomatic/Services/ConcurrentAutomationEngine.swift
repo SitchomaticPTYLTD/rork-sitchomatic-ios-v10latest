@@ -129,6 +129,8 @@ class ConcurrentAutomationEngine {
     private let preflightService = PreflightSmokeTestService.shared
     private let customTools = AICustomToolsCoordinator.shared
     private let liveSpeed = LiveSpeedAdaptationService.shared
+    private let concurrencyGovernor = AIPredictiveConcurrencyGovernor.shared
+    private let webViewMemoryManager = AIWebViewMemoryLifecycleManager.shared
     private(set) var isRunning: Bool = false
     private var cancelFlag: Bool = false
     private var deadAccounts: Set<String> = []
@@ -221,8 +223,13 @@ class ConcurrentAutomationEngine {
         let startTime = Date()
         let batchId = "concurrent_ppsr_\(UUID().uuidString.prefix(8))"
 
+        concurrencyGovernor.resetOutcomeWindow()
+        concurrencyGovernor.start(initialConcurrency: maxConcurrency)
+        webViewMemoryManager.start()
+
         let stabilityCap = CrashProtectionService.shared.recommendedMaxConcurrency
-        let effectiveMaxConcurrency = min(maxConcurrency, stabilityCap)
+        let governorCap = concurrencyGovernor.recommendConcurrency(requestedMax: maxConcurrency)
+        let effectiveMaxConcurrency = min(maxConcurrency, stabilityCap, governorCap)
         if effectiveMaxConcurrency < maxConcurrency {
             logger.log("ConcurrentEngine: concurrency capped \(maxConcurrency) → \(effectiveMaxConcurrency) by stability monitor", category: .automation, level: .warning)
         }
@@ -258,8 +265,10 @@ class ConcurrentAutomationEngine {
             }
 
             let currentCap = CrashProtectionService.shared.recommendedMaxConcurrency
-            if currentCap < batchSize {
-                await throttler.updateMaxConcurrency(currentCap)
+            let governorCap2 = concurrencyGovernor.recommendConcurrency(requestedMax: batchSize)
+            let effectiveCap = min(currentCap, governorCap2)
+            if effectiveCap < batchSize {
+                await throttler.updateMaxConcurrency(effectiveCap)
             }
 
             let batchEnd = min(batchStart + batchSize, checks.count)
@@ -315,6 +324,7 @@ class ConcurrentAutomationEngine {
                 }
                 processed += 1
                 recentOutcomeWindow.append(outcome == .pass)
+                concurrencyGovernor.feedOutcome(success: outcome == .pass)
                 onProgress(processed, checks.count, outcome)
             }
 
@@ -367,6 +377,8 @@ class ConcurrentAutomationEngine {
         let totalMs = Int(Date().timeIntervalSince(startTime) * 1000)
         let avgLatency = latencies.isEmpty ? 0 : latencies.reduce(0, +) / latencies.count
 
+        concurrencyGovernor.stop()
+        webViewMemoryManager.stop()
         AppStabilityCoordinator.shared.cancelTaskGroupWatchdog(id: batchId)
         logger.endSession(batchId, category: .ppsr, message: "ConcurrentEngine: batch complete — \(successCount) pass, \(failureCount) fail, avgLatency=\(avgLatency)ms, total=\(totalMs)ms")
 
@@ -427,8 +439,13 @@ class ConcurrentAutomationEngine {
         batchDeadline = Date().addingTimeInterval(maxBatchDurationSeconds)
         logger.log("ConcurrentEngine: batch deadline set to \(Int(maxBatchDurationSeconds))s from now", category: .automation, level: .info)
 
+        concurrencyGovernor.resetOutcomeWindow()
+        concurrencyGovernor.start(initialConcurrency: maxConcurrency)
+        webViewMemoryManager.start()
+
         let stabilityCap = CrashProtectionService.shared.recommendedMaxConcurrency
-        let effectiveMaxConcurrency = min(maxConcurrency, stabilityCap)
+        let governorCap = concurrencyGovernor.recommendConcurrency(requestedMax: maxConcurrency)
+        let effectiveMaxConcurrency = min(maxConcurrency, stabilityCap, governorCap)
         if effectiveMaxConcurrency < maxConcurrency {
             logger.log("ConcurrentEngine: login concurrency capped \(maxConcurrency) → \(effectiveMaxConcurrency) by stability monitor", category: .automation, level: .warning)
         }
@@ -510,10 +527,12 @@ class ConcurrentAutomationEngine {
             }
 
             let currentCap = CrashProtectionService.shared.recommendedMaxConcurrency
+            let governorCapLogin = concurrencyGovernor.recommendConcurrency(requestedMax: batchSize)
+            let effectiveCapLogin = min(currentCap, governorCapLogin)
             let currentThrottlerMax = await throttler.currentStats().maxConcurrency
-            if currentCap < currentThrottlerMax {
-                await throttler.updateMaxConcurrency(currentCap)
-                logger.log("ConcurrentEngine: stability throttle \(currentThrottlerMax) → \(currentCap)", category: .automation, level: .warning)
+            if effectiveCapLogin < currentThrottlerMax {
+                await throttler.updateMaxConcurrency(effectiveCapLogin)
+                logger.log("ConcurrentEngine: stability+governor throttle \(currentThrottlerMax) → \(effectiveCapLogin)", category: .automation, level: .warning)
             }
 
             let batchEnd = min(batchStart + batchSize, attempts.count)
@@ -604,6 +623,7 @@ class ConcurrentAutomationEngine {
                 }
                 processed += 1
                 recentOutcomeWindow.append(outcome == .success)
+                concurrencyGovernor.feedOutcome(success: outcome == .success)
                 onProgress(processed, attempts.count, outcome)
             }
 
@@ -880,6 +900,8 @@ class ConcurrentAutomationEngine {
         let totalMs = Int(Date().timeIntervalSince(startTime) * 1000)
         let avgLatency = latencies.isEmpty ? 0 : latencies.reduce(0, +) / latencies.count
 
+        concurrencyGovernor.stop()
+        webViewMemoryManager.stop()
         AppStabilityCoordinator.shared.cancelTaskGroupWatchdog(id: batchId)
         logger.endSession(batchId, category: .login, message: "ConcurrentEngine: login batch complete — \(successCount) success, \(failureCount) fail, avgLatency=\(avgLatency)ms | network=\(networkSummary)")
 

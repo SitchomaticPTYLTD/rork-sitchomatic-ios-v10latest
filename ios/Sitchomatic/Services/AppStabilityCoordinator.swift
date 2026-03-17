@@ -134,7 +134,7 @@ final class AppStabilityCoordinator {
         }
 
         if consecutiveUnhealthyChecks > 0 && consecutiveUnhealthyChecks % 3 == 0 {
-            logger.log("StabilityCoordinator: \(report.summary)", category: .system, level: .warning)
+            logger.log("StabilityCoordinator: \(report.summary) | \(AIPredictiveConcurrencyGovernor.shared.diagnosticSummary) | \(AIWebViewMemoryLifecycleManager.shared.diagnosticSummary)", category: .system, level: .warning)
         }
     }
 
