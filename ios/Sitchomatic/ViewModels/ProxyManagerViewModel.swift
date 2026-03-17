@@ -8,9 +8,13 @@ class ProxyManagerViewModel {
     var useOneServerPerSet: Bool = false
     var showNewSetSheet: Bool = false
     var editingSet: ProxySet?
+    var isAutoPopulatingSets: Bool = false
+    var autoPopulateSetsProgress: String = ""
+    var autoPopulateSetsError: String?
 
     private let persistKey = "proxy_manager_sets_v1"
     private let settingsKey = "proxy_manager_settings_v1"
+    private let autoPopulateDoneKey = "proxy_manager_auto_populate_done_v1"
     private let logger = DebugLogger.shared
 
     var canUseOnePerSet: Bool {
@@ -249,6 +253,136 @@ class ProxyManagerViewModel {
         guard let data = UserDefaults.standard.data(forKey: persistKey),
               let decoded = try? JSONDecoder().decode([ProxySet].self, from: data) else { return }
         proxySets = decoded
+    }
+
+    func autoPopulateProxySetsForAllProfiles(forceRefresh: Bool = false) async {
+        guard !isAutoPopulatingSets else { return }
+        isAutoPopulatingSets = true
+        autoPopulateSetsProgress = "Starting..."
+        autoPopulateSetsError = nil
+        defer {
+            isAutoPopulatingSets = false
+            autoPopulateSetsProgress = ""
+        }
+
+        let nordService = NordVPNService.shared
+        let proxyService = ProxyRotationService.shared
+        let originalProfile = nordService.activeKeyProfile
+
+        var totalWGSets = 0
+        var totalOVPNSets = 0
+
+        for profile in NordKeyProfile.allCases {
+            let profileName = profile.rawValue
+
+            let existingWGSet = proxySets.first { $0.name == "\(profileName) WireGuard" && $0.type == .wireGuard }
+            let existingOVPNSet = proxySets.first { $0.name == "\(profileName) OpenVPN" && $0.type == .openVPN }
+
+            if !forceRefresh && existingWGSet != nil && (existingWGSet?.items.count ?? 0) >= 10
+                && existingOVPNSet != nil && (existingOVPNSet?.items.count ?? 0) >= 10 {
+                logger.log("ProxyManager: auto-populate skipped for \(profileName) — sets already full", category: .proxy, level: .info)
+                totalWGSets += 1
+                totalOVPNSets += 1
+                continue
+            }
+
+            autoPopulateSetsProgress = "[\(profileName)] Switching profile..."
+            nordService.switchProfile(profile, triggerAutoPopulate: false)
+            try? await Task.sleep(for: .milliseconds(300))
+
+            if nordService.privateKey.isEmpty {
+                autoPopulateSetsProgress = "[\(profileName)] Fetching private key..."
+                await nordService.fetchPrivateKey()
+            }
+
+            guard nordService.hasPrivateKey else {
+                logger.log("ProxyManager: auto-populate — no private key for \(profileName), skipping", category: .proxy, level: .error)
+                continue
+            }
+
+            autoPopulateSetsProgress = "[\(profileName)] Fetching WireGuard servers..."
+            await nordService.fetchRecommendedServers(limit: 10, technology: "wireguard_udp")
+            let wgServers = nordService.recommendedServers
+
+            if !wgServers.isEmpty {
+                var wgItems: [ProxySetItem] = []
+                for server in wgServers.prefix(10) {
+                    if let config = nordService.generateWireGuardConfig(from: server) {
+                        proxyService.importWGConfig(config, for: .joe)
+                        wgItems.append(ProxySetItem.fromWireGuardConfig(config))
+                    }
+                }
+                proxyService.syncWGConfigsAcrossTargets()
+
+                if !wgItems.isEmpty {
+                    let setName = "\(profileName) WireGuard"
+                    if let existingIdx = proxySets.firstIndex(where: { $0.name == setName && $0.type == .wireGuard }) {
+                        if forceRefresh {
+                            proxySets[existingIdx].items = Array(wgItems.prefix(10))
+                        } else {
+                            let existing = Set(proxySets[existingIdx].items.map { "\($0.host):\($0.port)" })
+                            for item in wgItems where !existing.contains("\(item.host):\(item.port)") {
+                                guard proxySets[existingIdx].items.count < 10 else { break }
+                                proxySets[existingIdx].items.append(item)
+                            }
+                        }
+                    } else {
+                        let newSet = ProxySet(name: setName, type: .wireGuard, items: Array(wgItems.prefix(10)))
+                        proxySets.append(newSet)
+                    }
+                    totalWGSets += 1
+                    logger.log("ProxyManager: created/updated '\(setName)' with \(wgItems.count) configs", category: .proxy, level: .success)
+                }
+            }
+
+            autoPopulateSetsProgress = "[\(profileName)] Fetching OpenVPN servers..."
+            await nordService.fetchRecommendedServers(limit: 10, technology: "openvpn_tcp")
+            let ovpnServers = nordService.recommendedServers
+
+            if !ovpnServers.isEmpty {
+                var ovpnItems: [ProxySetItem] = []
+                for (index, server) in ovpnServers.prefix(10).enumerated() {
+                    autoPopulateSetsProgress = "[\(profileName)] OVPN \(index + 1)/\(min(ovpnServers.count, 10))..."
+                    if let config = await nordService.downloadOVPNConfig(from: server, proto: .tcp) {
+                        proxyService.importUnifiedVPNConfig(config)
+                        ovpnItems.append(ProxySetItem.fromOpenVPNConfig(config))
+                    }
+                }
+
+                if !ovpnItems.isEmpty {
+                    let setName = "\(profileName) OpenVPN"
+                    if let existingIdx = proxySets.firstIndex(where: { $0.name == setName && $0.type == .openVPN }) {
+                        if forceRefresh {
+                            proxySets[existingIdx].items = Array(ovpnItems.prefix(10))
+                        } else {
+                            let existing = Set(proxySets[existingIdx].items.map { "\($0.host):\($0.port)" })
+                            for item in ovpnItems where !existing.contains("\(item.host):\(item.port)") {
+                                guard proxySets[existingIdx].items.count < 10 else { break }
+                                proxySets[existingIdx].items.append(item)
+                            }
+                        }
+                    } else {
+                        let newSet = ProxySet(name: setName, type: .openVPN, items: Array(ovpnItems.prefix(10)))
+                        proxySets.append(newSet)
+                    }
+                    totalOVPNSets += 1
+                    logger.log("ProxyManager: created/updated '\(setName)' with \(ovpnItems.count) configs", category: .proxy, level: .success)
+                }
+            }
+        }
+
+        persistSets()
+
+        if nordService.activeKeyProfile != originalProfile {
+            nordService.switchProfile(originalProfile, triggerAutoPopulate: false)
+        }
+
+        autoPopulateSetsProgress = "Done — \(totalWGSets) WG sets, \(totalOVPNSets) OVPN sets"
+        logger.log("ProxyManager: auto-populate complete — \(totalWGSets) WG sets, \(totalOVPNSets) OVPN sets across all profiles", category: .proxy, level: .success)
+
+        if totalWGSets == 0 && totalOVPNSets == 0 {
+            autoPopulateSetsError = "No configs could be fetched. Check NordVPN access keys."
+        }
     }
 
     private func persistSettings() {

@@ -21,6 +21,7 @@ struct ProxyManagerView: View {
     var body: some View {
         List {
             overviewSection
+            autoPopulateSetsSection
             if vm.canUseOnePerSet {
                 sessionRoutingSection
             }
@@ -244,6 +245,97 @@ struct ProxyManagerView: View {
             .padding(.vertical, 4)
         } header: {
             Label("Breakdown", systemImage: "chart.bar.fill")
+        }
+    }
+
+    // MARK: - Auto-Populate Proxy Sets
+
+    private var autoPopulateSetsSection: some View {
+        Section {
+            Button {
+                guard !vm.isAutoPopulatingSets else { return }
+                Task { await vm.autoPopulateProxySetsForAllProfiles() }
+            } label: {
+                HStack(spacing: 12) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 10)
+                            .fill(
+                                LinearGradient(colors: [.purple, .indigo], startPoint: .topLeading, endPoint: .bottomTrailing)
+                            )
+                            .frame(width: 40, height: 40)
+                        if vm.isAutoPopulatingSets {
+                            ProgressView()
+                                .controlSize(.small)
+                                .tint(.white)
+                        } else {
+                            Image(systemName: "bolt.shield.fill")
+                                .font(.system(size: 16, weight: .bold))
+                                .foregroundStyle(.white)
+                        }
+                    }
+
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Auto-Populate All Sets")
+                            .font(.subheadline.bold())
+                            .foregroundStyle(.primary)
+                        Text(vm.isAutoPopulatingSets ? vm.autoPopulateSetsProgress : "10 WG + 10 OVPN per profile")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Spacer()
+
+                    if !vm.isAutoPopulatingSets {
+                        Image(systemName: "chevron.right")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+            }
+            .disabled(vm.isAutoPopulatingSets)
+
+            if vm.isAutoPopulatingSets {
+                Button {
+                    guard !vm.isAutoPopulatingSets else { return }
+                    Task { await vm.autoPopulateProxySetsForAllProfiles(forceRefresh: true) }
+                } label: {
+                    Label("Force Refresh All Sets", systemImage: "arrow.clockwise")
+                }
+                .disabled(true)
+            } else {
+                Button {
+                    Task { await vm.autoPopulateProxySetsForAllProfiles(forceRefresh: true) }
+                } label: {
+                    Label("Force Refresh All Sets", systemImage: "arrow.clockwise")
+                        .foregroundStyle(.orange)
+                }
+            }
+
+            if let error = vm.autoPopulateSetsError {
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.red)
+                        .font(.caption)
+                    Text(error)
+                        .font(.caption2)
+                        .foregroundStyle(.red)
+                }
+            }
+        } header: {
+            HStack {
+                Label("Auto-Populate", systemImage: "wand.and.stars")
+                Spacer()
+                ForEach(NordKeyProfile.allCases, id: \.self) { profile in
+                    Text(profile.rawValue)
+                        .font(.system(.caption2, design: .monospaced, weight: .bold))
+                        .foregroundStyle(.indigo)
+                        .padding(.horizontal, 5).padding(.vertical, 2)
+                        .background(Color.indigo.opacity(0.12))
+                        .clipShape(Capsule())
+                }
+            }
+        } footer: {
+            Text("Fetches 10 WireGuard + 10 OpenVPN configs for each profile (Nick & Poli) using their NordVPN access keys, and creates proxy sets automatically.")
         }
     }
 
