@@ -265,6 +265,26 @@ class PPSRStealthService {
 
     private let aiFingerprintTuning = AIFingerprintTuningService.shared
 
+    struct StealthOptions {
+        var canvasNoise: Bool = false
+        var webGLNoise: Bool = true
+        var audioContextNoise: Bool = false
+        var timezoneSpoof: Bool = true
+        var languageSpoof: Bool = true
+        var rectNoise: Bool = false
+        var perfTimerNoise: Bool = false
+    }
+
+    var stealthOptions: StealthOptions = StealthOptions()
+
+    func applySettings(_ settings: AutomationSettings) {
+        stealthOptions.canvasNoise = settings.canvasNoise
+        stealthOptions.webGLNoise = settings.webGLNoise
+        stealthOptions.audioContextNoise = settings.audioContextNoise
+        stealthOptions.timezoneSpoof = settings.timezoneSpoof
+        stealthOptions.languageSpoof = settings.languageSpoof
+    }
+
     var profileCount: Int { trustedProfiles.count }
 
     func nextProfile() -> SessionProfile {
@@ -317,6 +337,7 @@ class PPSRStealthService {
 
     private func buildComprehensiveStealthJS(profile: SessionProfile) -> String {
         let p = profile
+        let opts = stealthOptions
         return """
         (function() {
             'use strict';
@@ -331,53 +352,54 @@ class PPSRStealthService {
             }
             var prng = mulberry32(seed);
 
-            function defineP(obj, prop, val) {
+            function defineVal(obj, prop, val) {
                 try {
                     Object.defineProperty(obj, prop, {
-                        get: function() { return val; },
+                        value: val,
                         configurable: true,
+                        writable: false,
                         enumerable: true
                     });
-                } catch(e) {}
+                } catch(e) {
+                    try { obj[prop] = val; } catch(e2) {}
+                }
             }
 
-            // === NAVIGATOR SPOOFING ===
-            defineP(navigator, 'webdriver', false);
-            defineP(navigator, 'language', '\(p.language)');
-            defineP(navigator, 'languages', Object.freeze(['\(p.language)', 'en']));
-            defineP(navigator, 'platform', '\(p.platform)');
-            defineP(navigator, 'hardwareConcurrency', \(p.cores));
-            defineP(navigator, 'deviceMemory', \(p.memory));
-            defineP(navigator, 'maxTouchPoints', \(p.maxTouchPoints));
-            defineP(navigator, 'vendor', 'Apple Computer, Inc.');
-            defineP(navigator, 'appVersion', navigator.userAgent.replace('Mozilla/', ''));
-            defineP(navigator, 'productSub', '20030107');
-            defineP(navigator, 'doNotTrack', null);
+            // === NAVIGATOR SPOOFING (value descriptors — no detectable getters) ===
+            defineVal(navigator, 'webdriver', false);
+            \(opts.languageSpoof ? "defineVal(navigator, 'language', '\(p.language)');" : "")
+            \(opts.languageSpoof ? "defineVal(navigator, 'languages', Object.freeze(['\(p.language)', 'en']));" : "")
+            defineVal(navigator, 'platform', '\(p.platform)');
+            defineVal(navigator, 'hardwareConcurrency', \(p.cores));
+            defineVal(navigator, 'deviceMemory', \(p.memory));
+            defineVal(navigator, 'maxTouchPoints', \(p.maxTouchPoints));
+            defineVal(navigator, 'vendor', 'Apple Computer, Inc.');
+            defineVal(navigator, 'productSub', '20030107');
+            defineVal(navigator, 'doNotTrack', null);
+            try { defineVal(navigator, 'appVersion', navigator.userAgent.replace('Mozilla/', '')); } catch(e) {}
 
             // === CONNECTION API ===
             try {
                 if (navigator.connection) {
-                    defineP(navigator.connection, 'effectiveType', '4g');
-                    defineP(navigator.connection, 'downlink', \(p.connectionDownlink));
-                    defineP(navigator.connection, 'rtt', \(p.connectionRtt));
-                    defineP(navigator.connection, 'saveData', false);
+                    defineVal(navigator.connection, 'effectiveType', '4g');
+                    defineVal(navigator.connection, 'downlink', \(p.connectionDownlink));
+                    defineVal(navigator.connection, 'rtt', \(p.connectionRtt));
+                    defineVal(navigator.connection, 'saveData', false);
                 }
             } catch(e) {}
 
-            // === PLUGINS & MIME TYPES (Safari-like) ===
+            // === PLUGINS & MIME TYPES (Safari-like — empty arrays) ===
             try {
-                var fakePlugins = [];
-                var fakeMimeTypes = [];
-                defineP(navigator, 'plugins', Object.create(PluginArray.prototype, {
-                    length: { get: function() { return fakePlugins.length; } },
-                    item: { value: function(i) { return fakePlugins[i] || null; } },
-                    namedItem: { value: function(n) { return null; } },
-                    refresh: { value: function() {} }
+                defineVal(navigator, 'plugins', Object.create(PluginArray.prototype, {
+                    length: { value: 0, configurable: true },
+                    item: { value: function(i) { return null; }, configurable: true },
+                    namedItem: { value: function(n) { return null; }, configurable: true },
+                    refresh: { value: function() {}, configurable: true }
                 }));
-                defineP(navigator, 'mimeTypes', Object.create(MimeTypeArray.prototype, {
-                    length: { get: function() { return fakeMimeTypes.length; } },
-                    item: { value: function(i) { return fakeMimeTypes[i] || null; } },
-                    namedItem: { value: function(n) { return null; } }
+                defineVal(navigator, 'mimeTypes', Object.create(MimeTypeArray.prototype, {
+                    length: { value: 0, configurable: true },
+                    item: { value: function(i) { return null; }, configurable: true },
+                    namedItem: { value: function(n) { return null; }, configurable: true }
                 }));
             } catch(e) {}
 
@@ -394,26 +416,26 @@ class PPSRStealthService {
 
             // === SCREEN & WINDOW ===
             try {
-                defineP(screen, 'width', \(p.viewport.width));
-                defineP(screen, 'height', \(p.viewport.height));
-                defineP(screen, 'availWidth', \(p.viewport.width));
-                defineP(screen, 'availHeight', \(p.viewport.height));
-                defineP(screen, 'colorDepth', \(p.colorDepth));
-                defineP(screen, 'pixelDepth', \(p.colorDepth));
+                defineVal(screen, 'width', \(p.viewport.width));
+                defineVal(screen, 'height', \(p.viewport.height));
+                defineVal(screen, 'availWidth', \(p.viewport.width));
+                defineVal(screen, 'availHeight', \(p.viewport.height));
+                defineVal(screen, 'colorDepth', \(p.colorDepth));
+                defineVal(screen, 'pixelDepth', \(p.colorDepth));
             } catch(e) {}
             try {
-                defineP(window, 'devicePixelRatio', \(p.pixelRatio));
-                defineP(window, 'innerWidth', \(p.viewport.width));
-                defineP(window, 'innerHeight', \(p.viewport.height));
-                defineP(window, 'outerWidth', \(p.viewport.width));
-                defineP(window, 'outerHeight', \(p.viewport.height));
+                defineVal(window, 'devicePixelRatio', \(p.pixelRatio));
+                defineVal(window, 'innerWidth', \(p.viewport.width));
+                defineVal(window, 'innerHeight', \(p.viewport.height));
+                defineVal(window, 'outerWidth', \(p.viewport.width));
+                defineVal(window, 'outerHeight', \(p.viewport.height));
             } catch(e) {}
 
+            \(opts.timezoneSpoof ? """
             // === TIMEZONE SPOOFING ===
             try {
                 var origDateTZO = Date.prototype.getTimezoneOffset;
                 Date.prototype.getTimezoneOffset = function() { return \(p.tzOffset); };
-
                 var origResolvedOptions = Intl.DateTimeFormat.prototype.resolvedOptions;
                 Intl.DateTimeFormat.prototype.resolvedOptions = function() {
                     var result = origResolvedOptions.call(this);
@@ -421,23 +443,30 @@ class PPSRStealthService {
                     return result;
                 };
             } catch(e) {}
+            """ : "")
 
-            // === CANVAS FINGERPRINT (SEEDED DETERMINISTIC NOISE) ===
+            \(opts.canvasNoise ? """
+            // === CANVAS FINGERPRINT (IDEMPOTENT — noise applied once per canvas) ===
             try {
                 var origToDataURL = HTMLCanvasElement.prototype.toDataURL;
                 var origToBlob = HTMLCanvasElement.prototype.toBlob;
                 var origGetImageData = CanvasRenderingContext2D.prototype.getImageData;
+                var noisedCanvases = new WeakSet();
 
-                function addCanvasNoise(canvas) {
+                function addCanvasNoiseOnce(canvas) {
                     try {
+                        if (noisedCanvases.has(canvas)) return;
+                        noisedCanvases.add(canvas);
                         var ctx = canvas.getContext('2d');
                         if (!ctx) return;
                         var w = Math.min(canvas.width, 16);
                         var h = Math.min(canvas.height, 16);
-                        var imageData = CanvasRenderingContext2D.prototype.getImageData.call(ctx, 0, 0, w, h);
+                        if (w === 0 || h === 0) return;
+                        var imageData = origGetImageData.call(ctx, 0, 0, w, h);
                         var data = imageData.data;
+                        var canvasPrng = mulberry32(seed ^ (canvas.width * 31 + canvas.height));
                         for (var i = 0; i < data.length; i += 4) {
-                            var noise = ((prng() * 4) | 0) - 2;
+                            var noise = ((canvasPrng() * 4) | 0) - 2;
                             data[i] = Math.max(0, Math.min(255, data[i] + noise));
                             data[i+1] = Math.max(0, Math.min(255, data[i+1] + noise));
                             data[i+2] = Math.max(0, Math.min(255, data[i+2] + noise));
@@ -447,103 +476,56 @@ class PPSRStealthService {
                 }
 
                 HTMLCanvasElement.prototype.toDataURL = function() {
-                    addCanvasNoise(this);
+                    addCanvasNoiseOnce(this);
                     return origToDataURL.apply(this, arguments);
                 };
-
                 HTMLCanvasElement.prototype.toBlob = function() {
-                    addCanvasNoise(this);
+                    addCanvasNoiseOnce(this);
                     return origToBlob.apply(this, arguments);
                 };
-
-                CanvasRenderingContext2D.prototype.getImageData = function(sx, sy, sw, sh) {
-                    var imageData = origGetImageData.call(this, sx, sy, sw, sh);
-                    var data = imageData.data;
-                    for (var i = 0; i < Math.min(data.length, 256); i += 4) {
-                        var n = ((prng() * 3) | 0) - 1;
-                        data[i] = Math.max(0, Math.min(255, data[i] + n));
-                    }
-                    return imageData;
-                };
             } catch(e) {}
+            """ : "")
 
-            // === WEBGL DEEP SPOOFING ===
+            \(opts.webGLNoise ? """
+            // === WEBGL SPOOFING (vendor/renderer only — no detectable noise) ===
             try {
                 var gpuVendor = '\(p.webglVendor)';
                 var gpuRenderer = '\(p.webglRenderer)';
-
                 function patchWebGLContext(proto) {
                     var origGetParameter = proto.getParameter;
                     var origGetExtension = proto.getExtension;
-                    var origGetShaderPrecisionFormat = proto.getShaderPrecisionFormat;
-
                     proto.getParameter = function(param) {
                         if (param === 37445) return gpuVendor;
                         if (param === 37446) return gpuRenderer;
-                        if (param === 7937) return 'WebGL 1.0 (OpenGL ES 2.0 Chromium)';
-                        if (param === 7936) return 'WebKit';
-                        if (param === 7938) return 'WebGL GLSL ES 1.0 (OpenGL ES GLSL ES 1.0 Chromium)';
-                        if (param === 3379) return 16384;
-                        if (param === 3386) {
-                            var arr = new Float32Array(2);
-                            arr[0] = 1; arr[1] = 1;
-                            return arr;
-                        }
-                        if (param === 34076) return 16384;
-                        if (param === 34024) return 16384;
-                        if (param === 36349) return 1024;
-                        if (param === 34921) return 16;
-                        if (param === 36347) return 1024;
                         return origGetParameter.apply(this, arguments);
                     };
-
                     proto.getExtension = function(name) {
                         if (name === 'WEBGL_debug_renderer_info') {
                             return { UNMASKED_VENDOR_WEBGL: 37445, UNMASKED_RENDERER_WEBGL: 37446 };
                         }
                         return origGetExtension.apply(this, arguments);
                     };
-
-                    proto.getShaderPrecisionFormat = function() {
-                        var result = origGetShaderPrecisionFormat.apply(this, arguments);
-                        if (result) {
-                            return {
-                                rangeMin: result.rangeMin || 127,
-                                rangeMax: result.rangeMax || 127,
-                                precision: result.precision || 23
-                            };
-                        }
-                        return result;
-                    };
                 }
-
-                if (typeof WebGLRenderingContext !== 'undefined') {
-                    patchWebGLContext(WebGLRenderingContext.prototype);
-                }
-                if (typeof WebGL2RenderingContext !== 'undefined') {
-                    patchWebGLContext(WebGL2RenderingContext.prototype);
-                }
+                if (typeof WebGLRenderingContext !== 'undefined') patchWebGLContext(WebGLRenderingContext.prototype);
+                if (typeof WebGL2RenderingContext !== 'undefined') patchWebGLContext(WebGL2RenderingContext.prototype);
             } catch(e) {}
+            """ : "")
 
+            \(opts.audioContextNoise ? """
             // === AUDIO CONTEXT FINGERPRINT ===
             try {
-                var origCreateOscillator = (window.OfflineAudioContext || window.webkitOfflineAudioContext || function(){}).prototype.createOscillator;
-                var origStartRendering = (window.OfflineAudioContext || window.webkitOfflineAudioContext || function(){}).prototype.startRendering;
-
                 if (window.OfflineAudioContext || window.webkitOfflineAudioContext) {
                     var AudioCtx = window.OfflineAudioContext || window.webkitOfflineAudioContext;
-                    var origACProto = AudioCtx.prototype;
-                    var origSR = origACProto.startRendering;
-
-                    origACProto.startRendering = function() {
-                        var self = this;
+                    var origSR = AudioCtx.prototype.startRendering;
+                    var audioPrng = mulberry32(seed ^ 0xAUD10);
+                    AudioCtx.prototype.startRendering = function() {
                         var origPromise = origSR.apply(this, arguments);
                         if (origPromise && origPromise.then) {
                             return origPromise.then(function(buffer) {
                                 try {
                                     var channelData = buffer.getChannelData(0);
                                     for (var i = 0; i < Math.min(channelData.length, 1000); i++) {
-                                        channelData[i] += (prng() - 0.5) * 0.0001;
+                                        channelData[i] += (audioPrng() - 0.5) * 0.0001;
                                     }
                                 } catch(e) {}
                                 return buffer;
@@ -552,30 +534,8 @@ class PPSRStealthService {
                         return origPromise;
                     };
                 }
-
-                if (window.AudioContext || window.webkitAudioContext) {
-                    var RealAC = window.AudioContext || window.webkitAudioContext;
-                    var origCreateAnalyser = RealAC.prototype.createAnalyser;
-                    RealAC.prototype.createAnalyser = function() {
-                        var analyser = origCreateAnalyser.apply(this, arguments);
-                        var origGetFloatFreq = analyser.getFloatFrequencyData;
-                        var origGetByteFreq = analyser.getByteFrequencyData;
-                        analyser.getFloatFrequencyData = function(arr) {
-                            origGetFloatFreq.call(this, arr);
-                            for (var i = 0; i < Math.min(arr.length, 128); i++) {
-                                arr[i] += (prng() - 0.5) * 0.01;
-                            }
-                        };
-                        analyser.getByteFrequencyData = function(arr) {
-                            origGetByteFreq.call(this, arr);
-                            for (var i = 0; i < Math.min(arr.length, 128); i++) {
-                                arr[i] = Math.max(0, Math.min(255, arr[i] + ((prng() * 2) | 0) - 1));
-                            }
-                        };
-                        return analyser;
-                    };
-                }
             } catch(e) {}
+            """ : "")
 
             // === WEBRTC LEAK PREVENTION ===
             try {
@@ -600,58 +560,23 @@ class PPSRStealthService {
                 }
             } catch(e) {}
 
-            // === CLIENT RECTS NOISE ===
-            try {
-                var origGetBCR = Element.prototype.getBoundingClientRect;
-                var origGetCR = Element.prototype.getClientRects;
-                var noiseAmount = 0.00001 + prng() * 0.00005;
-
-                Element.prototype.getBoundingClientRect = function() {
-                    var rect = origGetBCR.apply(this, arguments);
-                    var nr = (prng() - 0.5) * noiseAmount;
-                    return new DOMRect(
-                        rect.x + nr, rect.y + nr,
-                        rect.width + nr, rect.height + nr
-                    );
-                };
-
-                Element.prototype.getClientRects = function() {
-                    var rects = origGetCR.apply(this, arguments);
-                    var result = [];
-                    for (var i = 0; i < rects.length; i++) {
-                        var r = rects[i];
-                        var nr2 = (prng() - 0.5) * noiseAmount;
-                        result.push(new DOMRect(r.x + nr2, r.y + nr2, r.width + nr2, r.height + nr2));
-                    }
-                    return result;
-                };
-            } catch(e) {}
-
-            // === HIGH-RES TIMER NOISE ===
-            try {
-                var origNow = Performance.prototype.now;
-                Performance.prototype.now = function() {
-                    var t = origNow.call(this);
-                    return t + (prng() * 0.1);
-                };
-            } catch(e) {}
-
             // === BATTERY API ===
             try {
                 if (navigator.getBattery) {
+                    var batteryLevel = 0.85 + prng() * 0.14;
                     var fakeBattery = {
                         charging: true,
                         chargingTime: Infinity,
                         dischargingTime: Infinity,
-                        level: 0.85 + prng() * 0.14,
+                        level: batteryLevel,
                         addEventListener: function() {},
                         removeEventListener: function() {},
-                        dispatchEvent: function() { return true; }
+                        dispatchEvent: function() { return true; },
+                        onchargingchange: null,
+                        onchargingtimechange: null,
+                        ondischargingtimechange: null,
+                        onlevelchange: null
                     };
-                    defineP(fakeBattery, 'onchargingchange', null);
-                    defineP(fakeBattery, 'onchargingtimechange', null);
-                    defineP(fakeBattery, 'ondischargingtimechange', null);
-                    defineP(fakeBattery, 'onlevelchange', null);
                     navigator.getBattery = function() { return Promise.resolve(fakeBattery); };
                 }
             } catch(e) {}
@@ -662,27 +587,10 @@ class PPSRStealthService {
                     var origEnum = navigator.mediaDevices.enumerateDevices.bind(navigator.mediaDevices);
                     navigator.mediaDevices.enumerateDevices = function() {
                         return origEnum().then(function(devices) {
-                            return devices.map(function(d, idx) {
-                                return {
-                                    deviceId: d.deviceId || '',
-                                    groupId: d.groupId || '',
-                                    kind: d.kind,
-                                    label: ''
-                                };
+                            return devices.map(function(d) {
+                                return { deviceId: d.deviceId || '', groupId: d.groupId || '', kind: d.kind, label: '' };
                             });
                         });
-                    };
-                }
-            } catch(e) {}
-
-            // === SPEECH SYNTHESIS ===
-            try {
-                if (window.speechSynthesis) {
-                    var origGetVoices = speechSynthesis.getVoices;
-                    speechSynthesis.getVoices = function() {
-                        var voices = origGetVoices.call(this);
-                        if (voices.length === 0) return voices;
-                        return voices.slice(0, Math.min(voices.length, 20 + ((prng() * 10) | 0)));
                     };
                 }
             } catch(e) {}
@@ -700,59 +608,52 @@ class PPSRStealthService {
             try {
                 var nativeToString = Function.prototype.toString;
                 var spoofedFns = new Set();
-
-                function markNative(fn, name) {
-                    spoofedFns.add(fn);
-                }
-
+                function markNative(fn) { if (fn) spoofedFns.add(fn); }
                 Function.prototype.toString = function() {
                     if (spoofedFns.has(this)) {
                         return 'function ' + (this.name || '') + '() { [native code] }';
                     }
                     return nativeToString.call(this);
                 };
-                markNative(Function.prototype.toString, 'toString');
-
-                markNative(HTMLCanvasElement.prototype.toDataURL, 'toDataURL');
-                markNative(HTMLCanvasElement.prototype.toBlob, 'toBlob');
-                markNative(CanvasRenderingContext2D.prototype.getImageData, 'getImageData');
-                markNative(Element.prototype.getBoundingClientRect, 'getBoundingClientRect');
-                markNative(Element.prototype.getClientRects, 'getClientRects');
-                markNative(Performance.prototype.now, 'now');
-                markNative(Date.prototype.getTimezoneOffset, 'getTimezoneOffset');
-                if (window.RTCPeerConnection) markNative(window.RTCPeerConnection, 'RTCPeerConnection');
-                if (navigator.getBattery) markNative(navigator.getBattery, 'getBattery');
-                if (navigator.mediaDevices && navigator.mediaDevices.enumerateDevices) {
-                    markNative(navigator.mediaDevices.enumerateDevices, 'enumerateDevices');
+                markNative(Function.prototype.toString);
+                markNative(Permissions.prototype.query);
+                \(opts.timezoneSpoof ? "markNative(Date.prototype.getTimezoneOffset);" : "")
+                \(opts.timezoneSpoof ? "try { markNative(Intl.DateTimeFormat.prototype.resolvedOptions); } catch(e) {}" : "")
+                \(opts.canvasNoise ? "markNative(HTMLCanvasElement.prototype.toDataURL);" : "")
+                \(opts.canvasNoise ? "markNative(HTMLCanvasElement.prototype.toBlob);" : "")
+                \(opts.webGLNoise ? """
+                if (typeof WebGLRenderingContext !== 'undefined') {
+                    markNative(WebGLRenderingContext.prototype.getParameter);
+                    markNative(WebGLRenderingContext.prototype.getExtension);
                 }
+                if (typeof WebGL2RenderingContext !== 'undefined') {
+                    markNative(WebGL2RenderingContext.prototype.getParameter);
+                    markNative(WebGL2RenderingContext.prototype.getExtension);
+                }
+                """ : "")
+                \(opts.audioContextNoise ? """
+                try {
+                    var AC2 = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+                    if (AC2) markNative(AC2.prototype.startRendering);
+                } catch(e) {}
+                """ : "")
+                if (window.RTCPeerConnection) markNative(window.RTCPeerConnection);
+                if (navigator.getBattery) markNative(navigator.getBattery);
+                if (navigator.mediaDevices && navigator.mediaDevices.enumerateDevices) markNative(navigator.mediaDevices.enumerateDevices);
+                if (navigator.storage && navigator.storage.estimate) markNative(navigator.storage.estimate);
             } catch(e) {}
 
             // === PREVENT AUTOMATION DETECTION FLAGS ===
             try {
-                delete window.__nightmare;
-                delete window._phantom;
-                delete window.callPhantom;
-                delete window.__selenium_evaluate;
-                delete window.__selenium_unwrapped;
-                delete window.__webdriver_evaluate;
-                delete window.__driver_evaluate;
-                delete window.__webdriver_unwrapped;
-                delete window.__driver_unwrapped;
-                delete window.__lastWatirAlert;
-                delete window.__lastWatirConfirm;
-                delete window.__lastWatirPrompt;
-                delete window._Selenium_IDE_Recorder;
-                delete window._WEBDRIVER_ELEM_CACHE;
-                delete window.ChromeDriverw;
-                delete document.__webdriver_script_fn;
-                delete document.$chrome_asyncScriptInfo;
-                delete document.$cdc_asdjflasutopfhvcZLmcfl_;
-            } catch(e) {}
-
-            try {
-                if (window.chrome === undefined && navigator.userAgent.indexOf('Chrome') !== -1) {
-                    window.chrome = { runtime: {}, loadTimes: function(){}, csi: function(){} };
-                }
+                var autoProps = ['__nightmare','_phantom','callPhantom','__selenium_evaluate',
+                    '__selenium_unwrapped','__webdriver_evaluate','__driver_evaluate',
+                    '__webdriver_unwrapped','__driver_unwrapped','__lastWatirAlert',
+                    '__lastWatirConfirm','__lastWatirPrompt','_Selenium_IDE_Recorder',
+                    '_WEBDRIVER_ELEM_CACHE','ChromeDriverw'];
+                for (var k = 0; k < autoProps.length; k++) { try { delete window[autoProps[k]]; } catch(e) {} }
+                try { delete document.__webdriver_script_fn; } catch(e) {}
+                try { delete document.$chrome_asyncScriptInfo; } catch(e) {}
+                try { delete document.$cdc_asdjflasutopfhvcZLmcfl_; } catch(e) {}
             } catch(e) {}
 
             // === IFRAME CONTENTWINDOW PROTECTION ===
@@ -763,7 +664,7 @@ class PPSRStealthService {
                         get: function() {
                             var w = origContentWindow.get.call(this);
                             if (w) {
-                                try { defineP(w.navigator, 'webdriver', false); } catch(e) {}
+                                try { defineVal(w.navigator, 'webdriver', false); } catch(e) {}
                             }
                             return w;
                         }

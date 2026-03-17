@@ -25,6 +25,7 @@ struct SplitWebViewRepresentable: UIViewRepresentable {
         var stealthProfile: PPSRStealthService.SessionProfile?
         if stealthEnabled && automationSettings.stealthJSInjection {
             let stealth = PPSRStealthService.shared
+            stealth.applySettings(automationSettings)
             let profile = stealth.nextProfile()
             stealthProfile = profile
             let userScript = stealth.createStealthUserScript(profile: profile)

@@ -301,6 +301,7 @@ class LoginViewModel {
     private func syncAutomationSettingsToEngine() {
         automationSettings = automationSettings.normalizedTimeouts()
         maxConcurrency = automationSettings.maxConcurrency
+        PPSRStealthService.shared.applySettings(automationSettings)
         engine.automationSettings = automationSettings
         secondaryEngine.automationSettings = automationSettings
     }

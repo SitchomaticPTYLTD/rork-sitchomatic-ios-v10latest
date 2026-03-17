@@ -591,6 +591,7 @@ class DualFindViewModel {
         urlRotation.isIgnitionMode = (site == .ignition)
         let targetURL = urlRotation.nextURL() ?? site.url
 
+        PPSRStealthService.shared.applySettings(automationSettings)
         let session = LoginSiteWebSession(targetURL: targetURL, networkConfig: netConfig)
         session.stealthEnabled = stealthEnabled
         session.fingerprintValidationEnabled = automationSettings.fingerprintValidationEnabled

@@ -34,7 +34,7 @@ class FingerprintValidationService {
         var score = 0;
         var signals = [];
 
-        // 1. WEBDRIVER CHECK (weight 7 - matches FP bot detection)
+        // 1. WEBDRIVER CHECK (weight 7)
         try {
             if (navigator.webdriver === true) {
                 score += 7;
@@ -46,16 +46,8 @@ class FingerprintValidationService {
             }
         } catch(e) { signals.push('webdriver check error'); }
 
-        // 2. TAMPERING DETECTION (weight 8 - matches FP anomalyScore)
+        // 2. WEBDRIVER GETTER TAMPERING CHECK
         try {
-            var fnStr = Function.prototype.toString.call(navigator.__lookupGetter__('webdriver'));
-            if (fnStr && fnStr.indexOf('[native code]') === -1 && fnStr.indexOf('function') !== -1) {
-                // getter detected but not native - could flag tampering
-            }
-        } catch(e) {}
-
-        try {
-            var navProto = Object.getPrototypeOf(navigator);
             var webdriverDesc = Object.getOwnPropertyDescriptor(navigator, 'webdriver');
             if (webdriverDesc && webdriverDesc.get) {
                 var getStr = webdriverDesc.get.toString();
@@ -66,7 +58,7 @@ class FingerprintValidationService {
             }
         } catch(e) {}
 
-        // 3. CANVAS CONSISTENCY (non-IP signal)
+        // 3. CANVAS CONSISTENCY
         try {
             var c1 = document.createElement('canvas');
             c1.width = 200; c1.height = 50;
@@ -106,7 +98,6 @@ class FingerprintValidationService {
                     var renderer = gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL);
                     var vendor = gl.getParameter(debugInfo.UNMASKED_VENDOR_WEBGL);
                     var ua = navigator.userAgent;
-
                     if (ua.indexOf('Mac') !== -1 || ua.indexOf('iPhone') !== -1 || ua.indexOf('iPad') !== -1) {
                         if (vendor && vendor.indexOf('Apple') === -1 && vendor.indexOf('apple') === -1) {
                             score += 6;
@@ -125,13 +116,10 @@ class FingerprintValidationService {
         try {
             var sw = screen.width;
             var sh = screen.height;
-            var iw = window.innerWidth;
-            var ih = window.innerHeight;
             var dpr = window.devicePixelRatio;
             var ua = navigator.userAgent;
             var isMobile = ua.indexOf('Mobile') !== -1;
             var isIPad = ua.indexOf('iPad') !== -1;
-
             if (isMobile && !isIPad) {
                 if (sw > 500 || sh > 1000) {
                     score += 3;
@@ -142,95 +130,32 @@ class FingerprintValidationService {
                     signals.push('+3 DPR too low for mobile: ' + dpr);
                 }
             }
-            if (!isMobile && !isIPad) {
-                if (navigator.maxTouchPoints > 0 && ua.indexOf('Macintosh') !== -1) {
-                    // Mac with touch - could be legitimate (MacBook with touchbar)
-                    // but suspicious if > 5
-                    if (navigator.maxTouchPoints > 2) {
-                        score += 2;
-                        signals.push('+2 Mac with high touch points: ' + navigator.maxTouchPoints);
-                    }
-                }
-            }
         } catch(e) {}
 
-        // 6. TIMEZONE VS LANGUAGE COHERENCE
-        try {
-            var tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-            var lang = navigator.language;
-            var tzOffset = new Date().getTimezoneOffset();
-
-            var auTimezones = ['Australia/Sydney', 'Australia/Melbourne', 'Australia/Brisbane', 'Australia/Adelaide', 'Australia/Perth'];
-            var isAUTz = auTimezones.some(function(t) { return tz === t; });
-            var isAULang = lang.indexOf('en-AU') !== -1;
-            var isNZTz = tz === 'Pacific/Auckland';
-            var isGBTz = tz === 'Europe/London';
-            var isSGTz = tz === 'Asia/Singapore';
-
-            // Mild mismatch if lang says AU but timezone isn't AU
-            if (isAULang && !isAUTz && !isNZTz) {
-                score += 2;
-                signals.push('+2 lang=en-AU but tz=' + tz);
-            }
-        } catch(e) {}
-
-        // 7. NAVIGATOR PROPERTY ENUMERATION CHECK
+        // 6. NAVIGATOR PROPERTY ENUMERATION CHECK (getter-based overrides only)
         try {
             var overriddenProps = ['webdriver', 'language', 'languages', 'platform',
                                    'hardwareConcurrency', 'deviceMemory', 'maxTouchPoints'];
-            var suspiciousOverrides = 0;
+            var suspiciousGetters = 0;
             for (var i = 0; i < overriddenProps.length; i++) {
                 var desc = Object.getOwnPropertyDescriptor(navigator, overriddenProps[i]);
                 if (desc && desc.get && !desc.set) {
                     var fnStr = desc.get.toString();
                     if (fnStr.indexOf('[native code]') === -1) {
-                        suspiciousOverrides++;
+                        suspiciousGetters++;
                     }
                 }
             }
-            if (suspiciousOverrides >= 4) {
+            if (suspiciousGetters >= 4) {
                 score += 6;
-                signals.push('+6 ' + suspiciousOverrides + '/7 nav props have non-native getters');
-            } else if (suspiciousOverrides >= 2) {
+                signals.push('+6 ' + suspiciousGetters + '/7 nav props have non-native getters');
+            } else if (suspiciousGetters >= 2) {
                 score += 3;
-                signals.push('+3 ' + suspiciousOverrides + '/7 nav props have non-native getters');
+                signals.push('+3 ' + suspiciousGetters + '/7 nav props have non-native getters');
             }
         } catch(e) {}
 
-        // 8. PERFORMANCE.NOW RESOLUTION CHECK
-        try {
-            var times = [];
-            for (var i = 0; i < 20; i++) {
-                times.push(performance.now());
-            }
-            var diffs = [];
-            for (var i = 1; i < times.length; i++) {
-                var d = times[i] - times[i-1];
-                if (d > 0) diffs.push(d);
-            }
-            if (diffs.length > 5) {
-                var allDifferent = true;
-                for (var i = 1; i < Math.min(diffs.length, 10); i++) {
-                    if (Math.abs(diffs[i] - diffs[0]) < 0.001) {
-                        allDifferent = false;
-                        break;
-                    }
-                }
-                // If timing is TOO noisy (all wildly different) it could indicate spoofing
-                var variance = 0;
-                var mean = diffs.reduce(function(a,b){return a+b;},0) / diffs.length;
-                for (var i = 0; i < diffs.length; i++) {
-                    variance += (diffs[i] - mean) * (diffs[i] - mean);
-                }
-                variance /= diffs.length;
-                if (variance > 0.5) {
-                    score += 2;
-                    signals.push('+2 performance.now high variance: ' + variance.toFixed(4));
-                }
-            }
-        } catch(e) {}
-
-        // 9. AUTOMATION FLAGS CHECK
+        // 7. AUTOMATION FLAGS CHECK
         try {
             var autoFlags = ['__nightmare', '_phantom', 'callPhantom',
                             '__selenium_evaluate', '__selenium_unwrapped',
@@ -253,7 +178,7 @@ class FingerprintValidationService {
             }
         } catch(e) {}
 
-        // 10. PLUGINS CONSISTENCY
+        // 8. PLUGINS CONSISTENCY
         try {
             var ua = navigator.userAgent;
             var isSafari = ua.indexOf('Safari') !== -1 && ua.indexOf('Chrome') === -1;
@@ -263,14 +188,7 @@ class FingerprintValidationService {
             }
         } catch(e) {}
 
-        // 11. INCOGNITO / PRIVATE MODE DETECTION
-        try {
-            if (navigator.storage && navigator.storage.estimate) {
-                // Storage quota check is async - skip for sync score
-            }
-        } catch(e) {}
-
-        // 12. RECT NOISE CHECK
+        // 9. RECT NOISE CHECK
         try {
             var div = document.createElement('div');
             div.style.cssText = 'position:absolute;left:-9999px;width:100px;height:100px;';
@@ -283,6 +201,8 @@ class FingerprintValidationService {
                 signals.push('+4 getBoundingClientRect inconsistent between calls');
             }
         } catch(e) {}
+
+        if (signals.length === 0) signals.push('All checks clean');
 
         return JSON.stringify({
             score: score,

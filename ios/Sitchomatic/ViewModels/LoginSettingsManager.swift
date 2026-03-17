@@ -85,6 +85,7 @@ class LoginSettingsManager {
 
     func persistAutomationSettings() {
         automationSettings = automationSettings.normalizedTimeouts()
+        PPSRStealthService.shared.applySettings(automationSettings)
         if let data = try? JSONEncoder().encode(automationSettings) {
             UserDefaults.standard.set(data, forKey: automationSettingsKey)
         }
@@ -95,6 +96,7 @@ class LoginSettingsManager {
            let loaded = try? JSONDecoder().decode(AutomationSettings.self, from: data) {
             automationSettings = loaded.normalizedTimeouts()
         }
+        PPSRStealthService.shared.applySettings(automationSettings)
     }
 
     func flowAssignment(for urlString: String) -> URLFlowAssignment? {

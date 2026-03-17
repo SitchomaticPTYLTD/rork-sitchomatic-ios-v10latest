@@ -97,8 +97,8 @@ nonisolated struct AutomationSettings: Codable, Sendable {
     var userAgentRotation: Bool = true
     var viewportRandomization: Bool = true
     var webGLNoise: Bool = true
-    var canvasNoise: Bool = true
-    var audioContextNoise: Bool = true
+    var canvasNoise: Bool = false
+    var audioContextNoise: Bool = false
     var timezoneSpoof: Bool = true
     var languageSpoof: Bool = true
 
