@@ -1,30 +1,47 @@
-# 2 AI-Powered Stability Improvements to Prevent Crashing
+# Refactor 6 most critical service files one-by-one
 
-## Update 1: AI Predictive Concurrency Governor
+## Refactoring Plan — 6 Files, One at a Time
 
-**What it does:**
-- Continuously monitors memory usage, session latency trends, WebView count, and failure rates as a unified signal
-- Uses AI to predict when memory pressure will become critical (30–60 seconds ahead) and automatically reduces concurrency *before* emergency thresholds are hit
-- Gradually ramps concurrency back up when conditions stabilize, preventing the "all-or-nothing" pattern where batches either run at full speed or get emergency-killed
-- Integrates with the existing anomaly forecasting and crash protection to act as a middle layer — stepping in before emergency cleanup is needed
-
-**How it prevents crashes:**
-- Instead of reacting to 4000MB+ memory with an emergency kill (losing progress), it detects the trajectory at 1200–1800MB and smoothly scales from 5→3→2→1 concurrent sessions
-- Tracks a "stability score" combining memory growth rate, WebView count, failure streaks, and host health — AI analyzes this score every 20 seconds and adjusts
-- Logs every adjustment with reasoning so you can see exactly why concurrency changed in the debug log
+Each file will be refactored when you say "yes continue". No changes to app behavior — only internal code quality improvements.
 
 ---
 
-## Update 2: AI WebView Memory Lifecycle Manager
+### File 1: HumanInteractionEngine.swift (2,121 → ~800 LOC)
+- **Extract shared JS builders** — Create a `JSInteractionBuilder` helper that generates tap, fill, and submit JS snippets with parameters, eliminating copy-paste across all 12 patterns
+- **Unify pattern execution** — Each pattern currently duplicates the "tap field → fill → tap next → fill → submit" flow; extract a shared pipeline with pattern-specific configuration
+- **Move `LoginFormPattern` enum** to its own model file
+- **Reduce inline JS** — Group reusable JS templates into a dedicated JS template struct
 
-**What it does:**
-- Tracks per-session WebView memory footprint by measuring memory before/after each session creation and teardown
-- Identifies "memory bloat" sessions — WebViews that consume disproportionate memory (e.g., heavy JavaScript sites, challenge pages with animations)
-- Proactively recycles bloated WebViews mid-batch by flagging them for early teardown and replacement, rather than waiting for the entire batch to finish
-- Uses AI to learn which hosts/URLs tend to create bloated WebViews and preemptively assigns lower concurrency or shorter timeouts for those hosts
+### File 2: DebugLoginButtonService.swift (1,219 → ~400 LOC)
+- **Consolidate 40 JS snippet properties** into a data-driven method registry — one factory method that takes parameters (click type, selector strategy) instead of 40 separate computed properties
+- **Extract JS generation** into a `DebugClickJSFactory` helper
+- **Separate scan orchestration** from persistence and config management
+- **Format JS strings** for readability (multi-line instead of single-line blobs)
 
-**How it prevents crashes:**
-- The crash logs show memory warnings followed by rapid screenshot render loops — this suggests WebViews accumulating memory without being cleaned up. This service catches that pattern early
-- When a WebView's estimated memory exceeds a per-session budget (e.g., 150MB), it triggers a graceful session restart instead of letting it grow to cause a death spiral
-- Feeds data back into the session health monitor so bloated hosts get lower health scores, reducing future allocation to problematic sites
-- Cleans up JavaScript-heavy pages by injecting lightweight teardown scripts before session end to release DOM references
+### File 3: ConcurrentAutomationEngine.swift (1,406 → ~600 LOC)
+- **Extract a shared `BatchOrchestrator`** that handles the common batch loop (throttling, auto-pause, stats, cooldown, preflight) used by both PPSR and Login batches
+- **Move `AutomationThrottler` actor** to its own file
+- **Move `BatchLiveStats` and `ConcurrentBatchResult`** to a Models file
+- **Reduce the 20+ state variables** into a single `BatchState` struct that gets reset cleanly between runs
+
+### File 4: DeviceProxyService.swift (1,158 → ~500 LOC)
+- **Extract UI-facing computed properties** (labels, visibility flags) into a lightweight `ProxyDashboardState` or keep them but group clearly
+- **Extract rotation logic** (timer management, index tracking, rotation execution) into a `ProxyRotationManager` helper
+- **Extract per-session WireGuard/OpenVPN management** into focused helper methods
+- **Reduce `didSet` side effects** — consolidate settings persistence into a single save method rather than per-property observers
+
+### File 5: CrashProtectionService.swift (588 → ~350 LOC)
+- **Extract memory monitoring** into a `MemoryMonitor` helper (growth tracking, history, death spiral detection)
+- **Create a cleanup escalation table** instead of hardcoded if/else chains with magic numbers
+- **Decouple from other singletons** — use a protocol/callback for cleanup actions rather than directly calling 6+ services
+- **Move `CrashReport` struct** to Models
+
+### File 6: DebugLogger.swift (818 → ~450 LOC)
+- **Extract log persistence** (file I/O, export) into a `LogPersistenceService`
+- **Extract session tracking** into a `LogSessionTracker`
+- **Simplify the `log()` method** — it should only format and store; trimming and notification should be separate concerns
+- **Move `DebugLogCategory` and `DebugLogLevel` enums** to their own model file
+
+---
+
+**Approach:** One file at a time. I'll complete the refactoring, build, and confirm it compiles before moving to the next. You say "yes continue" to proceed to each subsequent file.
