@@ -26,8 +26,8 @@ struct DeviceNetworkSettingsView: View {
                 unitedIPOptionsSection
             }
             proxyManagerLinkSection
-            if deviceProxy.shouldShowWireProxySection {
-                wireProxyServerSection
+            if deviceProxy.shouldShowWireProxySection || deviceProxy.shouldShowOpenVPNSection {
+                tunnelServerSection
             }
             if LoginURLRotationService.shared.isIgnitionMode {
                 ignitionRegionSection
@@ -116,7 +116,7 @@ struct DeviceNetworkSettingsView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(deviceProxy.ipRoutingMode.label)
                         .font(.subheadline.bold())
-                    Text(deviceProxy.isEnabled ? "One shared IP for the whole app with scheduled rotation." : "Each web session gets its own IP from the selected pool.")
+                    Text(deviceProxy.isEnabled ? "One shared IP for the whole app with scheduled rotation." : "Each web session gets its own IP from the \(proxyService.unifiedConnectionMode.label) pool.")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
@@ -347,9 +347,9 @@ struct DeviceNetworkSettingsView: View {
         }
     }
 
-    // MARK: - WireProxy Server (separate, only for WireGuard mode)
+    // MARK: - Tunnel Server (WireGuard / OpenVPN)
 
-    private var wireProxyServerSection: some View {
+    private var tunnelServerSection: some View {
         Section {
             Toggle(isOn: Binding(
                 get: { deviceProxy.localProxyEnabled },
@@ -515,7 +515,7 @@ struct DeviceNetworkSettingsView: View {
                                 .font(.system(size: 12, weight: .bold))
                                 .foregroundStyle(.purple.opacity(0.7))
                             VStack(alignment: .leading, spacing: 2) {
-                                Text("Per-Session Tunnel")
+                                Text("Per-Session WG Tunnel")
                                     .font(.caption2)
                                     .foregroundStyle(.secondary)
                                 Text(serverName)
@@ -549,6 +549,48 @@ struct DeviceNetworkSettingsView: View {
                     }
                     .tint(.purple)
                 }
+
+                if !deviceProxy.isEnabled && deviceProxy.perSessionOpenVPNActive {
+                    if let serverName = deviceProxy.openVPNActiveConfigLabel {
+                        HStack(spacing: 8) {
+                            Image(systemName: "globe")
+                                .font(.system(size: 12, weight: .bold))
+                                .foregroundStyle(.indigo.opacity(0.7))
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Per-Session OVPN Tunnel")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                Text(serverName)
+                                    .font(.system(.caption, design: .monospaced, weight: .medium))
+                                    .lineLimit(1)
+                            }
+                            Spacer()
+                            Button {
+                                deviceProxy.rotatePerSessionOpenVPN()
+                            } label: {
+                                Label("Rotate", systemImage: "arrow.triangle.2.circlepath")
+                                    .font(.system(.caption2, weight: .bold))
+                            }
+                            .buttonStyle(.bordered)
+                            .tint(.indigo)
+                            .controlSize(.small)
+                        }
+                    }
+                } else if !deviceProxy.isEnabled && deviceProxy.isOpenVPNProxyCompatibleMode && !deviceProxy.perSessionOpenVPNActive {
+                    Button {
+                        deviceProxy.activatePerSessionOpenVPN()
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "play.fill")
+                                .font(.system(size: 12, weight: .bold))
+                                .foregroundStyle(.indigo)
+                            Text("Start Per-Session OpenVPN")
+                                .font(.subheadline.bold())
+                            Spacer()
+                        }
+                    }
+                    .tint(.indigo)
+                }
             }
         } header: {
             HStack {
@@ -566,11 +608,11 @@ struct DeviceNetworkSettingsView: View {
             }
         } footer: {
             if deviceProxy.isEnabled {
-                Text("Routes all app traffic through an encrypted WireGuard tunnel via localhost SOCKS5.")
-            } else if deviceProxy.perSessionWireProxyActive {
-                Text("Per-session WireProxy active — all WireGuard sessions share this tunnel. Tap Rotate to switch server.")
+                Text("Routes all app traffic through an encrypted tunnel via localhost SOCKS5.")
+            } else if deviceProxy.perSessionWireProxyActive || deviceProxy.perSessionOpenVPNActive {
+                Text("Per-session tunnel active — each session gets its own IP. Tap Rotate to switch server.")
             } else {
-                Text("Routes per-session WireGuard traffic through a shared on-device SOCKS5 tunnel. Enable the toggle to activate.")
+                Text("Routes traffic through a shared on-device SOCKS5 tunnel. Enable the toggle to activate.")
             }
         }
     }

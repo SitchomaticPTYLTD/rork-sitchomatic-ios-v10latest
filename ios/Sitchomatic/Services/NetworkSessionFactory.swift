@@ -62,22 +62,24 @@ class NetworkSessionFactory {
     private let ovpnBridge = OpenVPNProxyBridge.shared
 
     func nextConfig(for target: ProxyRotationService.ProxyTarget) -> ActiveNetworkConfig {
-        if deviceProxy.isEnabled, let config = deviceProxy.activeConfig {
+        let ipMode = deviceProxy.ipRoutingMode
+
+        if ipMode == .appWideUnited, let config = deviceProxy.activeConfig {
             if deviceProxy.isWireProxyActive, localProxy.isRunning, localProxy.wireProxyMode {
                 let localConfig = localProxy.localProxyConfig
-                logger.log("NetworkFactory: WireProxy tunnel active → 127.0.0.1:\(localConfig.port) for \(target.rawValue)", category: .vpn, level: .debug)
+                logger.log("NetworkFactory: united IP WireProxy tunnel → 127.0.0.1:\(localConfig.port) for \(target.rawValue)", category: .vpn, level: .debug)
                 return .socks5(localConfig)
             }
             if deviceProxy.isOpenVPNBridgeActive, localProxy.isRunning, localProxy.openVPNProxyMode {
                 let localConfig = localProxy.localProxyConfig
-                logger.log("NetworkFactory: OpenVPN handler active → 127.0.0.1:\(localConfig.port) for \(target.rawValue)", category: .vpn, level: .debug)
+                logger.log("NetworkFactory: united IP OpenVPN handler → 127.0.0.1:\(localConfig.port) for \(target.rawValue)", category: .vpn, level: .debug)
                 return .socks5(localConfig)
             }
             if let localConfig = deviceProxy.effectiveProxyConfig, localProxy.isRunning {
-                logger.log("NetworkFactory: using local proxy 127.0.0.1:\(localConfig.port) → upstream \(config.label) for \(target.rawValue)", category: .network, level: .debug)
+                logger.log("NetworkFactory: united IP local proxy 127.0.0.1:\(localConfig.port) → upstream \(config.label) for \(target.rawValue)", category: .network, level: .debug)
                 return .socks5(localConfig)
             }
-            logger.log("NetworkFactory: using united IP → \(config.label) for \(target.rawValue)", category: .network, level: .debug)
+            logger.log("NetworkFactory: united IP → \(config.label) for \(target.rawValue)", category: .network, level: .debug)
             return config
         }
 
@@ -87,6 +89,7 @@ class NetworkSessionFactory {
         }
 
         let mode = proxyService.connectionMode(for: target)
+        logger.log("NetworkFactory: per-session \(mode.label) config for \(target.rawValue)", category: .network, level: .debug)
 
         switch mode {
         case .dns:
@@ -373,7 +376,7 @@ class NetworkSessionFactory {
 
     func appWideConfig(for target: ProxyRotationService.ProxyTarget) -> ActiveNetworkConfig {
         let deviceProxy = DeviceProxyService.shared
-        if deviceProxy.isEnabled, let config = deviceProxy.activeConfig {
+        if deviceProxy.ipRoutingMode == .appWideUnited, let config = deviceProxy.activeConfig {
             logger.log("NetworkFactory: appWideConfig → united IP \(config.label) for \(target.rawValue)", category: .network, level: .debug)
             return config
         }

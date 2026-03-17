@@ -115,11 +115,7 @@ class DeviceProxyService {
                 activateUnifiedMode()
             } else {
                 deactivateUnifiedMode()
-                if isWireProxyCompatibleMode {
-                    activatePerSessionWireProxy()
-                } else if isOpenVPNProxyCompatibleMode {
-                    activatePerSessionOpenVPN()
-                }
+                activatePerSessionMode()
             }
         }
     }
@@ -149,11 +145,11 @@ class DeviceProxyService {
     }
 
     var shouldShowWireProxySection: Bool {
-        isWireProxyCompatibleMode
+        isWireProxyCompatibleMode || perSessionWireProxyActive || wireProxyBridge.isActive
     }
 
     var shouldShowOpenVPNSection: Bool {
-        isOpenVPNProxyCompatibleMode
+        isOpenVPNProxyCompatibleMode || perSessionOpenVPNActive || ovpnBridge.isActive
     }
 
     var shouldShowWireProxyDashboard: Bool {
@@ -248,8 +244,8 @@ class DeviceProxyService {
         healthMonitor.maxConsecutiveFailures = maxFailuresBeforeRotation
         if ipRoutingMode == .appWideUnited {
             activateUnifiedMode()
-        } else if isWireProxyCompatibleMode {
-            activatePerSessionWireProxy()
+        } else {
+            activatePerSessionMode()
         }
     }
 
@@ -278,12 +274,14 @@ class DeviceProxyService {
             return
         }
 
-        if rotateOnBatchStart && isWireProxyCompatibleMode && perSessionWireProxyActive {
+        guard rotateOnBatchStart else { return }
+
+        if perSessionWireProxyActive {
             rotatePerSessionWireProxy()
             logger.log("DeviceProxy: per-session WireGuard rotated on batch start", category: .vpn, level: .info)
         }
 
-        if rotateOnBatchStart && isOpenVPNProxyCompatibleMode && perSessionOpenVPNActive {
+        if perSessionOpenVPNActive {
             rotatePerSessionOpenVPN()
             logger.log("DeviceProxy: per-session OpenVPN rotated on batch start", category: .vpn, level: .info)
         }
@@ -292,6 +290,9 @@ class DeviceProxyService {
             HybridNetworkingService.shared.resetBatch()
             logger.log("DeviceProxy: hybrid mode reset for new batch", category: .network, level: .info)
         }
+
+        NetworkSessionFactory.shared.resetRotationIndexes()
+        logger.log("DeviceProxy: per-session rotation indexes reset on batch start (mode: \(proxyService.unifiedConnectionMode.label))", category: .network, level: .info)
     }
 
     func notifyFingerprintDetected() {
@@ -654,17 +655,27 @@ class DeviceProxyService {
 
         if isEnabled {
             performRotation(reason: "Connection Mode Changed")
-        } else if isWireProxyCompatibleMode && !perSessionWireProxyActive {
-            activatePerSessionWireProxy()
-        } else if isOpenVPNProxyCompatibleMode && !perSessionOpenVPNActive {
-            activatePerSessionOpenVPN()
+        } else {
+            activatePerSessionMode()
         }
     }
 
     private(set) var perSessionWireProxyStarting: Bool = false
 
+    private func activatePerSessionMode() {
+        let mode = proxyService.unifiedConnectionMode
+        if mode == .wireguard && !perSessionWireProxyActive {
+            activatePerSessionWireProxy()
+        } else if mode == .openvpn && !perSessionOpenVPNActive {
+            activatePerSessionOpenVPN()
+        } else {
+            NetworkSessionFactory.shared.resetRotationIndexes()
+            logger.log("DeviceProxy: per-session mode active for \(mode.label) — each session gets its own IP from the pool", category: .network, level: .info)
+        }
+    }
+
     func activatePerSessionWireProxy() {
-        guard !isEnabled, isWireProxyCompatibleMode else { return }
+        guard !isEnabled else { return }
         guard !perSessionWireProxyStarting else {
             logger.log("DeviceProxy: per-session WireProxy activation already in progress", category: .vpn, level: .debug)
             return
@@ -830,7 +841,7 @@ class DeviceProxyService {
     // MARK: - Per-Session OpenVPN
 
     func activatePerSessionOpenVPN() {
-        guard !isEnabled, isOpenVPNProxyCompatibleMode else { return }
+        guard !isEnabled else { return }
         guard !perSessionOpenVPNStarting else {
             logger.log("DeviceProxy: per-session OpenVPN activation already in progress", category: .vpn, level: .debug)
             return
@@ -987,10 +998,8 @@ class DeviceProxyService {
 
         if ipRoutingMode == .appWideUnited {
             performRotation(reason: "Profile Switch")
-        } else if isWireProxyCompatibleMode {
-            activatePerSessionWireProxy()
-        } else if isOpenVPNProxyCompatibleMode {
-            activatePerSessionOpenVPN()
+        } else {
+            activatePerSessionMode()
         }
 
         let profile = NordVPNService.shared.activeKeyProfile
