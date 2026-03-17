@@ -153,6 +153,10 @@ class DeviceProxyService {
         return perSessionManager.openVPNConfigLabel
     }
 
+    var isPerSessionTunnelStarting: Bool {
+        perSessionManager.wireProxyStarting || perSessionManager.openVPNStarting
+    }
+
     var effectiveProxyConfig: ProxyConfig? {
         if ipRoutingMode == .appWideUnited, isActive, localProxyEnabled, localProxy.isRunning {
             switch activeConfig {
@@ -214,15 +218,23 @@ class DeviceProxyService {
     }
 
     func handleUnifiedConnectionModeChange() {
-        if !isWireProxyCompatibleMode {
-            wireProxyBridge.stop()
-            localProxy.enableWireProxyMode(false)
-            perSessionManager.stopWireProxy()
+        let mode = proxyService.unifiedConnectionMode
+
+        if mode != .wireguard {
+            if wireProxyBridge.isActive || localProxy.wireProxyMode || perSessionManager.wireProxyActive {
+                wireProxyBridge.stop()
+                localProxy.enableWireProxyMode(false)
+                perSessionManager.stopWireProxy()
+                logger.log("DeviceProxy: cleaned up WireProxy for mode change → \(mode.label)", category: .vpn, level: .info)
+            }
         }
-        if !isOpenVPNProxyCompatibleMode {
-            ovpnBridge.stop()
-            localProxy.enableOpenVPNProxyMode(false)
-            perSessionManager.stopOpenVPN()
+        if mode != .openvpn {
+            if ovpnBridge.isActive || localProxy.openVPNProxyMode || perSessionManager.openVPNActive {
+                ovpnBridge.stop()
+                localProxy.enableOpenVPNProxyMode(false)
+                perSessionManager.stopOpenVPN()
+                logger.log("DeviceProxy: cleaned up OpenVPN for mode change → \(mode.label)", category: .vpn, level: .info)
+            }
         }
         isEnabled ? rotateNow(reason: "Connection Mode Changed") : activatePerSessionMode()
     }
@@ -230,9 +242,8 @@ class DeviceProxyService {
     // MARK: - Tunnel Management
 
     func reconnectWireProxy() {
-        if !isEnabled && perSessionManager.wireProxyActive {
-            wireProxyBridge.stop()
-            localProxy.enableWireProxyMode(false)
+        if !isEnabled && (perSessionManager.wireProxyActive || perSessionManager.wireProxyStarting) {
+            perSessionManager.stopWireProxy()
             logger.log("DeviceProxy: WireProxy reconnect requested (per-session)", category: .vpn, level: .info)
             perSessionManager.activateWireProxy(localProxyEnabled: localProxyEnabled)
             return
@@ -252,9 +263,8 @@ class DeviceProxyService {
     }
 
     func reconnectOpenVPN() {
-        if !isEnabled && perSessionManager.openVPNActive {
-            ovpnBridge.stop()
-            localProxy.enableOpenVPNProxyMode(false)
+        if !isEnabled && (perSessionManager.openVPNActive || perSessionManager.openVPNStarting) {
+            perSessionManager.stopOpenVPN()
             logger.log("DeviceProxy: OpenVPN reconnect requested (per-session)", category: .vpn, level: .info)
             perSessionManager.activateOpenVPN(localProxyEnabled: localProxyEnabled)
             return
@@ -353,15 +363,39 @@ class DeviceProxyService {
 
     private func activatePerSessionMode() {
         let mode = proxyService.unifiedConnectionMode
-        if mode == .direct {
+
+        if mode != .wireguard && perSessionManager.wireProxyActive {
             perSessionManager.stopWireProxy()
+            logger.log("DeviceProxy: stopping stale per-session WireProxy (mode now: \(mode.label))", category: .vpn, level: .info)
+        }
+        if mode != .openvpn && perSessionManager.openVPNActive {
             perSessionManager.stopOpenVPN()
+            logger.log("DeviceProxy: stopping stale per-session OpenVPN (mode now: \(mode.label))", category: .vpn, level: .info)
+        }
+
+        switch mode {
+        case .direct:
             logger.log("DeviceProxy: DIRECT mode — no proxy/tunnel, bypassing all network layers", category: .network, level: .info)
-        } else if mode == .wireguard && !perSessionManager.wireProxyActive {
-            perSessionManager.activateWireProxy(localProxyEnabled: localProxyEnabled)
-        } else if mode == .openvpn && !perSessionManager.openVPNActive {
-            perSessionManager.activateOpenVPN(localProxyEnabled: localProxyEnabled)
-        } else {
+
+        case .wireguard:
+            if !perSessionManager.wireProxyActive && !perSessionManager.wireProxyStarting {
+                perSessionManager.activateWireProxy(localProxyEnabled: localProxyEnabled)
+            } else if perSessionManager.wireProxyActive && !perSessionManager.isTunnelHealthy {
+                logger.log("DeviceProxy: per-session WireProxy unhealthy — reactivating", category: .vpn, level: .warning)
+                perSessionManager.stopWireProxy()
+                perSessionManager.activateWireProxy(localProxyEnabled: localProxyEnabled)
+            }
+
+        case .openvpn:
+            if !perSessionManager.openVPNActive && !perSessionManager.openVPNStarting {
+                perSessionManager.activateOpenVPN(localProxyEnabled: localProxyEnabled)
+            } else if perSessionManager.openVPNActive && !perSessionManager.isTunnelHealthy {
+                logger.log("DeviceProxy: per-session OpenVPN unhealthy — reactivating", category: .vpn, level: .warning)
+                perSessionManager.stopOpenVPN()
+                perSessionManager.activateOpenVPN(localProxyEnabled: localProxyEnabled)
+            }
+
+        case .proxy, .dns, .nodeMaven, .hybrid:
             NetworkSessionFactory.shared.resetRotationIndexes()
             logger.log("DeviceProxy: per-session mode active for \(mode.label) — each session gets its own IP from the pool", category: .network, level: .info)
         }
