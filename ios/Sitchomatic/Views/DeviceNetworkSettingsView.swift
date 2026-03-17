@@ -1341,6 +1341,8 @@ struct DeviceNetworkSettingsView: View {
     @State private var showDNSImport: Bool = false
     @State private var newDNSName: String = ""
     @State private var newDNSURL: String = ""
+    @State private var isTestingDNS: Bool = false
+    @State private var dnsTestResults: [(name: String, endpoint: String, passed: Bool, latencyMs: Int?)] = []
 
     private var dnsManagerSheet: some View {
         NavigationStack {
@@ -1435,6 +1437,20 @@ struct DeviceNetworkSettingsView: View {
                                     .font(.system(.caption2, design: .monospaced)).foregroundStyle(.tertiary).lineLimit(1)
                             }
                             Spacer()
+                            if let result = dnsTestResults.first(where: { $0.name == provider.name }) {
+                                if result.passed {
+                                    HStack(spacing: 3) {
+                                        Image(systemName: "checkmark.circle.fill").foregroundStyle(.green).font(.caption)
+                                        if let ms = result.latencyMs {
+                                            Text("\(ms)ms")
+                                                .font(.system(.caption2, design: .monospaced, weight: .medium))
+                                                .foregroundStyle(ms < 200 ? .green : (ms < 500 ? .orange : .red))
+                                        }
+                                    }
+                                } else {
+                                    Image(systemName: "xmark.circle.fill").foregroundStyle(.red).font(.caption)
+                                }
+                            }
                         }
                         .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                             Button(role: .destructive) {
@@ -1453,6 +1469,31 @@ struct DeviceNetworkSettingsView: View {
                     } label: {
                         Label(showDNSImport ? "Hide Import" : "Import / Add Servers", systemImage: "plus.circle.fill")
                     }
+                    Button {
+                        isTestingDNS = true
+                        dnsTestResults = []
+                        Task {
+                            let results = await PPSRDoHService.shared.testAllServers()
+                            dnsTestResults = results.map { (name: $0.server.displayLabel, endpoint: $0.server.endpoint, passed: $0.passed, latencyMs: $0.latencyMs) }
+                            isTestingDNS = false
+                            let passed = results.filter(\.passed).count
+                            log("DNS test complete: \(passed)/\(results.count) servers passed", level: passed > 0 ? .success : .error)
+                        }
+                    } label: {
+                        HStack {
+                            Label("Test All Servers", systemImage: "antenna.radiowaves.left.and.right")
+                            Spacer()
+                            if isTestingDNS {
+                                ProgressView()
+                            } else if !dnsTestResults.isEmpty {
+                                let passed = dnsTestResults.filter(\.passed).count
+                                Text("\(passed)/\(dnsTestResults.count)")
+                                    .font(.system(.caption, design: .monospaced, weight: .bold))
+                                    .foregroundStyle(passed == dnsTestResults.count ? .green : (passed > 0 ? .orange : .red))
+                            }
+                        }
+                    }
+                    .disabled(isTestingDNS)
                     Button {
                         PPSRDoHService.shared.enableAll()
                         log("Enabled all DNS providers", level: .success)
