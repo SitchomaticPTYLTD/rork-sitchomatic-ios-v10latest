@@ -1,8 +1,10 @@
 import Foundation
 
 nonisolated struct DualFindResumePoint: Codable, Sendable {
-    let emailIndex: Int
-    let passwordIndex: Int
+    let joeEmailIndex: Int
+    let joePasswordIndex: Int
+    let ignEmailIndex: Int
+    let ignPasswordIndex: Int
     let emails: [String]
     let passwords: [String]
     let sessionCount: Int
@@ -24,6 +26,10 @@ nonisolated struct DualFindHit: Codable, Sendable, Identifiable {
         self.password = password
         self.platform = platform
         self.timestamp = Date()
+    }
+
+    var copyText: String {
+        "\(email):\(password)"
     }
 }
 
@@ -55,11 +61,13 @@ nonisolated enum DualFindTestOutcome: Sendable {
 nonisolated enum DualFindSessionCount: Int, CaseIterable, Sendable {
     case four = 4
     case six = 6
+    case eight = 8
 
     var label: String {
         switch self {
         case .four: "4 Sessions (2+2)"
         case .six: "6 Sessions (3+3)"
+        case .eight: "8 Sessions (4+4)"
         }
     }
 
@@ -67,6 +75,7 @@ nonisolated enum DualFindSessionCount: Int, CaseIterable, Sendable {
         switch self {
         case .four: 2
         case .six: 3
+        case .eight: 4
         }
     }
 }

