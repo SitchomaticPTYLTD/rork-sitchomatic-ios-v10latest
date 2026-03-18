@@ -18,6 +18,7 @@ class BPointWebSession: NSObject {
     private let logger = DebugLogger.shared
 
     static let targetURL = URL(string: "https://www.bpoint.com.au/payments/DepartmentOfFinance")!
+    static let billerLookupURL = URL(string: "https://www.bpoint.com.au/payments/billpayment/Payment/Index")!
 
     func setUp() {
         logger.log("BPointWebSession: setUp (stealth=\(stealthEnabled), network=\(networkConfig.label))", category: .webView, level: .debug)
@@ -496,6 +497,317 @@ class BPointWebSession: NSObject {
             return 'OPTION_NOT_FOUND';
         })();
         """
+    }
+
+    func loadBillerLookupPage(timeout: TimeInterval = 90) async -> Bool {
+        let timeout = TimeoutResolver.resolvePageLoadTimeout(timeout)
+        guard let webView else {
+            lastNavigationError = "WebView not initialized"
+            return false
+        }
+        guard !isProtectedRouteBlocked else {
+            logger.log("BPointWebSession: loadBillerLookup blocked — protected route", category: .network, level: .error)
+            return false
+        }
+        isPageLoaded = false
+        lastNavigationError = nil
+        lastHTTPStatusCode = nil
+
+        if let existingCont = pageLoadContinuation {
+            pageLoadContinuation = nil
+            existingCont.resume(returning: false)
+        }
+
+        let request = URLRequest(url: Self.billerLookupURL, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData, timeoutInterval: timeout)
+        webView.load(request)
+
+        let loaded = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+            self.pageLoadContinuation = continuation
+            self.loadTimeoutTask = Task {
+                try? await Task.sleep(for: .seconds(timeout))
+                if self.pageLoadContinuation != nil {
+                    self.pageLoadContinuation = nil
+                    self.lastNavigationError = self.lastNavigationError ?? "Biller lookup page timed out after \(Int(timeout))s"
+                    continuation.resume(returning: false)
+                }
+            }
+        }
+        loadTimeoutTask?.cancel()
+        loadTimeoutTask = nil
+
+        if loaded {
+            if stealthEnabled {
+                _ = await executeJS(PPSRStealthService.shared.fingerprintJS())
+                try? await Task.sleep(for: .milliseconds(500))
+            }
+            await waitForDOMReady(timeout: TimeoutResolver.resolveAutomationTimeout(10))
+        }
+        return loaded
+    }
+
+    func enterBillerCodeAndSearch(_ code: String) async -> (success: Bool, detail: String) {
+        let escaped = code.replacingOccurrences(of: "'", with: "\\'")
+        let js = """
+        (function() {
+            var input = document.querySelector('input[name="BillerCode"]')
+                     || document.querySelector('input[id="BillerCode"]')
+                     || document.querySelector('input[placeholder*="iller"]')
+                     || document.querySelector('input[type="text"]');
+            if (!input) return 'INPUT_NOT_FOUND';
+            input.focus();
+            var nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value');
+            if (nativeSetter && nativeSetter.set) { nativeSetter.set.call(input, '\(escaped)'); }
+            else { input.value = '\(escaped)'; }
+            input.dispatchEvent(new Event('focus', {bubbles: true}));
+            input.dispatchEvent(new Event('input', {bubbles: true}));
+            input.dispatchEvent(new Event('change', {bubbles: true}));
+            input.dispatchEvent(new Event('blur', {bubbles: true}));
+
+            var btn = null;
+            var allBtns = document.querySelectorAll('button, input[type="submit"], a.btn, [role="button"]');
+            for (var i = 0; i < allBtns.length; i++) {
+                var txt = (allBtns[i].textContent || allBtns[i].value || '').toLowerCase().trim();
+                if (txt.indexOf('find') !== -1 || txt.indexOf('search') !== -1 || txt.indexOf('look') !== -1 || txt.indexOf('go') !== -1) {
+                    btn = allBtns[i]; break;
+                }
+            }
+            if (!btn) {
+                var submits = document.querySelectorAll('button[type="submit"], input[type="submit"]');
+                if (submits.length > 0) btn = submits[0];
+            }
+            if (!btn) {
+                var forms = document.querySelectorAll('form');
+                if (forms.length > 0) { forms[0].submit(); return 'FORM_SUBMITTED'; }
+                return 'BTN_NOT_FOUND';
+            }
+            btn.click();
+            return 'CLICKED';
+        })();
+        """
+        let result = await executeJS(js)
+        if let result, result == "CLICKED" || result == "FORM_SUBMITTED" {
+            return (true, "Biller code \(code) entered and search triggered: \(result)")
+        }
+        return (false, "Biller lookup failed: \(result ?? "nil")")
+    }
+
+    func detectFormFields() async -> (textFieldCount: Int, hasAmountField: Bool, detail: String) {
+        let js = """
+        (function() {
+            var allInputs = document.querySelectorAll('input[type="text"], input[type="number"], input:not([type])');
+            var textFields = [];
+            var amountField = false;
+            for (var i = 0; i < allInputs.length; i++) {
+                var inp = allInputs[i];
+                if (inp.offsetParent === null && !inp.offsetWidth) continue;
+                if (inp.disabled || inp.readOnly) continue;
+                var id = (inp.id || '').toLowerCase();
+                var name = (inp.name || '').toLowerCase();
+                var placeholder = (inp.placeholder || '').toLowerCase();
+                var label = '';
+                if (inp.id) {
+                    var lbl = document.querySelector('label[for="' + inp.id + '"]');
+                    if (lbl) label = (lbl.textContent || '').toLowerCase().trim();
+                }
+                if (!lbl) {
+                    var parent = inp.closest('label, .form-group, .field-group, div');
+                    if (parent) {
+                        var parentLabel = parent.querySelector('label, .label, span');
+                        if (parentLabel) label = (parentLabel.textContent || '').toLowerCase().trim();
+                    }
+                }
+                var isAmount = id.indexOf('amount') !== -1 || name.indexOf('amount') !== -1
+                    || placeholder.indexOf('amount') !== -1 || placeholder.indexOf('0.00') !== -1
+                    || label.indexOf('amount') !== -1 || id.indexOf('payment') !== -1;
+                if (isAmount) { amountField = true; continue; }
+                var isHidden = inp.type === 'hidden';
+                if (isHidden) continue;
+                textFields.push({id: inp.id || '', name: inp.name || '', idx: i});
+            }
+            return JSON.stringify({count: textFields.length, hasAmount: amountField, fields: textFields});
+        })();
+        """
+        let result = await executeJS(js) ?? "{}"
+        if let data = result.data(using: .utf8),
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            let count = json["count"] as? Int ?? 0
+            let hasAmount = json["hasAmount"] as? Bool ?? false
+            return (count, hasAmount, "Detected \(count) text fields, amount field: \(hasAmount)")
+        }
+        return (0, false, "Failed to parse form structure")
+    }
+
+    func fillAllFormFields(amount: String) async -> (success: Bool, detail: String) {
+        let amountEscaped = amount.replacingOccurrences(of: "'", with: "\\'")
+        var allValues: [String] = []
+        for _ in 0..<10 {
+            let val = BPointBillerPoolService.generateRandomFieldValue()
+            allValues.append(val.replacingOccurrences(of: "'", with: "\\'"))
+        }
+        let valuesJSON = "[" + allValues.map { "'\($0)'" }.joined(separator: ",") + "]"
+
+        let js = """
+        (function() {
+            var values = \(valuesJSON);
+            var allInputs = document.querySelectorAll('input[type="text"], input[type="number"], input:not([type])');
+            var filled = 0;
+            var amountFilled = false;
+            var nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value');
+            function setVal(el, val) {
+                el.focus();
+                if (nativeSetter && nativeSetter.set) { nativeSetter.set.call(el, val); }
+                else { el.value = val; }
+                el.dispatchEvent(new Event('focus', {bubbles: true}));
+                el.dispatchEvent(new Event('input', {bubbles: true}));
+                el.dispatchEvent(new Event('change', {bubbles: true}));
+                el.dispatchEvent(new Event('blur', {bubbles: true}));
+            }
+            for (var i = 0; i < allInputs.length; i++) {
+                var inp = allInputs[i];
+                if (inp.offsetParent === null && !inp.offsetWidth) continue;
+                if (inp.disabled || inp.readOnly) continue;
+                if (inp.type === 'hidden') continue;
+                var id = (inp.id || '').toLowerCase();
+                var name = (inp.name || '').toLowerCase();
+                var placeholder = (inp.placeholder || '').toLowerCase();
+                var label = '';
+                if (inp.id) {
+                    var lbl = document.querySelector('label[for="' + inp.id + '"]');
+                    if (lbl) label = (lbl.textContent || '').toLowerCase().trim();
+                }
+                var isCard = id.indexOf('card') !== -1 || name.indexOf('card') !== -1
+                    || id.indexOf('cvv') !== -1 || id.indexOf('cvn') !== -1 || id.indexOf('cvc') !== -1
+                    || id.indexOf('expir') !== -1 || name.indexOf('expir') !== -1
+                    || id.indexOf('secur') !== -1 || name.indexOf('secur') !== -1;
+                if (isCard) continue;
+                var isAmount = id.indexOf('amount') !== -1 || name.indexOf('amount') !== -1
+                    || placeholder.indexOf('amount') !== -1 || placeholder.indexOf('0.00') !== -1
+                    || label.indexOf('amount') !== -1 || id.indexOf('paymentamount') !== -1;
+                if (isAmount) {
+                    setVal(inp, '\(amountEscaped)');
+                    amountFilled = true;
+                    continue;
+                }
+                var val = values[filled % values.length];
+                setVal(inp, val);
+                filled++;
+            }
+            return JSON.stringify({filled: filled, amountFilled: amountFilled});
+        })();
+        """
+        let result = await executeJS(js) ?? "{}"
+        if let data = result.data(using: .utf8),
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            let filled = json["filled"] as? Int ?? 0
+            let amountFilled = json["amountFilled"] as? Bool ?? false
+            if filled == 0 && !amountFilled {
+                return (false, "No fields filled")
+            }
+            return (true, "Filled \(filled) text fields, amount: \(amountFilled)")
+        }
+        return (false, "Failed to fill form fields")
+    }
+
+    func checkForValidationErrors() async -> (hasErrors: Bool, detail: String) {
+        let js = """
+        (function() {
+            var errors = [];
+            var errorEls = document.querySelectorAll('.field-validation-error, .validation-summary-errors, .error-message, .text-danger, .invalid-feedback, [class*="error"], [class*="Error"]');
+            for (var i = 0; i < errorEls.length; i++) {
+                var el = errorEls[i];
+                var text = (el.textContent || '').trim();
+                if (text.length > 0 && text.length < 200 && el.offsetParent !== null) {
+                    errors.push(text);
+                }
+            }
+            var redSpans = document.querySelectorAll('span[style*="color"], span[style*="red"], div[style*="red"]');
+            for (var i = 0; i < redSpans.length; i++) {
+                var text = (redSpans[i].textContent || '').trim();
+                if (text.length > 0 && text.length < 200) {
+                    var style = window.getComputedStyle(redSpans[i]);
+                    if (style.color === 'rgb(255, 0, 0)' || style.color.indexOf('red') !== -1
+                        || style.color === 'rgb(220, 53, 69)' || style.color === 'rgb(169, 68, 66)') {
+                        errors.push(text);
+                    }
+                }
+            }
+            var unique = [];
+            for (var i = 0; i < errors.length; i++) {
+                if (unique.indexOf(errors[i]) === -1) unique.push(errors[i]);
+            }
+            return JSON.stringify({hasErrors: unique.length > 0, errors: unique.slice(0, 5)});
+        })();
+        """
+        let result = await executeJS(js) ?? "{}"
+        if let data = result.data(using: .utf8),
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            let hasErrors = json["hasErrors"] as? Bool ?? false
+            let errors = json["errors"] as? [String] ?? []
+            let detail = hasErrors ? errors.joined(separator: "; ") : "No validation errors"
+            return (hasErrors, detail)
+        }
+        return (false, "Could not check for errors")
+    }
+
+    func detectEmailFieldOnPaymentPage() async -> (hasEmail: Bool, detail: String) {
+        let js = """
+        (function() {
+            var inputs = document.querySelectorAll('input[type="email"], input[type="text"], input:not([type])');
+            for (var i = 0; i < inputs.length; i++) {
+                var inp = inputs[i];
+                if (inp.offsetParent === null && !inp.offsetWidth) continue;
+                if (inp.disabled) continue;
+                var id = (inp.id || '').toLowerCase();
+                var name = (inp.name || '').toLowerCase();
+                var placeholder = (inp.placeholder || '').toLowerCase();
+                var autocomplete = (inp.getAttribute('autocomplete') || '').toLowerCase();
+                var label = '';
+                if (inp.id) {
+                    var lbl = document.querySelector('label[for="' + inp.id + '"]');
+                    if (lbl) label = (lbl.textContent || '').toLowerCase().trim();
+                }
+                if (inp.type === 'email') return JSON.stringify({hasEmail: true, reason: 'type=email field found'});
+                if (autocomplete === 'email') return JSON.stringify({hasEmail: true, reason: 'autocomplete=email'});
+                if (id.indexOf('email') !== -1 || name.indexOf('email') !== -1)
+                    return JSON.stringify({hasEmail: true, reason: 'email in id/name: ' + (id || name)});
+                if (placeholder.indexOf('email') !== -1 || placeholder.indexOf('e-mail') !== -1)
+                    return JSON.stringify({hasEmail: true, reason: 'email in placeholder'});
+                if (label.indexOf('email') !== -1 || label.indexOf('e-mail') !== -1)
+                    return JSON.stringify({hasEmail: true, reason: 'email in label: ' + label});
+            }
+            return JSON.stringify({hasEmail: false, reason: 'no email field detected'});
+        })();
+        """
+        let result = await executeJS(js) ?? "{}"
+        if let data = result.data(using: .utf8),
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            let hasEmail = json["hasEmail"] as? Bool ?? false
+            let reason = json["reason"] as? String ?? ""
+            return (hasEmail, reason)
+        }
+        return (false, "Could not detect email field")
+    }
+
+    func waitForContentChange(timeout: TimeInterval = 15) async -> Bool {
+        let timeout = TimeoutResolver.resolveAutomationTimeout(timeout)
+        let start = Date()
+        let originalBody = await executeJS("document.body ? document.body.innerText.substring(0, 300) : ''") ?? ""
+        let originalURL = webView?.url?.absoluteString ?? ""
+
+        while Date().timeIntervalSince(start) < timeout {
+            try? await Task.sleep(for: .milliseconds(750))
+            let currentURL = webView?.url?.absoluteString ?? ""
+            if currentURL != originalURL && !currentURL.isEmpty {
+                try? await Task.sleep(for: .milliseconds(1000))
+                return true
+            }
+            let bodyText = await executeJS("document.body ? document.body.innerText.substring(0, 500) : ''") ?? ""
+            if bodyText != originalBody && bodyText.count > 30 {
+                try? await Task.sleep(for: .milliseconds(500))
+                return true
+            }
+        }
+        return false
     }
 
     func getPageContent() async -> String {

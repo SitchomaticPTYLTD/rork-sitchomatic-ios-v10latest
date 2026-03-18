@@ -10,10 +10,12 @@ class BPointAutomationEngine {
     var stealthEnabled: Bool = false
     var screenshotCropRect: CGRect = .zero
     private let logger = DebugLogger.shared
+    private let billerPool = BPointBillerPoolService.shared
     var onScreenshot: ((PPSRDebugScreenshot) -> Void)?
     var onConnectionFailure: ((String) -> Void)?
     var onUnusualFailure: ((String) -> Void)?
     var onLog: ((String, PPSRLogEntry.Level) -> Void)?
+    var onBillerBlacklisted: ((String, String) -> Void)?
     private let dohService = PPSRDoHService.shared
     private let networkFactory = NetworkSessionFactory.shared
 
@@ -27,7 +29,7 @@ class BPointAutomationEngine {
         let urlSession = URLSession(configuration: config)
         defer { urlSession.invalidateAndCancel() }
 
-        var request = URLRequest(url: BPointWebSession.targetURL, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData, timeoutInterval: 10)
+        var request = URLRequest(url: BPointBillerPoolService.billerLookupURL, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData, timeoutInterval: 10)
         request.httpMethod = "HEAD"
         request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15", forHTTPHeaderField: "User-Agent")
 
@@ -51,8 +53,8 @@ class BPointAutomationEngine {
         let sessionId = "bpoint_\(check.card.displayNumber.suffix(8))_\(UUID().uuidString.prefix(6))"
         check.startedAt = Date()
 
-        logger.startSession(sessionId, category: .ppsr, message: "Starting BPoint check for \(check.card.brand) \(check.card.displayNumber) — $\(String(format: "%.2f", chargeAmount))")
-        logger.log("Config: timeout=\(Int(timeout))s stealth=\(stealthEnabled) amount=$\(String(format: "%.2f", chargeAmount))", category: .ppsr, level: .debug, sessionId: sessionId)
+        logger.startSession(sessionId, category: .ppsr, message: "Starting BPoint pool check for \(check.card.brand) \(check.card.displayNumber) — $\(String(format: "%.2f", chargeAmount))")
+        logger.log("Config: timeout=\(Int(timeout))s stealth=\(stealthEnabled) amount=$\(String(format: "%.2f", chargeAmount)) pool=\(billerPool.activeBillerCount)/\(billerPool.totalBillerCount)", category: .ppsr, level: .debug, sessionId: sessionId)
 
         if !skipPreTest {
             let preCheck = await runPreTestNetworkCheck()
@@ -63,6 +65,12 @@ class BPointAutomationEngine {
                 return .connectionFailure
             }
             check.logs.append(PPSRLogEntry(message: preCheck.detail, level: .success))
+        }
+
+        guard !billerPool.poolExhausted else {
+            failCheck(check, message: "Biller pool exhausted — all billers blacklisted")
+            onUnusualFailure?("BPoint biller pool exhausted")
+            return .connectionFailure
         }
 
         let session = BPointWebSession()
@@ -81,7 +89,7 @@ class BPointAutomationEngine {
 
         logger.startTimer(key: sessionId)
         let deadline = Date().addingTimeInterval(timeout)
-        let outcome: CheckOutcome = await performBPointCheck(session: session, check: check, chargeAmount: chargeAmount, sessionId: sessionId, deadline: deadline)
+        let outcome: CheckOutcome = await performBPointPoolCheck(session: session, check: check, chargeAmount: chargeAmount, sessionId: sessionId, deadline: deadline)
         let totalMs = logger.stopTimer(key: sessionId)
 
         if outcome == .timeout {
@@ -101,110 +109,172 @@ class BPointAutomationEngine {
         Date() >= deadline
     }
 
-    private func performBPointCheck(session: BPointWebSession, check: PPSRCheck, chargeAmount: Double, sessionId: String, deadline: Date) async -> CheckOutcome {
-        advanceTo(.fillingVIN, check: check, message: "Loading BPoint payment page: \(BPointWebSession.targetURL.absoluteString)")
-        logger.log("Phase: LOAD BPOINT PAGE", category: .automation, level: .info, sessionId: sessionId)
+    private func performBPointPoolCheck(session: BPointWebSession, check: PPSRCheck, chargeAmount: Double, sessionId: String, deadline: Date) async -> CheckOutcome {
+        let amountStr = String(format: "%.2f", chargeAmount)
+        let isVisa = check.card.number.hasPrefix("4")
+        let brandName = isVisa ? "Visa" : "Mastercard"
+        var billerAttempt = 0
+        let maxBillerAttempts = min(billerPool.activeBillerCount, 50)
+        var triedBillers: Set<String> = []
 
-        if stealthEnabled {
-            await performDoHPreflight(check: check, sessionId: sessionId)
-        }
+        while billerAttempt < maxBillerAttempts && !isTimedOut(deadline) {
+            billerAttempt += 1
 
-        var loaded = false
-        for attempt in 1...3 {
-            loaded = await session.loadPage(timeout: AutomationSettings.minimumTimeoutSeconds)
-            if loaded {
-                logger.log("BPoint page load attempt \(attempt)/3 SUCCESS", category: .webView, level: .success, sessionId: sessionId)
-                break
+            guard let billerCode = billerPool.getRandomActiveBiller() else {
+                check.logs.append(PPSRLogEntry(message: "Pool exhausted after \(billerAttempt - 1) attempts", level: .error))
+                failCheck(check, message: "Biller pool exhausted")
+                return .connectionFailure
             }
-            check.logs.append(PPSRLogEntry(message: "BPoint page load attempt \(attempt)/3 failed", level: .warning))
-            if attempt < 3 {
-                try? await Task.sleep(for: .seconds(Double(attempt) * 2))
-                if attempt == 2 {
+
+            if triedBillers.contains(billerCode) { continue }
+            triedBillers.insert(billerCode)
+
+            check.logs.append(PPSRLogEntry(message: "Biller attempt \(billerAttempt): code \(billerCode)", level: .info))
+            logger.log("Phase: BILLER ATTEMPT \(billerAttempt) — code \(billerCode)", category: .automation, level: .info, sessionId: sessionId)
+
+            advanceTo(.fillingVIN, check: check, message: "Loading biller lookup page (attempt \(billerAttempt))...")
+
+            if stealthEnabled && billerAttempt == 1 {
+                await performDoHPreflight(check: check, sessionId: sessionId)
+            }
+
+            var loaded = false
+            for loadAttempt in 1...2 {
+                if billerAttempt == 1 && loadAttempt == 1 {
+                    loaded = await session.loadBillerLookupPage(timeout: AutomationSettings.minimumTimeoutSeconds)
+                } else {
                     session.tearDown()
                     session.stealthEnabled = stealthEnabled
                     session.setUp()
+                    loaded = await session.loadBillerLookupPage(timeout: AutomationSettings.minimumTimeoutSeconds)
                 }
+                if loaded { break }
+                check.logs.append(PPSRLogEntry(message: "Lookup page load attempt \(loadAttempt)/2 failed", level: .warning))
             }
-        }
 
-        guard loaded else {
-            let errorDetail = session.lastNavigationError ?? "Unknown error"
-            failCheck(check, message: "FATAL: Failed to load BPoint page after 3 attempts — \(errorDetail)")
-            await captureScreenshotForCheck(session: session, check: check, step: "page_load_failed", note: "BPoint page failed to load", autoResult: .unknown)
-            onConnectionFailure?("BPoint page load failed: \(errorDetail)")
-            return .connectionFailure
-        }
-
-        guard !isTimedOut(deadline) else { return .timeout }
-
-        let pageTitle = await session.getPageTitle()
-        check.logs.append(PPSRLogEntry(message: "BPoint page loaded: \"\(pageTitle)\"", level: .info))
-
-        try? await Task.sleep(for: .seconds(2))
-
-        let refNumber = generateRandomReference()
-        let amountStr = String(format: "%.2f", chargeAmount)
-
-        logger.log("Phase: FILL REFERENCE + AMOUNT", category: .automation, level: .info, sessionId: sessionId)
-        advanceTo(.fillingVIN, check: check, message: "Filling reference: \(refNumber)")
-
-        let refResult = await retryFill(session: session, check: check, fieldName: "Reference Number") {
-            await session.fillReferenceNumber(refNumber)
-        }
-        guard refResult else {
-            await captureScreenshotForCheck(session: session, check: check, step: "ref_fill_failed", note: "Reference fill failed", autoResult: .fail)
-            return .connectionFailure
-        }
-        guard !isTimedOut(deadline) else { return .timeout }
-        try? await Task.sleep(for: .milliseconds(300))
-
-        advanceTo(.submittingSearch, check: check, message: "Filling amount: $\(amountStr)")
-        let amountResult = await retryFill(session: session, check: check, fieldName: "Amount") {
-            await session.fillAmount(amountStr)
-        }
-        guard amountResult else {
-            await captureScreenshotForCheck(session: session, check: check, step: "amount_fill_failed", note: "Amount fill failed", autoResult: .fail)
-            return .connectionFailure
-        }
-        guard !isTimedOut(deadline) else { return .timeout }
-        try? await Task.sleep(for: .milliseconds(500))
-
-        let isVisa = check.card.number.hasPrefix("4")
-        let brandName = isVisa ? "Visa" : "Mastercard"
-        advanceTo(.submittingSearch, check: check, message: "Selecting card brand: \(brandName)")
-        logger.log("Phase: SELECT CARD BRAND — \(brandName)", category: .automation, level: .info, sessionId: sessionId)
-
-        var brandClicked = false
-        for attempt in 1...3 {
-            let brandResult = await session.clickCardBrandLogo(isVisa: isVisa)
-            if brandResult.success {
-                check.logs.append(PPSRLogEntry(message: "\(brandName) selected: \(brandResult.detail)", level: .success))
-                brandClicked = true
-                break
+            guard loaded else {
+                let errorDetail = session.lastNavigationError ?? "Unknown error"
+                check.logs.append(PPSRLogEntry(message: "Failed to load biller lookup page — \(errorDetail)", level: .error))
+                if billerAttempt == 1 {
+                    failCheck(check, message: "FATAL: Failed to load biller lookup page — \(errorDetail)")
+                    onConnectionFailure?("BPoint lookup page failed: \(errorDetail)")
+                    return .connectionFailure
+                }
+                continue
             }
-            check.logs.append(PPSRLogEntry(message: "\(brandName) click attempt \(attempt)/3 failed: \(brandResult.detail)", level: .warning))
-            if attempt < 3 { try? await Task.sleep(for: .seconds(1)) }
+
+            guard !isTimedOut(deadline) else { return .timeout }
+            try? await Task.sleep(for: .seconds(1))
+
+            advanceTo(.fillingVIN, check: check, message: "Entering biller code: \(billerCode)")
+            let searchResult = await session.enterBillerCodeAndSearch(billerCode)
+            if !searchResult.success {
+                check.logs.append(PPSRLogEntry(message: "Biller search failed: \(searchResult.detail)", level: .warning))
+                blacklistBiller(billerCode, reason: "Biller search failed: \(searchResult.detail)")
+                continue
+            }
+            check.logs.append(PPSRLogEntry(message: "Biller search: \(searchResult.detail)", level: .success))
+
+            guard !isTimedOut(deadline) else { return .timeout }
+
+            let contentChanged = await session.waitForContentChange(timeout: 10)
+            if !contentChanged {
+                check.logs.append(PPSRLogEntry(message: "No content change after biller search — blacklisting \(billerCode)", level: .warning))
+                blacklistBiller(billerCode, reason: "No content change after search")
+                continue
+            }
+            try? await Task.sleep(for: .seconds(1.5))
+
+            let validationCheck1 = await session.checkForValidationErrors()
+            if validationCheck1.hasErrors {
+                check.logs.append(PPSRLogEntry(message: "Validation errors on biller form: \(validationCheck1.detail) — blacklisting \(billerCode)", level: .warning))
+                blacklistBiller(billerCode, reason: "Form validation error: \(validationCheck1.detail)")
+                continue
+            }
+
+            guard !isTimedOut(deadline) else { return .timeout }
+
+            advanceTo(.submittingSearch, check: check, message: "Auto-filling form fields for biller \(billerCode)...")
+            let fillResult = await session.fillAllFormFields(amount: amountStr)
+            if !fillResult.success {
+                check.logs.append(PPSRLogEntry(message: "Form fill failed: \(fillResult.detail) — blacklisting \(billerCode)", level: .warning))
+                blacklistBiller(billerCode, reason: "Form fill failed: \(fillResult.detail)")
+                continue
+            }
+            check.logs.append(PPSRLogEntry(message: "Form filled: \(fillResult.detail)", level: .success))
+
+            try? await Task.sleep(for: .seconds(1))
+
+            let validationCheck2 = await session.checkForValidationErrors()
+            if validationCheck2.hasErrors {
+                check.logs.append(PPSRLogEntry(message: "Post-fill validation errors: \(validationCheck2.detail) — blacklisting \(billerCode)", level: .warning))
+                blacklistBiller(billerCode, reason: "Post-fill validation: \(validationCheck2.detail)")
+                continue
+            }
+
+            guard !isTimedOut(deadline) else { return .timeout }
+
+            advanceTo(.submittingSearch, check: check, message: "Selecting card brand: \(brandName)")
+            logger.log("Phase: SELECT CARD BRAND — \(brandName)", category: .automation, level: .info, sessionId: sessionId)
+
+            var brandClicked = false
+            for attempt in 1...3 {
+                let brandResult = await session.clickCardBrandLogo(isVisa: isVisa)
+                if brandResult.success {
+                    check.logs.append(PPSRLogEntry(message: "\(brandName) selected: \(brandResult.detail)", level: .success))
+                    brandClicked = true
+                    break
+                }
+                check.logs.append(PPSRLogEntry(message: "\(brandName) click attempt \(attempt)/3 failed: \(brandResult.detail)", level: .warning))
+                if attempt < 3 { try? await Task.sleep(for: .seconds(1)) }
+            }
+
+            if !brandClicked {
+                check.logs.append(PPSRLogEntry(message: "Could not click \(brandName) logo — attempting to proceed anyway", level: .warning))
+            }
+
+            guard !isTimedOut(deadline) else { return .timeout }
+            try? await Task.sleep(for: .seconds(2))
+
+            let remainingForNav = max(5, deadline.timeIntervalSinceNow - 5)
+            let navigated = await session.waitForNavigation(timeout: min(TimeoutResolver.resolveAutomationTimeout(15), remainingForNav))
+            if navigated {
+                check.logs.append(PPSRLogEntry(message: "Navigated to payment page after brand selection", level: .success))
+            } else {
+                check.logs.append(PPSRLogEntry(message: "No navigation after brand click — checking if payment fields visible", level: .warning))
+            }
+
+            guard !isTimedOut(deadline) else { return .timeout }
+            try? await Task.sleep(for: .seconds(2))
+
+            let emailCheck = await session.detectEmailFieldOnPaymentPage()
+            if emailCheck.hasEmail {
+                check.logs.append(PPSRLogEntry(message: "Email field detected on payment page: \(emailCheck.detail) — blacklisting \(billerCode)", level: .warning))
+                blacklistBiller(billerCode, reason: "Email field required: \(emailCheck.detail)")
+                continue
+            }
+
+            let validationCheck3 = await session.checkForValidationErrors()
+            if validationCheck3.hasErrors {
+                check.logs.append(PPSRLogEntry(message: "Payment page has validation errors: \(validationCheck3.detail) — blacklisting \(billerCode)", level: .warning))
+                blacklistBiller(billerCode, reason: "Payment page errors: \(validationCheck3.detail)")
+                continue
+            }
+
+            check.logs.append(PPSRLogEntry(message: "Biller \(billerCode) passed all checks — proceeding to card entry", level: .success))
+            await captureScreenshotForCheck(session: session, check: check, step: "payment_page", note: "Payment page loaded (biller \(billerCode))", autoResult: .unknown)
+
+            return await performCardEntryAndSubmit(session: session, check: check, sessionId: sessionId, deadline: deadline)
         }
 
-        if !brandClicked {
-            check.logs.append(PPSRLogEntry(message: "Could not click \(brandName) logo — attempting to proceed anyway", level: .warning))
-        }
+        if isTimedOut(deadline) { return .timeout }
 
-        guard !isTimedOut(deadline) else { return .timeout }
-        try? await Task.sleep(for: .seconds(2))
+        failCheck(check, message: "All biller attempts exhausted (\(billerAttempt) tried)")
+        onUnusualFailure?("BPoint all \(billerAttempt) biller attempts failed for \(check.card.displayNumber)")
+        return .connectionFailure
+    }
 
-        let remainingForNav = max(5, deadline.timeIntervalSinceNow - 5)
-        let navigated = await session.waitForNavigation(timeout: min(TimeoutResolver.resolveAutomationTimeout(15), remainingForNav))
-        if navigated {
-            check.logs.append(PPSRLogEntry(message: "Navigated to payment page after brand selection", level: .success))
-        } else {
-            check.logs.append(PPSRLogEntry(message: "No navigation after brand click — checking if payment fields are already visible", level: .warning))
-        }
-
-        guard !isTimedOut(deadline) else { return .timeout }
-        try? await Task.sleep(for: .seconds(2))
-        await captureScreenshotForCheck(session: session, check: check, step: "payment_page", note: "Payment page loaded", autoResult: .unknown)
-
+    private func performCardEntryAndSubmit(session: BPointWebSession, check: PPSRCheck, sessionId: String, deadline: Date) async -> CheckOutcome {
         logger.log("Phase: FILL PAYMENT DETAILS", category: .automation, level: .info, sessionId: sessionId)
         advanceTo(.enteringPayment, check: check, message: "Filling card: \(check.card.brand) \(check.card.displayNumber)")
 
@@ -342,6 +412,11 @@ class BPointAutomationEngine {
         }
     }
 
+    private func blacklistBiller(_ code: String, reason: String) {
+        billerPool.blacklistBiller(code: code, reason: reason)
+        onBillerBlacklisted?(code, reason)
+    }
+
     private struct BPointEvaluation {
         let outcome: CheckOutcome
         let score: Int
@@ -429,14 +504,6 @@ class BPointAutomationEngine {
         return BPointEvaluation(outcome: .uncertain, score: max(failScore, passScore), reason: "No clear signals (pass:\(passScore) fail:\(failScore)) \"\(snippet)\"")
     }
 
-    private func generateRandomReference() -> String {
-        var digits = ""
-        for _ in 0..<11 {
-            digits.append(String(Int.random(in: 0...9)))
-        }
-        return digits
-    }
-
     private func retryFill(
         session: BPointWebSession,
         check: PPSRCheck,
@@ -498,7 +565,7 @@ class BPointAutomationEngine {
     }
 
     private func performDoHPreflight(check: PPSRCheck, sessionId: String) async {
-        guard let host = BPointWebSession.targetURL.host else { return }
+        guard let host = BPointBillerPoolService.billerLookupURL.host else { return }
         let provider = dohService.currentProvider
         check.logs.append(PPSRLogEntry(message: "DoH preflight: resolving \(host) via \(provider.name)", level: .info))
         if let result = await dohService.preflightResolve(hostname: host) {

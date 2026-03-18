@@ -22,6 +22,7 @@ struct PPSRSettingsView: View {
         List {
             connectionModeSection
             batchPresetsSection
+            billerPoolSection
             automationSection
             autoRetrySection
             concurrencySection
@@ -199,6 +200,33 @@ struct PPSRSettingsView: View {
             Text("Batch Presets")
         } footer: {
             Text("Save and quickly switch between different batch configurations.")
+        }
+    }
+
+    private var billerPoolSection: some View {
+        Section {
+            NavigationLink {
+                BPointPoolManagementView()
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "building.columns.fill").foregroundStyle(.indigo)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("BPoint Biller Pool").font(.body)
+                        let pool = BPointBillerPoolService.shared
+                        Text("\(pool.activeBillerCount) active / \(pool.blacklistedCount) blocked / \(pool.totalBillerCount) total")
+                            .font(.caption2).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    let pool = BPointBillerPoolService.shared
+                    Text(String(format: "%.0f%%", pool.poolHealthPercentage))
+                        .font(.system(.caption, design: .monospaced, weight: .bold))
+                        .foregroundStyle(pool.poolHealthPercentage > 75 ? .green : pool.poolHealthPercentage > 40 ? .yellow : .red)
+                }
+            }
+        } header: {
+            Label("BPoint Biller Pool", systemImage: "circle.grid.3x3.fill")
+        } footer: {
+            Text("Manage the pool of \(BPointBillerPoolService.shared.totalBillerCount) biller codes used for BPoint tests. Bad billers are auto-blacklisted.")
         }
     }
 
