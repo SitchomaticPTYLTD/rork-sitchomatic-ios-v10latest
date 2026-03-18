@@ -592,7 +592,7 @@ class DNSPoolService {
                 }
             }
         }
-        if disabledCount > 0 { persistManagedServers() }
+        persistManagedServers()
         logger.log("DNSPool: Test All complete — \(results.filter(\.passed).count) passed, \(disabledCount) auto-disabled", category: .dns, level: disabledCount == 0 ? .success : .warning)
         return (results, disabledCount)
     }
