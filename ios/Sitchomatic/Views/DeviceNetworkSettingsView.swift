@@ -26,7 +26,7 @@ struct DeviceNetworkSettingsView: View {
                 unitedIPOptionsSection
             }
             proxyManagerLinkSection
-            if deviceProxy.shouldShowWireProxySection || deviceProxy.shouldShowOpenVPNSection {
+            if isTunnelRelevantMode {
                 tunnelServerSection
             }
             if LoginURLRotationService.shared.isIgnitionMode {
@@ -942,6 +942,11 @@ struct DeviceNetworkSettingsView: View {
     }
 
     // MARK: - Helpers
+
+    private var isTunnelRelevantMode: Bool {
+        let mode = proxyService.unifiedConnectionMode
+        return mode == .wireguard || mode == .openvpn || mode == .hybrid
+    }
 
     private var modeColor: Color {
         switch proxyService.unifiedConnectionMode {

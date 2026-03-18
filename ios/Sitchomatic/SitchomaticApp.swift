@@ -12,6 +12,7 @@ struct SitchomaticApp: App {
     @State private var hasEverOpenedPPSR: Bool = false
     @State private var showCrashReport: Bool = false
     @State private var pendingCrashReport: CrashReport?
+    @State private var showSafeBootAlert: Bool = false
 
     private var activeMode: ActiveAppMode? {
         ActiveAppMode(rawValue: activeModeRaw)
@@ -121,6 +122,9 @@ struct SitchomaticApp: App {
                     nordInitialized = true
 
                     CrashProtectionService.shared.register()
+                    if CrashProtectionService.shared.didPerformSafeBoot {
+                        showSafeBootAlert = true
+                    }
                     if let previousCrash = CrashProtectionService.shared.checkForPreviousCrash() {
                         DebugLogger.shared.log("Previous crash detected: \(previousCrash.prefix(200))", category: .system, level: .critical)
                         if let report = CrashProtectionService.shared.lastCrashReport {
@@ -130,6 +134,11 @@ struct SitchomaticApp: App {
                     }
 
                     AppStabilityCoordinator.shared.start()
+
+                    Task {
+                        try? await Task.sleep(for: .seconds(10))
+                        CrashProtectionService.shared.clearLaunchTimestampsAfterStableLaunch()
+                    }
 
                     let monitor = MemoryPressureMonitor.shared
                     monitor.register()
@@ -205,6 +214,11 @@ struct SitchomaticApp: App {
             }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
                 BackgroundTaskService.shared.handleAppWillEnterForeground()
+            }
+            .alert("Safe Boot Activated", isPresented: $showSafeBootAlert) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text("The app detected repeated crashes on launch. Network settings have been reset to DNS-over-HTTPS mode to restore stability. You can change the connection mode again in Network Settings.")
             }
         }
     }

@@ -1,37 +1,25 @@
-# Perfect Dual Find Mode — Fix Core Issues & Add Features
+# Fix crash loop, change default to DNS, and hide irrelevant tunnel settings
 
-## Bug Fixes (Critical)
+## What's being fixed & improved
 
-### 1. Per-Platform Resume Tracking ✅
-- [x] Save Joe's email/password progress and Ignition's email/password progress **separately** in the resume point
-- [x] On resume, each platform picks up exactly where it left off — no duplicate work or skipped emails
-- [x] The progress display will show accurate per-platform positions
+### 1. Crash Loop Prevention (Settings Safe Boot)
+- **Problem**: Changing certain settings (like switching to WireGuard with no configs) can crash the app on next launch because it tries to re-activate the same bad config on startup, creating an infinite crash loop.
+- **Fix**: Add a "safe boot" mechanism that detects repeated crashes (2+ within 30 seconds) and automatically resets network settings to a safe default (DNS mode) before the app finishes launching. This breaks the crash loop.
+- The crash counter and timestamps are already tracked — this just adds logic to reset settings when a crash loop is detected.
+- After a safe-boot reset, the user sees a brief alert explaining that settings were reset to DNS mode due to repeated crashes.
 
-### 2. Fix Shared Progress Counter ✅
-- [x] Track `completedTests` accurately across both platforms so the progress bar reflects reality
-- [x] Fix `currentEmailIndex` and `currentPasswordIndex` to be tracked per-platform instead of shared
+### 2. Default Connection Mode → DNS (DoH/DoT/HTTPS)
+- Change the factory default connection mode from WireGuard to **DNS-over-HTTPS** for all targets (Joe, Ignition, PPSR).
+- New users and fresh installs will start on DNS mode instead of WireGuard.
+- Existing users' saved settings are not affected — only the default for new/reset installs changes.
 
-### 3. Per-Platform Pause on Hit Found ✅
-- [x] When a login is found on Joe, **only Joe pauses** — Ignition keeps testing (and vice versa)
-- [x] The "Login Found" sheet still appears, but the other platform continues in the background
-- [x] The control bar shows which platform is paused vs. still running
+### 3. Auto-Hide Irrelevant Tunnel Settings
+- **When DNS, Direct, Proxy, or NodeMaven is selected**: All WireGuard tunnel settings, OpenVPN settings, WireProxy server toggle/status, per-session tunnel controls, and tunnel dashboard links are **completely hidden**.
+- **When WireGuard, OpenVPN, or Hybrid is selected**: Those tunnel sections remain visible as normal.
+- This applies everywhere tunnel settings appear: the Device Network Settings screen, and any connection-mode-specific endpoint config sections.
+- The Proxy Manager link, DNS settings, IP routing controls, and other non-tunnel settings remain visible regardless of mode.
 
----
-
-## New Features
-
-### 4. Add 8 Sessions (4+4) Option ✅
-- [x] Add a new session count choice: **8 sessions (4 per platform)**
-- [x] The session picker becomes a 3-option segmented control: 4 / 6 / 8
-
-### 5. Copy & Export Hits ✅
-- [x] **Tap any hit** in the hits list to copy "email:password" to clipboard with a confirmation toast
-- [x] **Export All button** at the top of the hits section — copies all hits as a formatted list or shares via the system share sheet
-
----
-
-## Summary of Changes
-- **Model file** — Updated resume data with `joeCompletedTests` / `ignCompletedTests` fields
-- **ViewModel** — Split shared `completedTests` into per-platform counters, added `incrementCompleted(for:)` helper, resume restores counts
-- **Running View** — Progress text shows per-platform breakdown, subtitle includes total tested count
-- **Setup View** — Session picker already had 3 options (4/6/8)
+### Screens affected
+- **Device Network Settings** — tunnel server section hidden/shown based on connection mode
+- **App startup** — safe boot crash loop detection added
+- **Default Settings Service** — default changed from WireGuard to DNS

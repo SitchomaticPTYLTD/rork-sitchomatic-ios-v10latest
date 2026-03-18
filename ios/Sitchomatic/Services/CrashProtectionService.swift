@@ -20,6 +20,10 @@ final class CrashProtectionService {
 
     private let stateFile = "crash_protection_state.json"
     private let crashReportFile = "crash_report_pending.json"
+    private let launchTimestampFile = "launch_timestamps.json"
+    private(set) var didPerformSafeBoot: Bool = false
+    private let safeBootCrashThreshold = 2
+    private let safeBootWindowSeconds: TimeInterval = 30
 
     // MARK: - Cleanup Escalation
 
@@ -49,6 +53,8 @@ final class CrashProtectionService {
         isRegistered = true
         installSignalHandlers()
         restoreState()
+        checkAndPerformSafeBootIfNeeded()
+        recordLaunchTimestamp()
         startAdaptiveMemoryTrimming()
         startContinuousLogFlush()
         let t = memoryMonitor.thresholds
@@ -403,5 +409,61 @@ final class CrashProtectionService {
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
         if let count = json["crashCount"] as? Int { crashCount = count }
         if let kills = json["emergencyKills"] as? Int { emergencyBatchKillCount = kills }
+    }
+
+    // MARK: - Safe Boot (Crash Loop Prevention)
+
+    private func checkAndPerformSafeBootIfNeeded() {
+        let timestamps = loadLaunchTimestamps()
+        let now = Date().timeIntervalSince1970
+        let recentCrashes = timestamps.filter { now - $0 < safeBootWindowSeconds }
+
+        if recentCrashes.count >= safeBootCrashThreshold {
+            logger.log("CrashProtection: SAFE BOOT — \(recentCrashes.count) crashes in \(Int(safeBootWindowSeconds))s window — resetting network to DNS", category: .system, level: .critical)
+            resetNetworkSettingsToSafe()
+            didPerformSafeBoot = true
+            clearLaunchTimestamps()
+        }
+    }
+
+    private func resetNetworkSettingsToSafe() {
+        let proxyService = ProxyRotationService.shared
+        proxyService.setUnifiedConnectionMode(.dns)
+
+        let deviceProxy = DeviceProxyService.shared
+        deviceProxy.ipRoutingMode = .separatePerSession
+        deviceProxy.localProxyEnabled = false
+
+        logger.log("CrashProtection: network settings reset to DNS/Separate-Per-Session (safe mode)", category: .system, level: .critical)
+    }
+
+    private func recordLaunchTimestamp() {
+        var timestamps = loadLaunchTimestamps()
+        let now = Date().timeIntervalSince1970
+        timestamps.append(now)
+        timestamps = timestamps.filter { now - $0 < 120 }
+        saveLaunchTimestamps(timestamps)
+    }
+
+    func clearLaunchTimestampsAfterStableLaunch() {
+        clearLaunchTimestamps()
+    }
+
+    private func loadLaunchTimestamps() -> [TimeInterval] {
+        guard let url = documentsURL(launchTimestampFile),
+              let data = try? Data(contentsOf: url),
+              let arr = try? JSONSerialization.jsonObject(with: data) as? [TimeInterval] else { return [] }
+        return arr
+    }
+
+    private func saveLaunchTimestamps(_ timestamps: [TimeInterval]) {
+        guard let url = documentsURL(launchTimestampFile),
+              let data = try? JSONSerialization.data(withJSONObject: timestamps) else { return }
+        try? data.write(to: url, options: .atomic)
+    }
+
+    private func clearLaunchTimestamps() {
+        guard let url = documentsURL(launchTimestampFile) else { return }
+        try? FileManager.default.removeItem(at: url)
     }
 }

@@ -18,10 +18,10 @@ class DefaultSettingsService {
 
         urlService.enableAllURLs()
 
-        proxyService.setConnectionMode(.wireguard, for: .joe)
-        proxyService.setConnectionMode(.wireguard, for: .ignition)
-        proxyService.setConnectionMode(.wireguard, for: .ppsr)
-        proxyService.setUnifiedConnectionMode(.wireguard)
+        proxyService.setConnectionMode(.dns, for: .joe)
+        proxyService.setConnectionMode(.dns, for: .ignition)
+        proxyService.setConnectionMode(.dns, for: .ppsr)
+        proxyService.setUnifiedConnectionMode(.dns)
 
         let deviceProxy = DeviceProxyService.shared
         deviceProxy.ipRoutingMode = .appWideUnited
