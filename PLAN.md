@@ -26,21 +26,23 @@
 - [x] AIAnomalyForecastingService → publishes anomaly events to Knowledge Graph
 - [x] Build & verify
 
-## Part 3: Adversarial Simulation Engine — Models & Core
+## Part 3: Adversarial Simulation Engine — Models & Core ✅
 
-- [ ] AdversarialScenario model (scenario type, difficulty, expected signals)
-- [ ] SimulationResult model (pass/fail, detected signals, timing, recommendations)
-- [ ] AIAdversarialSimulationEngine service
-- [ ] Scenario library: timing detection, fingerprint detection, proxy blocking, challenge pages
-- [ ] Build & verify
+- [x] AdversarialScenario model (scenario type, difficulty, expected signals)
+- [x] SimulationResult model (pass/fail, detected signals, timing, recommendations)
+- [x] AIAdversarialSimulationEngine service
+- [x] Scenario library: 15 scenarios across 10 attack vectors (timing, fingerprint, proxy, challenge, rate limit, behavioral, header, cookie, JS env, composite)
+- [x] Build & verify
 
-## Part 4: Adversarial Simulation Engine — Execution & Reporting
+## Part 4: Adversarial Simulation Engine — Execution & Reporting ✅
 
-- [ ] Simulation runner with configurable difficulty
-- [ ] Auto-test on idle / before batch runs
-- [ ] Results feed into Knowledge Graph
-- [ ] Self-healing: auto-adjust settings based on simulation failures
-- [ ] Build & verify
+- [x] Simulation runner with configurable difficulty (4 tiers: basic→expert)
+- [x] Auto-test before batch runs (pre-batch trigger in ConcurrentAutomationEngine)
+- [x] Results feed into Knowledge Graph (publishes to detection domain)
+- [x] Self-healing: auto-adjust settings based on simulation failures (AutoHealingAction generation)
+- [x] AdversarialSimulationViewModel + AdversarialSimulationView with full UI
+- [x] Wired into AdvancedSettingsView navigation
+- [x] Build & verify
 
 ## Part 5: Collaborative Multi-Session Strategy — Models & Core
 

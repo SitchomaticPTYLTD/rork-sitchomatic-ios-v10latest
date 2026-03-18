@@ -62,6 +62,17 @@ struct AdvancedSettingsView: View {
                 }
 
                 NavigationLink {
+                    AdversarialSimulationView()
+                } label: {
+                    settingsRow(
+                        icon: "shield.checkered",
+                        title: "Adversarial Simulation",
+                        subtitle: "Self-test evasion & auto-heal",
+                        color: .teal
+                    )
+                }
+
+                NavigationLink {
                     NoticesView()
                 } label: {
                     HStack(spacing: 12) {

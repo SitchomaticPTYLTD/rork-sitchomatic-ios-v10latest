@@ -22,6 +22,7 @@ class ConcurrentAutomationEngine {
     private let webViewMemoryManager = AIWebViewMemoryLifecycleManager.shared
     private let batchPreOptimizer = AIPredictiveBatchPreOptimizer.shared
     private let credentialTriage = AICredentialTriageService.shared
+    private let adversarialSim = AIAdversarialSimulationEngine.shared
 
     private(set) var isRunning: Bool = false
     private var cancelFlag: Bool = false
@@ -240,6 +241,8 @@ class ConcurrentAutomationEngine {
         }
 
         let healthyURLs = await runPreflight(urls: urls, netConfig: netConfig, proxyTarget: proxyTarget, stealthEnabled: stealthOn)
+
+        await runPreBatchAdversarialSim(host: healthyURLs.first?.host ?? urls.first?.host ?? "unknown", batchId: batchId)
 
         var allResults: [(String, LoginOutcome)] = []
         var carryOverIndices: [Int] = []
@@ -954,6 +957,22 @@ class ConcurrentAutomationEngine {
         }
         logger.log("ConcurrentEngine: WireProxy health gate FAILED after restart attempt — proceeding with caution", category: .network, level: .critical)
         return false
+    }
+
+    private func runPreBatchAdversarialSim(host: String, batchId: String) async {
+        guard adversarialSim.shouldRunSimulation(host: host, cooldownMinutes: 15) else {
+            logger.log("ConcurrentEngine: adversarial sim skipped for \(host) — cooldown active", category: .automation, level: .debug)
+            return
+        }
+        logger.log("ConcurrentEngine: running pre-batch adversarial simulation for \(host)", category: .automation, level: .info)
+        let suite = await adversarialSim.runSimulation(host: host, difficulty: .intermediate, scenarioTypes: [.timingDetection, .fingerprintDetection, .proxyBlocking, .rateLimiting])
+        if suite.overallVerdict == .critical {
+            logger.log("ConcurrentEngine: adversarial sim CRITICAL for \(host) — score \(String(format: "%.0f%%", suite.overallScore * 100)). Auto-healing actions queued.", category: .automation, level: .critical)
+        } else if suite.overallVerdict == .failed {
+            logger.log("ConcurrentEngine: adversarial sim FAILED for \(host) — score \(String(format: "%.0f%%", suite.overallScore * 100))", category: .automation, level: .warning)
+        } else {
+            logger.log("ConcurrentEngine: adversarial sim \(suite.overallVerdict.label) for \(host) — score \(String(format: "%.0f%%", suite.overallScore * 100))", category: .automation, level: .info)
+        }
     }
 
     private func performProxyPreCheck(batchId: String) async -> Bool {
