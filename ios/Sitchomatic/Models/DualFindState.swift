@@ -56,6 +56,76 @@ nonisolated enum DualFindTestOutcome: Sendable {
     case disabled
     case transient
     case noAccount
+    case unsure
+}
+
+nonisolated enum DualFindInterventionAction: String, Codable, Sendable, CaseIterable, Identifiable {
+    case markSuccess = "Mark as Success"
+    case markNoAccount = "Mark as No Account"
+    case markDisabled = "Mark as Disabled"
+    case restartWithNewIP = "Restart with New IP"
+    case pressSubmitAgain = "Press Submit 3 More Times"
+    case disableURL = "Disable This URL"
+    case disableViewport = "Disable Viewport"
+    case skipAndContinue = "Skip & Continue"
+
+    nonisolated var id: String { rawValue }
+
+    var icon: String {
+        switch self {
+        case .markSuccess: "checkmark.circle.fill"
+        case .markNoAccount: "xmark.circle.fill"
+        case .markDisabled: "person.slash.fill"
+        case .restartWithNewIP: "arrow.triangle.2.circlepath"
+        case .pressSubmitAgain: "hand.tap.fill"
+        case .disableURL: "link.badge.plus"
+        case .disableViewport: "rectangle.slash"
+        case .skipAndContinue: "forward.fill"
+        }
+    }
+
+    var colorName: String {
+        switch self {
+        case .markSuccess: "green"
+        case .markNoAccount: "red"
+        case .markDisabled: "orange"
+        case .restartWithNewIP: "blue"
+        case .pressSubmitAgain: "purple"
+        case .disableURL: "pink"
+        case .disableViewport: "indigo"
+        case .skipAndContinue: "gray"
+        }
+    }
+
+    var isResultCorrection: Bool {
+        switch self {
+        case .markSuccess, .markNoAccount, .markDisabled: true
+        default: false
+        }
+    }
+
+    var correctedOutcome: DualFindTestOutcome? {
+        switch self {
+        case .markSuccess: .success
+        case .markNoAccount: .noAccount
+        case .markDisabled: .disabled
+        default: nil
+        }
+    }
+}
+
+nonisolated struct DualFindInterventionRequest: Identifiable, Sendable {
+    let id: String = UUID().uuidString
+    let sessionLabel: String
+    let email: String
+    let password: String
+    let platform: String
+    let pageContent: String
+    let currentURL: String
+    let timestamp: Date = Date()
+    let sessionIndex: Int
+    let site: LoginTargetSite
+    let passwordIndex: Int
 }
 
 nonisolated enum DualFindSessionCount: Int, CaseIterable, Sendable {

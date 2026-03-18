@@ -82,16 +82,8 @@ class LoginURLRotationService {
         "joefortunepokies.win",
     ]
 
-    static let noStaticDomains: Set<String> = [
-        "joefortune24.com",
-        "joefortune36.com",
-    ]
-
     static let defaultJoeURLStrings: [String] = joeBaseDomains.map { domain in
-        if noStaticDomains.contains(domain) {
-            return "https://\(domain)/login"
-        }
-        return "https://static.\(domain)/login"
+        return "https://\(domain)/login"
     }
 
     static let defaultIgnitionURLStrings: [String] = [
@@ -179,11 +171,9 @@ class LoginURLRotationService {
     }
 
     func resolveJoeURL(baseDomain: String) async -> String? {
-        if !Self.noStaticDomains.contains(baseDomain) {
-            let staticURL = "https://static.\(baseDomain)/login"
-            if await pingURL(staticURL) {
-                return staticURL
-            }
+        let baseURL = "https://\(baseDomain)/login"
+        if await pingURL(baseURL) {
+            return baseURL
         }
         let wwwURL = "https://www.\(baseDomain)/login"
         if await pingURL(wwwURL) {
@@ -200,23 +190,19 @@ class LoginURLRotationService {
             guard let url = URL(string: urlStr), let host = url.host else { continue }
 
             let baseDomain: String
-            if host.hasPrefix("static.") {
-                baseDomain = String(host.dropFirst(7))
-            } else if host.hasPrefix("www.") {
+            if host.hasPrefix("www.") {
                 baseDomain = String(host.dropFirst(4))
             } else {
                 baseDomain = host
             }
 
-            if !Self.noStaticDomains.contains(baseDomain) {
-                let staticURL = "https://static.\(baseDomain)/login"
-                if await pingURL(staticURL) {
-                    if joeURLs[i].urlString != staticURL {
-                        joeURLs[i] = RotatingURL(urlString: staticURL, isEnabled: true, lastFailure: nil, failCount: 0)
-                        updated += 1
-                    }
-                    continue
+            let baseURL = "https://\(baseDomain)/login"
+            if await pingURL(baseURL) {
+                if joeURLs[i].urlString != baseURL {
+                    joeURLs[i] = RotatingURL(urlString: baseURL, isEnabled: true, lastFailure: nil, failCount: 0)
+                    updated += 1
                 }
+                continue
             }
 
             let wwwURL = "https://www.\(baseDomain)/login"

