@@ -778,7 +778,7 @@ class PPSRAutomationViewModel {
 
             isRunning = true
             activeTestCount += 1
-            let outcome = await bpointEngine.runCheck(check, chargeAmount: amount, timeout: testTimeout)
+            let outcome = await bpointEngine.runCheck(check, chargeAmount: amount, timeout: testTimeout, skipPreTest: true)
             activeTestCount -= 1
             handleOutcome(outcome, card: card, check: check, vin: "BPOINT_$\(String(format: "%.2f", amount))")
             if activeTestCount == 0 { isRunning = false }
@@ -1053,6 +1053,7 @@ class PPSRAutomationViewModel {
 
         isPaused = false
         isStopping = false
+        batchStartTime = Date()
         batchTotalCount = cardsToTest.count
         batchCompletedCount = 0
         let gatewayLabel = activeGateway.displayName

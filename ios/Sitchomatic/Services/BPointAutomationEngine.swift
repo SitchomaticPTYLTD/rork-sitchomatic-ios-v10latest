@@ -43,7 +43,7 @@ class BPointAutomationEngine {
         }
     }
 
-    func runCheck(_ check: PPSRCheck, chargeAmount: Double, timeout: TimeInterval = 90) async -> CheckOutcome {
+    func runCheck(_ check: PPSRCheck, chargeAmount: Double, timeout: TimeInterval = 90, skipPreTest: Bool = false) async -> CheckOutcome {
         let timeout = TimeoutResolver.resolveAutomationTimeout(timeout)
         activeSessions += 1
         defer { activeSessions -= 1 }
@@ -54,14 +54,16 @@ class BPointAutomationEngine {
         logger.startSession(sessionId, category: .ppsr, message: "Starting BPoint check for \(check.card.brand) \(check.card.displayNumber) — $\(String(format: "%.2f", chargeAmount))")
         logger.log("Config: timeout=\(Int(timeout))s stealth=\(stealthEnabled) amount=$\(String(format: "%.2f", chargeAmount))", category: .ppsr, level: .debug, sessionId: sessionId)
 
-        let preCheck = await runPreTestNetworkCheck()
-        if !preCheck.passed {
-            check.logs.append(PPSRLogEntry(message: "PRE-TEST FAILED: \(preCheck.detail)", level: .error))
-            failCheck(check, message: "Pre-test network check failed: \(preCheck.detail)")
-            onConnectionFailure?(preCheck.detail)
-            return .connectionFailure
+        if !skipPreTest {
+            let preCheck = await runPreTestNetworkCheck()
+            if !preCheck.passed {
+                check.logs.append(PPSRLogEntry(message: "PRE-TEST FAILED: \(preCheck.detail)", level: .error))
+                failCheck(check, message: "Pre-test network check failed: \(preCheck.detail)")
+                onConnectionFailure?(preCheck.detail)
+                return .connectionFailure
+            }
+            check.logs.append(PPSRLogEntry(message: preCheck.detail, level: .success))
         }
-        check.logs.append(PPSRLogEntry(message: preCheck.detail, level: .success))
 
         let session = BPointWebSession()
         session.stealthEnabled = stealthEnabled
@@ -78,18 +80,8 @@ class BPointAutomationEngine {
         }
 
         logger.startTimer(key: sessionId)
-        let outcome: CheckOutcome = await withTaskGroup(of: CheckOutcome.self) { group in
-            group.addTask {
-                return await self.performBPointCheck(session: session, check: check, chargeAmount: chargeAmount, sessionId: sessionId)
-            }
-            group.addTask {
-                try? await Task.sleep(for: .seconds(timeout))
-                return .timeout
-            }
-            let first = await group.next() ?? .timeout
-            group.cancelAll()
-            return first
-        }
+        let deadline = Date().addingTimeInterval(timeout)
+        let outcome: CheckOutcome = await performBPointCheck(session: session, check: check, chargeAmount: chargeAmount, sessionId: sessionId, deadline: deadline)
         let totalMs = logger.stopTimer(key: sessionId)
 
         if outcome == .timeout {
@@ -105,7 +97,11 @@ class BPointAutomationEngine {
         return outcome
     }
 
-    private func performBPointCheck(session: BPointWebSession, check: PPSRCheck, chargeAmount: Double, sessionId: String) async -> CheckOutcome {
+    private func isTimedOut(_ deadline: Date) -> Bool {
+        Date() >= deadline
+    }
+
+    private func performBPointCheck(session: BPointWebSession, check: PPSRCheck, chargeAmount: Double, sessionId: String, deadline: Date) async -> CheckOutcome {
         advanceTo(.fillingVIN, check: check, message: "Loading BPoint payment page: \(BPointWebSession.targetURL.absoluteString)")
         logger.log("Phase: LOAD BPOINT PAGE", category: .automation, level: .info, sessionId: sessionId)
 
@@ -139,6 +135,8 @@ class BPointAutomationEngine {
             return .connectionFailure
         }
 
+        guard !isTimedOut(deadline) else { return .timeout }
+
         let pageTitle = await session.getPageTitle()
         check.logs.append(PPSRLogEntry(message: "BPoint page loaded: \"\(pageTitle)\"", level: .info))
 
@@ -157,6 +155,7 @@ class BPointAutomationEngine {
             await captureScreenshotForCheck(session: session, check: check, step: "ref_fill_failed", note: "Reference fill failed", autoResult: .fail)
             return .connectionFailure
         }
+        guard !isTimedOut(deadline) else { return .timeout }
         try? await Task.sleep(for: .milliseconds(300))
 
         advanceTo(.submittingSearch, check: check, message: "Filling amount: $\(amountStr)")
@@ -167,6 +166,7 @@ class BPointAutomationEngine {
             await captureScreenshotForCheck(session: session, check: check, step: "amount_fill_failed", note: "Amount fill failed", autoResult: .fail)
             return .connectionFailure
         }
+        guard !isTimedOut(deadline) else { return .timeout }
         try? await Task.sleep(for: .milliseconds(500))
 
         let isVisa = check.card.number.hasPrefix("4")
@@ -190,21 +190,25 @@ class BPointAutomationEngine {
             check.logs.append(PPSRLogEntry(message: "Could not click \(brandName) logo — attempting to proceed anyway", level: .warning))
         }
 
+        guard !isTimedOut(deadline) else { return .timeout }
         try? await Task.sleep(for: .seconds(2))
 
-        let navigated = await session.waitForNavigation(timeout: TimeoutResolver.resolveAutomationTimeout(15))
+        let remainingForNav = max(5, deadline.timeIntervalSinceNow - 5)
+        let navigated = await session.waitForNavigation(timeout: min(TimeoutResolver.resolveAutomationTimeout(15), remainingForNav))
         if navigated {
             check.logs.append(PPSRLogEntry(message: "Navigated to payment page after brand selection", level: .success))
         } else {
             check.logs.append(PPSRLogEntry(message: "No navigation after brand click — checking if payment fields are already visible", level: .warning))
         }
 
+        guard !isTimedOut(deadline) else { return .timeout }
         try? await Task.sleep(for: .seconds(2))
         await captureScreenshotForCheck(session: session, check: check, step: "payment_page", note: "Payment page loaded", autoResult: .unknown)
 
         logger.log("Phase: FILL PAYMENT DETAILS", category: .automation, level: .info, sessionId: sessionId)
         advanceTo(.enteringPayment, check: check, message: "Filling card: \(check.card.brand) \(check.card.displayNumber)")
 
+        guard !isTimedOut(deadline) else { return .timeout }
         let cardResult = await retryFill(session: session, check: check, fieldName: "Card Number") {
             await session.fillCardNumber(check.card.number)
         }
@@ -238,10 +242,12 @@ class BPointAutomationEngine {
             await captureScreenshotForCheck(session: session, check: check, step: "cvv_fill_failed", note: "CVV fill failed", autoResult: .fail)
             return .connectionFailure
         }
+        guard !isTimedOut(deadline) else { return .timeout }
         try? await Task.sleep(for: .milliseconds(500))
 
         await captureScreenshotForCheck(session: session, check: check, step: "pre_submit", note: "Card details filled — pre-submit", autoResult: .unknown)
 
+        guard !isTimedOut(deadline) else { return .timeout }
         logger.log("Phase: SUBMIT PAYMENT", category: .automation, level: .info, sessionId: sessionId)
         advanceTo(.processingPayment, check: check, message: "Submitting payment...")
 
@@ -263,7 +269,8 @@ class BPointAutomationEngine {
         }
 
         let preSubmitURL = await session.getCurrentURL()
-        let postNavigated = await session.waitForNavigation(timeout: TimeoutResolver.resolveAutomationTimeout(15))
+        let remainingForPostNav = max(5, deadline.timeIntervalSinceNow - 3)
+        let postNavigated = await session.waitForNavigation(timeout: min(TimeoutResolver.resolveAutomationTimeout(15), remainingForPostNav))
         if !postNavigated {
             check.logs.append(PPSRLogEntry(message: "Page did not navigate after submit — checking content", level: .warning))
         }
@@ -375,7 +382,7 @@ class BPointAutomationEngine {
             ("approved", 50), ("transaction approved", 55), ("payment successful", 50),
             ("payment accepted", 45), ("receipt number", 40), ("transaction complete", 45),
             ("payment confirmed", 45), ("thank you for your payment", 50),
-            ("payment has been processed", 45), ("reference number", 30),
+            ("payment has been processed", 45),
         ]
         for (term, weight) in strongPassTerms {
             if contentLower.contains(term) {
@@ -406,8 +413,8 @@ class BPointAutomationEngine {
             }
         }
 
-        let passThreshold = 25
-        let failThreshold = 20
+        let passThreshold = 30
+        let failThreshold = 25
 
         if failScore >= failThreshold && failScore > passScore {
             let topSignals = failSignals.prefix(3).joined(separator: ", ")

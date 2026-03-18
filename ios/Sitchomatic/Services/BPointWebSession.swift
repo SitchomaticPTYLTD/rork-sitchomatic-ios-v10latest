@@ -526,7 +526,7 @@ class BPointWebSession: NSObject {
             let bodyText = await executeJS("document.body ? document.body.innerText.substring(0, 500) : ''") ?? ""
             if bodyText != originalBody && bodyText.count > 50 {
                 let bodyLower = bodyText.lowercased()
-                let indicators = ["payment", "receipt", "success", "approved", "declined", "error", "fail", "card number", "cvv"]
+                let indicators = ["receipt", "success", "approved", "declined", "transaction", "processed", "do not honour", "insufficient"]
                 for indicator in indicators {
                     if bodyLower.contains(indicator) {
                         try? await Task.sleep(for: .milliseconds(1000))
