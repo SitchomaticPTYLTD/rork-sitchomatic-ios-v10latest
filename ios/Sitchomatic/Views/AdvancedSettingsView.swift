@@ -5,6 +5,7 @@ struct AdvancedSettingsView: View {
     @State private var shareFileURL: URL?
     @State private var nordService = NordVPNService.shared
     @AppStorage("introVideoEnabled") private var introVideoEnabled: Bool = false
+    @State private var videoService = IntroVideoDownloadService.shared
     private let proxyService = ProxyRotationService.shared
 
     var body: some View {
@@ -209,11 +210,17 @@ struct AdvancedSettingsView: View {
                         Image(systemName: "film.fill").foregroundStyle(.pink)
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Intro Video").font(.body)
-                            Text("Play intro video on app launch").font(.caption2).foregroundStyle(.secondary)
+                            Text(introVideoEnabled ? (videoService.isVideoCached ? "Video cached" : "Downloading...") : "Disabled").font(.caption2).foregroundStyle(.secondary)
                         }
                     }
                 }
                 .tint(.pink)
+                .onChange(of: introVideoEnabled) { _, enabled in
+                    if enabled && !videoService.isVideoCached {
+                        Task { await videoService.downloadIfNeeded() }
+                    }
+                    if !enabled { videoService.deleteCache() }
+                }
             } header: {
                 Label("App Settings", systemImage: "gearshape.fill")
             }

@@ -3,7 +3,7 @@ import UniformTypeIdentifiers
 
 struct PPSRSettingsView: View {
     @Bindable var vm: PPSRAutomationViewModel
-    @AppStorage("introVideoEnabled") private var introVideoEnabled: Bool = false
+
     @State private var showEmailImport: Bool = false
     @State private var emailCSVText: String = ""
     @State private var cropX: String = ""

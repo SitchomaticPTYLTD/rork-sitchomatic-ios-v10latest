@@ -46,20 +46,12 @@ struct IntroVideoView: View {
     }
 
     private func setupPlayer() {
-        let localURL = Self.cachedVideoURL
-        let bundleURL = Bundle.main.url(forResource: "intro_video", withExtension: "mp4")
-
-        let videoURL: URL?
-        if FileManager.default.fileExists(atPath: localURL.path()) {
-            videoURL = localURL
-        } else {
-            videoURL = bundleURL
-        }
-
-        guard let url = videoURL else {
+        let cachedURL = IntroVideoDownloadService.cachedVideoURL
+        guard FileManager.default.fileExists(atPath: cachedURL.path()) else {
             dismissIntro()
             return
         }
+        let url = cachedURL
         let avPlayer = AVPlayer(url: url)
         avPlayer.isMuted = false
         player = avPlayer
@@ -73,11 +65,6 @@ struct IntroVideoView: View {
         }
 
         avPlayer.play()
-    }
-
-    private static var cachedVideoURL: URL {
-        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
-            .appendingPathComponent("intro_video.mp4")
     }
 
     private func dismissIntro() {

@@ -23,7 +23,7 @@ struct SitchomaticApp: App {
     }
 
     private var showingIntro: Bool {
-        introVideoEnabled && !introFinished
+        introVideoEnabled && !introFinished && IntroVideoDownloadService.shared.isVideoCached
     }
 
     private var showingProfileSelect: Bool {
