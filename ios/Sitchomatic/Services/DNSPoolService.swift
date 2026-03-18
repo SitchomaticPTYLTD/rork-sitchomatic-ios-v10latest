@@ -577,6 +577,26 @@ class DNSPoolService {
         return results
     }
 
+    func testAllAndAutoDisable(hostname: String = "cloudflare.com") async -> (results: [(server: ManagedDNSServer, passed: Bool, latencyMs: Int?)], disabledCount: Int) {
+        var results: [(server: ManagedDNSServer, passed: Bool, latencyMs: Int?)] = []
+        var disabledCount = 0
+        for server in managedServers {
+            let answer = await testServer(server, hostname: hostname)
+            let passed = answer != nil
+            results.append((server: server, passed: passed, latencyMs: answer?.latencyMs))
+            if !passed, let idx = managedServers.firstIndex(where: { $0.id == server.id }) {
+                if !managedServers[idx].autoDisabled {
+                    managedServers[idx].autoDisabled = true
+                    disabledCount += 1
+                    logger.log("DNSPool: auto-disabled \(server.displayLabel) — failed test", category: .dns, level: .warning)
+                }
+            }
+        }
+        if disabledCount > 0 { persistManagedServers() }
+        logger.log("DNSPool: Test All complete — \(results.filter(\.passed).count) passed, \(disabledCount) auto-disabled", category: .dns, level: disabledCount == 0 ? .success : .warning)
+        return (results, disabledCount)
+    }
+
     func resetAutoDisabled() {
         for i in managedServers.indices {
             managedServers[i].autoDisabled = false

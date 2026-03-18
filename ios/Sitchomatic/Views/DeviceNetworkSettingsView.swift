@@ -1400,6 +1400,7 @@ struct DeviceNetworkSettingsView: View {
     @State private var newDNSURL: String = ""
     @State private var isTestingDNS: Bool = false
     @State private var dnsTestResults: [(name: String, endpoint: String, passed: Bool, latencyMs: Int?)] = []
+    @State private var dnsAutoDisabledCount: Int = 0
 
     private var dnsManagerSheet: some View {
         NavigationStack {
@@ -1529,16 +1530,23 @@ struct DeviceNetworkSettingsView: View {
                     Button {
                         isTestingDNS = true
                         dnsTestResults = []
+                        dnsAutoDisabledCount = 0
                         Task {
-                            let results = await PPSRDoHService.shared.testAllServers()
-                            dnsTestResults = results.map { (name: $0.server.displayLabel, endpoint: $0.server.endpoint, passed: $0.passed, latencyMs: $0.latencyMs) }
+                            let outcome = await PPSRDoHService.shared.testAllAndAutoDisable()
+                            dnsTestResults = outcome.results.map { (name: $0.server.displayLabel, endpoint: $0.server.endpoint, passed: $0.passed, latencyMs: $0.latencyMs) }
+                            dnsAutoDisabledCount = outcome.disabledCount
                             isTestingDNS = false
-                            let passed = results.filter(\.passed).count
-                            log("DNS test complete: \(passed)/\(results.count) servers passed", level: passed > 0 ? .success : .error)
+                            let passed = outcome.results.filter(\.passed).count
+                            let total = outcome.results.count
+                            if outcome.disabledCount > 0 {
+                                log("DNS test: \(passed)/\(total) passed, \(outcome.disabledCount) auto-disabled", level: passed > 0 ? .warning : .error)
+                            } else {
+                                log("DNS test complete: \(passed)/\(total) servers passed", level: passed > 0 ? .success : .error)
+                            }
                         }
                     } label: {
                         HStack {
-                            Label("Test All Servers", systemImage: "antenna.radiowaves.left.and.right")
+                            Label("Test All & Auto-Disable Failed", systemImage: "antenna.radiowaves.left.and.right")
                             Spacer()
                             if isTestingDNS {
                                 ProgressView()
@@ -1551,6 +1559,13 @@ struct DeviceNetworkSettingsView: View {
                         }
                     }
                     .disabled(isTestingDNS)
+                    if dnsAutoDisabledCount > 0 {
+                        HStack(spacing: 6) {
+                            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange).font(.caption)
+                            Text("\(dnsAutoDisabledCount) server\(dnsAutoDisabledCount == 1 ? "" : "s") auto-disabled due to test failure")
+                                .font(.caption2).foregroundStyle(.secondary)
+                        }
+                    }
                     Button {
                         PPSRDoHService.shared.enableAll()
                         log("Enabled all DNS providers", level: .success)
