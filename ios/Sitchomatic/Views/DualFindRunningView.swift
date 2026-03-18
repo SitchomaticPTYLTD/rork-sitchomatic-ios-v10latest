@@ -54,7 +54,7 @@ struct DualFindRunningView: View {
                         .font(.system(size: 15, weight: .bold, design: .monospaced))
                         .foregroundStyle(.white)
 
-                    Text("\(vm.hits.count) hit\(vm.hits.count == 1 ? "" : "s") · \(vm.disabledEmails.count) disabled")
+                    Text("\(vm.hits.count) hit\(vm.hits.count == 1 ? "" : "s") · \(vm.disabledEmails.count) disabled · \(vm.completedTests) tested")
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(.white.opacity(0.6))
                 }

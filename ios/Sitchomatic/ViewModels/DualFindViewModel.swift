@@ -21,7 +21,8 @@ class DualFindViewModel {
     var ignEmailIndex: Int = 0
     var ignPasswordIndex: Int = 0
     var totalEmails: Int = 0
-    var completedTests: Int = 0
+    var joeCompletedTests: Int = 0
+    var ignCompletedTests: Int = 0
 
     var sessions: [DualFindSessionInfo] = []
     var logs: [PPSRLogEntry] = []
@@ -73,12 +74,16 @@ class DualFindViewModel {
         isJoePaused && isIgnPaused
     }
 
+    var completedTests: Int {
+        joeCompletedTests + ignCompletedTests
+    }
+
     var progressText: String {
         guard totalEmails > 0 else { return "Ready" }
-        let totalCombos = totalEmails * 3 * 2
+        let perPlatform = totalEmails * 3
         let jPw = joePasswordIndex + 1
         let iPw = ignPasswordIndex + 1
-        return "\(completedTests)/\(totalCombos) — JOE pw\(jPw) · IGN pw\(iPw)"
+        return "JOE \(joeCompletedTests)/\(perPlatform) pw\(jPw) · IGN \(ignCompletedTests)/\(perPlatform) pw\(iPw)"
     }
 
     var progressFraction: Double {
@@ -142,7 +147,8 @@ class DualFindViewModel {
         joePasswordIndex = 0
         ignEmailIndex = 0
         ignPasswordIndex = 0
-        completedTests = 0
+        joeCompletedTests = 0
+        ignCompletedTests = 0
         disabledEmails.removeAll()
         hits.removeAll()
         logs.removeAll()
@@ -181,7 +187,8 @@ class DualFindViewModel {
         disabledEmails = Set(rp.disabledEmails)
         hits = rp.foundLogins
         sessionCount = DualFindSessionCount(rawValue: rp.sessionCount) ?? .six
-        completedTests = 0
+        joeCompletedTests = rp.joeCompletedTests
+        ignCompletedTests = rp.ignCompletedTests
         logs.removeAll()
         sessions.removeAll()
         isJoePaused = false
@@ -404,7 +411,7 @@ class DualFindViewModel {
 
             if disabledEmails.contains(email.lowercased()) {
                 log("[\(label)] Skipping disabled: \(email)")
-                completedTests += 1
+                incrementCompleted(for: site)
                 continue
             }
 
@@ -412,7 +419,7 @@ class DualFindViewModel {
 
             guard let session = getPersistentSession(site: site, index: sessionIndex) else {
                 log("[\(label)] No session available — skipping", level: .error)
-                completedTests += 1
+                incrementCompleted(for: site)
                 continue
             }
 
@@ -647,7 +654,7 @@ class DualFindViewModel {
 
                 guard let freshSession = getPersistentSession(site: site, index: sessionIndex) else {
                     log("[\(label)] Replacement session unavailable", level: .error)
-                    completedTests += 1
+                    incrementCompleted(for: site)
                     continue
                 }
 
@@ -699,7 +706,15 @@ class DualFindViewModel {
                 updateSession(id: sessionInfoId, email: email, status: "Unsure", active: false)
             }
 
-            completedTests += 1
+            incrementCompleted(for: site)
+        }
+    }
+
+    private func incrementCompleted(for site: LoginTargetSite) {
+        if site == .joefortune {
+            joeCompletedTests += 1
+        } else {
+            ignCompletedTests += 1
         }
     }
 
@@ -1015,7 +1030,9 @@ class DualFindViewModel {
             sessionCount: sessionCount.rawValue,
             timestamp: Date(),
             disabledEmails: Array(disabledEmails),
-            foundLogins: hits
+            foundLogins: hits,
+            joeCompletedTests: joeCompletedTests,
+            ignCompletedTests: ignCompletedTests
         )
         if let data = try? JSONEncoder().encode(rp) {
             UserDefaults.standard.set(data, forKey: persistKey)

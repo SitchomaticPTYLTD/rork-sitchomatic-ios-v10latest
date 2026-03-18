@@ -11,6 +11,23 @@ nonisolated struct DualFindResumePoint: Codable, Sendable {
     let timestamp: Date
     let disabledEmails: [String]
     let foundLogins: [DualFindHit]
+    let joeCompletedTests: Int
+    let ignCompletedTests: Int
+
+    init(joeEmailIndex: Int, joePasswordIndex: Int, ignEmailIndex: Int, ignPasswordIndex: Int, emails: [String], passwords: [String], sessionCount: Int, timestamp: Date, disabledEmails: [String], foundLogins: [DualFindHit], joeCompletedTests: Int = 0, ignCompletedTests: Int = 0) {
+        self.joeEmailIndex = joeEmailIndex
+        self.joePasswordIndex = joePasswordIndex
+        self.ignEmailIndex = ignEmailIndex
+        self.ignPasswordIndex = ignPasswordIndex
+        self.emails = emails
+        self.passwords = passwords
+        self.sessionCount = sessionCount
+        self.timestamp = timestamp
+        self.disabledEmails = disabledEmails
+        self.foundLogins = foundLogins
+        self.joeCompletedTests = joeCompletedTests
+        self.ignCompletedTests = ignCompletedTests
+    }
 }
 
 nonisolated struct DualFindHit: Codable, Sendable, Identifiable {
