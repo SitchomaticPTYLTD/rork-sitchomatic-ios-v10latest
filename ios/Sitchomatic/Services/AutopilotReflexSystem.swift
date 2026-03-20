@@ -223,7 +223,7 @@ class AutopilotReflexSystem {
             guard reflex.consecutiveHits >= reflex.rule.requiresConsecutive else { continue }
 
             let effectiveConfidence = signal.confidence * modeMultiplier(mode)
-            if bestMatch == nil || effectiveConfidence > bestMatch!.confidence {
+            if bestMatch == nil || effectiveConfidence > (bestMatch?.confidence ?? 0) {
                 bestMatch = (id, reflex, effectiveConfidence)
             }
         }

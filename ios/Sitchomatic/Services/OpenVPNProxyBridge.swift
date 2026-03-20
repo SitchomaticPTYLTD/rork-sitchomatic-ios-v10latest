@@ -109,7 +109,7 @@ class OpenVPNProxyBridge {
             } else {
                 status = .failed
                 lastError = wgSession.lastError ?? "WireGuard tunnel handshake timeout"
-                logger.log("OpenVPNBridge: FAILED — \(lastError!)", category: .vpn, level: .error)
+                logger.log("OpenVPNBridge: FAILED — \(lastError ?? "unknown error")", category: .vpn, level: .error)
             }
         }
     }
@@ -425,7 +425,7 @@ class OpenVPNProxyBridge {
 
         status = .failed
         lastError = "All WireGuard server alternatives exhausted for \(config.serverName)"
-        logger.log("OpenVPNBridge: FAILED after all retries — \(lastError!)", category: .vpn, level: .error)
+        logger.log("OpenVPNBridge: FAILED after all retries — \(lastError ?? "unknown error")", category: .vpn, level: .error)
     }
 
     // MARK: - Health Check

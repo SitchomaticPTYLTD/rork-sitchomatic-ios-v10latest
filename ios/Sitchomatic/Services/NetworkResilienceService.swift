@@ -400,7 +400,11 @@ class NetworkResilienceService {
         }
 
         let totalBytes = bandwidthSamples.reduce(UInt64(0)) { $0 + $1.bytes }
-        let timeSpan = bandwidthSamples.last!.timestamp.timeIntervalSince(bandwidthSamples.first!.timestamp)
+        guard let first = bandwidthSamples.first, let last = bandwidthSamples.last else {
+            bandwidthEstimateBps = 0
+            return
+        }
+        let timeSpan = last.timestamp.timeIntervalSince(first.timestamp)
 
         guard timeSpan > 0 else {
             bandwidthEstimateBps = 0

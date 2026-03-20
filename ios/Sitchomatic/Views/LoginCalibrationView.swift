@@ -268,26 +268,26 @@ struct LoginCalibrationView: View {
                 return
             }
             let result = await coordinator.runDeepDOMProbe()
-            if result.emailSelector != nil && result.passwordSelector != nil && result.buttonSelector != nil {
+            if let emailSel = result.emailSelector, let passwordSel = result.passwordSelector, let buttonSel = result.buttonSelector {
                 emailMapping = LoginCalibrationService.ElementMapping(
-                    cssSelector: result.emailSelector!,
+                    cssSelector: emailSel,
                     fallbackSelectors: result.emailFallbacks,
                     tagName: "INPUT",
                     inputType: "email"
                 )
                 passwordMapping = LoginCalibrationService.ElementMapping(
-                    cssSelector: result.passwordSelector!,
+                    cssSelector: passwordSel,
                     fallbackSelectors: result.passwordFallbacks,
                     tagName: "INPUT",
                     inputType: "password"
                 )
                 buttonMapping = LoginCalibrationService.ElementMapping(
-                    cssSelector: result.buttonSelector!,
+                    cssSelector: buttonSel,
                     fallbackSelectors: result.buttonFallbacks,
                     nearbyText: result.buttonText
                 )
                 autoProbeSuccess = true
-                probeDetail = "Found all 3 elements:\n• Email: \(result.emailSelector!)\n• Password: \(result.passwordSelector!)\n• Button: \(result.buttonText ?? result.buttonSelector!)"
+                probeDetail = "Found all 3 elements:\n• Email: \(emailSel)\n• Password: \(passwordSel)\n• Button: \(result.buttonText ?? buttonSel)"
             } else {
                 autoProbeSuccess = false
                 var missing: [String] = []
@@ -808,7 +808,10 @@ struct CalibrationWebViewRepresentable: UIViewRepresentable {
 
     func makeUIView(context: Context) -> WKWebView {
         context.coordinator.setupWebView(urlString: urlString)
-        let wv = context.coordinator.webView!
+        guard let wv = context.coordinator.webView else {
+            let fallback = WKWebView(frame: .zero)
+            return fallback
+        }
         Task { @MainActor in
             onCoordinator(context.coordinator)
         }

@@ -112,8 +112,9 @@ class MemoryMonitor {
         guard history.count >= 5 else { return }
         let recent = history.suffix(5)
         let allIncreasing = zip(recent.dropLast(), recent.dropFirst()).allSatisfy { $0.mb < $1.mb }
-        let totalGrowth = recent.last!.mb - recent.first!.mb
-        let timeSpan = recent.last!.timestamp.timeIntervalSince(recent.first!.timestamp)
+        guard let first = recent.first, let last = recent.last else { return }
+        let totalGrowth = last.mb - first.mb
+        let timeSpan = last.timestamp.timeIntervalSince(first.timestamp)
 
         if allIncreasing && totalGrowth > 500 && timeSpan > 0 {
             let ratePerMin = Double(totalGrowth) / (timeSpan / 60.0)

@@ -194,11 +194,12 @@ class AISessionPreConditioningService {
         }
 
         var seedScores: [Int: (success: Int, total: Int)] = [:]
-        for r in records where r.stealthSeed != nil {
-            var entry = seedScores[r.stealthSeed!] ?? (0, 0)
+        for r in records {
+            guard let seed = r.stealthSeed else { continue }
+            var entry = seedScores[seed] ?? (0, 0)
             entry.total += 1
             if r.wasSuccess { entry.success += 1 }
-            seedScores[r.stealthSeed!] = entry
+            seedScores[seed] = entry
         }
         let bestSeed = seedScores
             .filter { $0.value.total >= 2 }
