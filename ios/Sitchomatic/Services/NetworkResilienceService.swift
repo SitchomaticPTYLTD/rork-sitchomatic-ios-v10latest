@@ -473,7 +473,12 @@ class NetworkResilienceService {
     private let maxSharedSessions: Int = 10
 
     func sharedSession(for host: String, proxyConfig: ProxyConfig? = nil) -> URLSession {
-        let key = proxyConfig != nil ? "\(host)_\(proxyConfig!.host):\(proxyConfig!.port)" : host
+        let key: String
+        if let proxy = proxyConfig {
+            key = "\(host)_\(proxy.host):\(proxy.port)"
+        } else {
+            key = host
+        }
 
         if let existing = hostSessionMap[key] {
             hostSessionAccessOrder.removeAll { $0 == key }

@@ -164,7 +164,7 @@ class AISessionPreConditioningService {
         let successRecords = records.filter { $0.wasSuccess }
         let totalSuccess = successRecords.count
         let totalAttempts = records.count
-        recipe.successRate = Double(totalSuccess) / Double(totalAttempts)
+        recipe.successRate = totalAttempts > 0 ? Double(totalSuccess) / Double(totalAttempts) : 0
         recipe.totalDataPoints = totalAttempts
 
         var proxyScores: [String: (success: Int, total: Int)] = [:]

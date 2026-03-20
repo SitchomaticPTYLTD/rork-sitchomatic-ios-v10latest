@@ -128,7 +128,7 @@ class DebugLoginButtonService {
             let buttonStateChanged = await checkButtonStateChanged(session: session)
 
             let autoDetectedSuccess = contentChanged || urlChanged || buttonStateChanged ||
-                (result != nil && (result!.contains("CLICKED") || result!.contains("OK") || result!.contains("CONFIRMED")))
+                (result?.contains("CLICKED") == true || result?.contains("OK") == true || result?.contains("CONFIRMED") == true)
 
             if autoDetectedSuccess {
                 attempt.status = .success
@@ -223,7 +223,7 @@ class DebugLoginButtonService {
         logger.log("DebugLoginButton: replaying '\(method.methodName)' for \(extractHost(from: url))", category: .automation, level: .info)
 
         let result = await session.executeJS(method.jsCode)
-        let success = result != nil && !result!.contains("NOT_FOUND") && !result!.contains("NO_ELEMENT")
+        let success = result != nil && result?.contains("NOT_FOUND") != true && result?.contains("NO_ELEMENT") != true
 
         if success {
             logger.log("DebugLoginButton: replay SUCCESS — \(result ?? "")", category: .automation, level: .success)

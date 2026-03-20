@@ -277,7 +277,7 @@ class LoginAutomationEngine {
 
         if let profileIdx = session.activeProfileIndex, let stealthProfile = session.stealthProfile {
             let fpScore = session.lastFingerprintScore
-            let detected = fpScore != nil && !fpScore!.passed
+            let detected = fpScore?.passed == false
             aiFingerprintTuning.recordOutcome(
                 profileIndex: profileIdx,
                 profileSeed: stealthProfile.seed,

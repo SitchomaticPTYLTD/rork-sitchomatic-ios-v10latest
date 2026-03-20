@@ -205,7 +205,12 @@ class AIAnomalyForecastingService {
             }
         }
 
-        let correlatedFailure = region != nil ? (correlatedRegionFailures[region!]?.isCorrelatedFailure ?? false) : false
+        let correlatedFailure: Bool
+        if let region {
+            correlatedFailure = correlatedRegionFailures[region]?.isCorrelatedFailure ?? false
+        } else {
+            correlatedFailure = false
+        }
 
         let action: AnomalyForecast.RecommendedAction
         let softBreak: Bool

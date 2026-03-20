@@ -788,7 +788,7 @@ class SuperTestService {
             category: .ppsrConnection,
             passed: dnsAnswer != nil,
             latencyMs: dnsAnswer?.latencyMs,
-            detail: dnsAnswer != nil ? "Resolved via \(dnsAnswer!.provider) → \(dnsAnswer!.ip)" : "DNS resolution failed"
+            detail: dnsAnswer.map { "Resolved via \($0.provider) → \($0.ip)" } ?? "DNS resolution failed"
         ))
 
         let sslResult = await testSSL("transact.ppsr.gov.au")
