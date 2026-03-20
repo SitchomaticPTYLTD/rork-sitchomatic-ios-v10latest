@@ -390,7 +390,8 @@ class CalibrationWebViewCoordinator: NSObject, WKNavigationDelegate, WKScriptMes
         case loading, autoProbing, tapEmail, tapPassword, tapButton, testFill, complete, failed
     }
 
-    func setupWebView(urlString: String) {
+    @discardableResult
+    func setupWebView(urlString: String) -> WKWebView {
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .nonPersistent()
         config.preferences.javaScriptCanOpenWindowsAutomatically = true
@@ -414,6 +415,8 @@ class CalibrationWebViewCoordinator: NSObject, WKNavigationDelegate, WKScriptMes
             let request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData, timeoutInterval: 30)
             wv.load(request)
         }
+
+        return wv
     }
 
     static let tapInterceptJS = """
@@ -807,8 +810,7 @@ struct CalibrationWebViewRepresentable: UIViewRepresentable {
     }
 
     func makeUIView(context: Context) -> WKWebView {
-        context.coordinator.setupWebView(urlString: urlString)
-        let wv = context.coordinator.webView!
+        let wv = context.coordinator.setupWebView(urlString: urlString)
         Task { @MainActor in
             onCoordinator(context.coordinator)
         }
