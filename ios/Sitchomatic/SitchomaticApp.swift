@@ -15,9 +15,6 @@ struct SitchomaticApp: App {
 
     init() {
         Self.performEarlySafeBootCheck()
-        if !NordVPNService.shared.hasSelectedProfile {
-            UserDefaults.standard.removeObject(forKey: "activeAppMode")
-        }
     }
 
     private static func performEarlySafeBootCheck() {
@@ -65,6 +62,7 @@ struct SitchomaticApp: App {
     }
 
     private var activeMode: ActiveAppMode? {
+        guard NordVPNService.shared.hasSelectedProfile else { return nil }
         ActiveAppMode(rawValue: activeModeRaw)
     }
 
@@ -211,7 +209,6 @@ struct SitchomaticApp: App {
                     let nord = NordVPNService.shared
                     let hasRestoredProfile = await nord.ensureProfileNetworkPoolsReady()
                     if !hasRestoredProfile {
-                        nord.hasSelectedProfile = false
                         activeModeRaw = ""
                     }
                     if nord.isTokenExpired {
