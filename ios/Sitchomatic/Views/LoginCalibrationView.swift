@@ -380,7 +380,7 @@ struct DOMProbeResult {
 
 @MainActor
 class CalibrationWebViewCoordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
-    weak var webView: WKWebView?
+    var webView: WKWebView?
     var onPageLoaded: (() -> Void)?
     var onElementTapped: ((TappedElementInfo) -> Void)?
     var calibrationStep: Binding<CalibrationStep>?
@@ -808,10 +808,7 @@ struct CalibrationWebViewRepresentable: UIViewRepresentable {
 
     func makeUIView(context: Context) -> WKWebView {
         context.coordinator.setupWebView(urlString: urlString)
-        guard let wv = context.coordinator.webView else {
-            let fallback = WKWebView(frame: .zero)
-            return fallback
-        }
+        let wv = context.coordinator.webView!
         Task { @MainActor in
             onCoordinator(context.coordinator)
         }
