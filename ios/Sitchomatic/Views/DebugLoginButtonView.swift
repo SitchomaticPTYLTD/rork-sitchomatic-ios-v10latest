@@ -73,12 +73,12 @@ struct DebugLoginButtonView: View {
                                 Text(rotURL.host)
                                     .font(.system(.subheadline, design: .monospaced, weight: .medium))
                                     .foregroundStyle(.primary)
-                                if let config = debugService.configFor(url: url.absoluteString), config.successfulMethod != nil {
+                                if let config = debugService.configFor(url: url.absoluteString), let method = config.successfulMethod {
                                     HStack(spacing: 4) {
                                         Image(systemName: "checkmark.seal.fill")
                                             .font(.caption2)
                                             .foregroundStyle(.green)
-                                        Text("Saved: \(config.successfulMethod!.methodName)")
+                                        Text("Saved: \(method.methodName)")
                                             .font(.system(.caption2, design: .monospaced))
                                             .foregroundStyle(.green)
                                     }
@@ -281,7 +281,7 @@ struct DebugLoginButtonView: View {
                 }
                 .sheet(isPresented: $showCloneSheet) {
                     CloneConfigSheet(
-                        sourceURL: selectedURL!.absoluteString,
+                        sourceURL: selectedURL?.absoluteString ?? "",
                         allURLs: vm.urlRotation.activeURLs.compactMap(\.url).map(\.absoluteString),
                         debugService: debugService
                     )

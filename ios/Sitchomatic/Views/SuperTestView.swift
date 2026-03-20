@@ -535,7 +535,7 @@ struct SuperTestView: View {
 
         return VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text(selectedPhase != nil ? "\(phaseName(selectedPhase!)) Results" : "All Results")
+                Text(selectedPhase.map { "\(phaseName($0)) Results" } ?? "All Results")
                     .font(.headline)
                 Spacer()
                 Text("\(filtered.count)")
