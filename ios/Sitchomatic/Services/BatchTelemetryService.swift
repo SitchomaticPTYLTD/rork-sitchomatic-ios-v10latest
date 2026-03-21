@@ -67,18 +67,20 @@ class BatchTelemetryService {
 
     func recordOutcome(success: Bool, latencyMs: Int, isConnectionFailure: Bool = false, isTimeout: Bool = false, isRateLimit: Bool = false) {
         guard activeBatch != nil else { return }
-        activeBatch!.processedItems += 1
+        activeBatch?.processedItems += 1
         if success {
-            activeBatch!.successCount += 1
+            activeBatch?.successCount += 1
         } else {
-            activeBatch!.failureCount += 1
+            activeBatch?.failureCount += 1
         }
-        if isConnectionFailure { activeBatch!.connectionFailures += 1 }
-        if isTimeout { activeBatch!.timeouts += 1 }
-        if isRateLimit { activeBatch!.rateLimitHits += 1 }
+        if isConnectionFailure { activeBatch?.connectionFailures += 1 }
+        if isTimeout { activeBatch?.timeouts += 1 }
+        if isRateLimit { activeBatch?.rateLimitHits += 1 }
 
-        let totalLatency = activeBatch!.avgLatencyMs * (activeBatch!.processedItems - 1) + latencyMs
-        activeBatch!.avgLatencyMs = totalLatency / activeBatch!.processedItems
+        if let processed = activeBatch?.processedItems, processed > 0 {
+            let totalLatency = (activeBatch?.avgLatencyMs ?? 0) * (processed - 1) + latencyMs
+            activeBatch?.avgLatencyMs = totalLatency / processed
+        }
     }
 
     func recordIPRotation() {

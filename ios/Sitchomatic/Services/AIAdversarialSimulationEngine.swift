@@ -581,13 +581,14 @@ class AIAdversarialSimulationEngine {
         var actions: [AutoHealingAction] = []
 
         for result in results where result.verdict == .critical || result.verdict == .failed {
-            for rec in result.recommendations where rec.settingKey != nil && rec.suggestedValue != nil {
+            for rec in result.recommendations {
+                guard let settingKey = rec.settingKey, let suggestedValue = rec.suggestedValue else { continue }
                 let action = AutoHealingAction(
                     host: host,
                     scenarioType: result.scenarioType,
-                    settingKey: rec.settingKey!,
+                    settingKey: settingKey,
                     oldValue: "current",
-                    newValue: rec.suggestedValue!,
+                    newValue: suggestedValue,
                     reason: "\(result.scenarioName): \(rec.action)",
                     timestamp: Date()
                 )

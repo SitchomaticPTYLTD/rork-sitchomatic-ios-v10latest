@@ -268,26 +268,26 @@ struct LoginCalibrationView: View {
                 return
             }
             let result = await coordinator.runDeepDOMProbe()
-            if result.emailSelector != nil && result.passwordSelector != nil && result.buttonSelector != nil {
+            if let emailSel = result.emailSelector, let passwordSel = result.passwordSelector, let buttonSel = result.buttonSelector {
                 emailMapping = LoginCalibrationService.ElementMapping(
-                    cssSelector: result.emailSelector!,
+                    cssSelector: emailSel,
                     fallbackSelectors: result.emailFallbacks,
                     tagName: "INPUT",
                     inputType: "email"
                 )
                 passwordMapping = LoginCalibrationService.ElementMapping(
-                    cssSelector: result.passwordSelector!,
+                    cssSelector: passwordSel,
                     fallbackSelectors: result.passwordFallbacks,
                     tagName: "INPUT",
                     inputType: "password"
                 )
                 buttonMapping = LoginCalibrationService.ElementMapping(
-                    cssSelector: result.buttonSelector!,
+                    cssSelector: buttonSel,
                     fallbackSelectors: result.buttonFallbacks,
                     nearbyText: result.buttonText
                 )
                 autoProbeSuccess = true
-                probeDetail = "Found all 3 elements:\n• Email: \(result.emailSelector!)\n• Password: \(result.passwordSelector!)\n• Button: \(result.buttonText ?? result.buttonSelector!)"
+                probeDetail = "Found all 3 elements:\n• Email: \(emailSel)\n• Password: \(passwordSel)\n• Button: \(result.buttonText ?? buttonSel)"
             } else {
                 autoProbeSuccess = false
                 var missing: [String] = []
@@ -380,7 +380,7 @@ struct DOMProbeResult {
 
 @MainActor
 class CalibrationWebViewCoordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
-    weak var webView: WKWebView?
+    var webView: WKWebView?
     var onPageLoaded: (() -> Void)?
     var onElementTapped: ((TappedElementInfo) -> Void)?
     var calibrationStep: Binding<CalibrationStep>?
@@ -390,7 +390,8 @@ class CalibrationWebViewCoordinator: NSObject, WKNavigationDelegate, WKScriptMes
         case loading, autoProbing, tapEmail, tapPassword, tapButton, testFill, complete, failed
     }
 
-    func setupWebView(urlString: String) {
+    @discardableResult
+    func setupWebView(urlString: String) -> WKWebView {
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .nonPersistent()
         config.preferences.javaScriptCanOpenWindowsAutomatically = true
@@ -414,6 +415,8 @@ class CalibrationWebViewCoordinator: NSObject, WKNavigationDelegate, WKScriptMes
             let request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData, timeoutInterval: 30)
             wv.load(request)
         }
+
+        return wv
     }
 
     static let tapInterceptJS = """
@@ -807,8 +810,7 @@ struct CalibrationWebViewRepresentable: UIViewRepresentable {
     }
 
     func makeUIView(context: Context) -> WKWebView {
-        context.coordinator.setupWebView(urlString: urlString)
-        let wv = context.coordinator.webView!
+        let wv = context.coordinator.setupWebView(urlString: urlString)
         Task { @MainActor in
             onCoordinator(context.coordinator)
         }

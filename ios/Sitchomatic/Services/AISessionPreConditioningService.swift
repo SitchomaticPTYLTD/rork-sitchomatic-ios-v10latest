@@ -164,7 +164,7 @@ class AISessionPreConditioningService {
         let successRecords = records.filter { $0.wasSuccess }
         let totalSuccess = successRecords.count
         let totalAttempts = records.count
-        recipe.successRate = Double(totalSuccess) / Double(totalAttempts)
+        recipe.successRate = totalAttempts > 0 ? Double(totalSuccess) / Double(totalAttempts) : 0
         recipe.totalDataPoints = totalAttempts
 
         var proxyScores: [String: (success: Int, total: Int)] = [:]
@@ -194,11 +194,12 @@ class AISessionPreConditioningService {
         }
 
         var seedScores: [Int: (success: Int, total: Int)] = [:]
-        for r in records where r.stealthSeed != nil {
-            var entry = seedScores[r.stealthSeed!] ?? (0, 0)
+        for r in records {
+            guard let seed = r.stealthSeed else { continue }
+            var entry = seedScores[seed] ?? (0, 0)
             entry.total += 1
             if r.wasSuccess { entry.success += 1 }
-            seedScores[r.stealthSeed!] = entry
+            seedScores[seed] = entry
         }
         let bestSeed = seedScores
             .filter { $0.value.total >= 2 }

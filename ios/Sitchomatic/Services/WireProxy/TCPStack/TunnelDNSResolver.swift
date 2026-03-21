@@ -143,9 +143,9 @@ class TunnelDNSResolver {
                 for addrData in addresses {
                     if addrData.count >= MemoryLayout<sockaddr_in>.size {
                         let result: UInt32? = addrData.withUnsafeBytes { ptr in
-                            guard let sa = ptr.baseAddress?.assumingMemoryBound(to: sockaddr.self),
-                                  sa.pointee.sa_family == AF_INET else { return nil }
-                            let raw = ptr.baseAddress!.assumingMemoryBound(to: sockaddr_in.self).pointee.sin_addr.s_addr
+                            guard let base = ptr.baseAddress,
+                                  base.assumingMemoryBound(to: sockaddr.self).pointee.sa_family == AF_INET else { return nil }
+                            let raw = base.assumingMemoryBound(to: sockaddr_in.self).pointee.sin_addr.s_addr
                             let a = UInt32(raw & 0xFF)
                             let b = UInt32((raw >> 8) & 0xFF)
                             let c = UInt32((raw >> 16) & 0xFF)

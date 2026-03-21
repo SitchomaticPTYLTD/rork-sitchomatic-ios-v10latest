@@ -421,7 +421,7 @@ class LocalProxyConnection {
                 guard let self, !self.isCancelled else { return }
                 if error != nil { self.errorType = .handshake; self.sendSOCKS5Error(0x01); return }
                 guard let data, data.count >= 4, data[0] == 0x05, data[1] == 0x00 else {
-                    let rep = data != nil && data!.count >= 2 ? data![1] : UInt8(0x01)
+                    let rep = (data != nil && (data?.count ?? 0) >= 2) ? (data?[1] ?? UInt8(0x01)) : UInt8(0x01)
                     self.errorType = .handshake
                     self.sendSOCKS5Error(rep)
                     return
