@@ -40,19 +40,27 @@ jobs:
             -project SitchomaticIOSV15.xcodeproj \
             -scheme SitchomaticIOSV15
 
+      - name: Install iOS Simulator Runtime
+        run: |
+          # Install the iOS simulator runtime if not already present
+          xcodebuild -downloadPlatform iOS
+          # List available simulators
+          xcrun simctl list devices available
+
       - name: Build for iOS Simulator
         working-directory: ios
         run: |
+          set -o pipefail
           xcodebuild build \
             -project SitchomaticIOSV15.xcodeproj \
             -scheme SitchomaticIOSV15 \
-            -destination 'platform=iOS Simulator,name=iPhone 16,OS=latest' \
+            -destination 'generic/platform=iOS Simulator' \
             -configuration Debug \
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
             DEVELOPMENT_TEAM="" \
-            | tee build.log | tail -50
+            2>&1 | tee build.log | tail -100
 
       - name: Upload build log on failure
         if: failure()
