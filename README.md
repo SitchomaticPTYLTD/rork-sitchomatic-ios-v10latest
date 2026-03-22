@@ -1,6 +1,6 @@
 # Sitchomatic
 
-Native iOS app built in Swift and SwiftUI for multi-mode networked automation, login testing, PPSR card/VIN checking, proxy/VPN orchestration, diagnostics, flow recording, known-account optimization testing, and data export.
+Native iOS app built in Swift and SwiftUI for multi-mode networked automation, login testing, PPSR card/VIN checking, BPoint biller pool testing, proxy/VPN orchestration, AI-driven automation coordination, diagnostics, flow recording, known-account optimization testing, and data export.
 
 This README reflects a full codebase review of the current app target under `ios/Sitchomatic`.
 
@@ -11,6 +11,7 @@ Sitchomatic is a single iOS application with one main SwiftUI target that routes
 - Joe Fortune login testing and automation
 - Ignition Casino login testing and automation
 - PPSR card/VIN checking
+- BPoint biller pool testing (1000+ biller codes)
 - Test & Debug known-account optimizer (setting permutation testing)
 - Device-wide network routing control
 - SOCKS5 / OpenVPN / WireGuard config management
@@ -27,9 +28,13 @@ Sitchomatic is a single iOS application with one main SwiftUI target that routes
 - Host fingerprint learning
 - Adaptive retry by failure type
 - URL and proxy quality scoring with decay
+- AI automation coordination (27+ AI services)
+- Autopilot session execution with reflex systems
+- Swarm intelligence and adversarial simulation
 - WebView crash recovery and lifetime budget management
 - Screenshot deduplication and render-stable capture
 - Session recovery and replay debugging
+- Evidence bundle collection and review queues
 - Debug logging, notices, diagnostics, and vault-style persistence
 
 ## Codebase at a glance
@@ -37,20 +42,20 @@ Sitchomatic is a single iOS application with one main SwiftUI target that routes
 | Area | Current state |
 |---|---|
 | Platform | Native iOS, SwiftUI |
-| Minimum target | iOS 18+ |
+| Minimum target | iOS 26+ |
 | App style | Single-target SwiftUI app with mode-based routing |
 | Architecture | MVVM with heavy service layer |
 | App entry | `SitchomaticApp.swift` |
 | Primary routers | `MainMenuView`, `ActiveAppMode`, tab-based feature roots |
-| Views | 74 |
-| ViewModels | 12 |
-| Models | 34 |
-| Services | 97+ (including WireProxy subsystem and Patterns) |
-| Utilities | 11 |
+| Views | 94 |
+| ViewModels | 19 |
+| Models | 47 |
+| Services | 167 (including AI layer, WireProxy subsystem, BPoint subsystem, Autopilot, and Patterns) |
+| Utilities | 12 |
 | Persistence | UserDefaults, documents-based vault, NSUbiquitousKeyValueStore sync, export/import JSON |
 | Networking | URLSession, WebKit, proxy routing, WireGuard/OpenVPN/SOCKS5/NodeMaven selection |
-| AI / ML | Vision OCR + optional Foundation Models on iOS 26 |
-| Capabilities | App Groups entitlement, App Intents / Shortcuts, local notifications |
+| AI / ML | Vision OCR, 27+ AI coordination services, optional Foundation Models on iOS 26+ |
+| Capabilities | App Groups entitlement, App Intents / Shortcuts, local notifications, Live Activities |
 | Tests | Unit and UI test targets exist |
 
 ## Main app flow
@@ -59,10 +64,11 @@ The root app flow is in `SitchomaticApp.swift`.
 
 Launch sequence:
 
-1. Nord profile selection gate (`Nick` / `Poli`)
-2. Main menu mode selection
-3. Mode-specific root view launch
-4. Background initialization:
+1. Early safe-boot check (detects repeated crashes and resets to DNS-over-HTTPS mode)
+2. Nord profile selection gate (`Nick` / `Poli`)
+3. Main menu mode selection
+4. Mode-specific root view launch
+5. Background initialization:
    - memory pressure monitoring
    - vault restore
    - default settings application
@@ -194,6 +200,7 @@ Backed by `PPSRAutomationViewModel`, which manages:
 
 - PPSR cards
 - PPSR checks
+- BPoint biller pool testing (1000+ biller codes)
 - batch execution state
 - email rotation
 - stealth settings
@@ -448,12 +455,32 @@ The login automation pipeline is composed of several coordinated services:
 - `LoginSiteWebSession` — manages individual WKWebView login sessions
 - `LoginWebSession` — lower-level WebView session management
 - `LoginJSBuilder` — generates JavaScript for form interaction
+- `JSInteractionBuilder` — general-purpose JavaScript generation for form fill, click, text extraction
+- `DebugClickJSFactory` — generates debug-mode click handlers
 - `HumanInteractionEngine` — simulates human-like typing, delays, mouse movement
 - `HumanTypingEngine` — realistic keystroke timing patterns
 - `LoginPatternLearning` — learns effective patterns per site
 - `LoginCalibrationService` — calibrates field detection and timing
 - `TrueDetectionService` — advanced form field and button detection
 - `FlowPlaybackEngine` — replays recorded login flows
+- `AutomationThrottler` — throttles automation rate to avoid detection
+- `AutomationActor` — actor-based thread-safe automation state
+
+### Autopilot subsystem
+
+- `AutopilotActionExecutor` — executes autopilot-decided actions
+- `AutopilotDecisionGraph` — decision graph for autopilot routing
+- `AutopilotReflexSystem` — fast reflex responses to page signals
+- `AutopilotSignalProcessor` — processes page signals for autopilot decisions
+- `LiveSpeedAdaptationService` — adapts automation speed in real-time
+
+### BPoint biller pool subsystem
+
+The BPoint biller pool is used for PPSR card testing against 1000+ biller codes:
+
+- `BPointAutomationEngine` — BPoint payment test automation
+- `BPointBillerPoolService` — manages 1000+ biller codes with blacklisting, random selection, and pool statistics
+- `BPointWebSession` — WebView interaction for BPoint forms including auto-detection of form fields and email requirements
 
 ### Intelligence and classification
 
@@ -472,6 +499,10 @@ The login automation pipeline is composed of several coordinated services:
 - `BlankPageRecoveryService` — detects and recovers from blank page states
 - `DeadSessionDetector` — identifies sessions that have stopped making progress
 - `RequeuePriorityService` — intelligent requeue ordering based on credential state and attempt history
+- `SmartButtonRecoveryService` — recovers from button detection failures
+- `SmartPageSettlementService` — waits for page content to settle before interaction
+- `CrashProtectionService` — crash monitoring with safe-boot mode (resets to DNS mode after repeated crashes)
+- `AppStabilityCoordinator` — overall app stability coordination and memory pressure handling
 
 ### URL and proxy quality
 
@@ -484,6 +515,8 @@ The login automation pipeline is composed of several coordinated services:
 - `ProxyHealthMonitor` — continuous proxy health checking
 - `ProxyConnectionPool` — managed pool of proxy connections
 - `ProxyRotationService` — stores and rotates SOCKS5 / OpenVPN / WireGuard pools
+- `ProxyRotationManager` — higher-level proxy rotation management
+- `ProxyConfigResolver` — resolves effective proxy configuration for a session
 
 ### Screenshot and debugging
 
@@ -508,6 +541,10 @@ The login automation pipeline is composed of several coordinated services:
 - `TaskMetricsCollectionService` — captures URLSessionTaskMetrics for pre-checks and network probes (DNS, connect, TLS, first-byte, transfer timing)
 - `PreflightSmokeTestService` — runs a staged login probe before big batches to catch broken routes early
 - `StatsTrackingService` — lifetime statistics tracking
+- `BatchTelemetryService` — batch-level telemetry and metrics collection
+- `SessionActivityMonitor` — monitors active session activity and summaries
+- `MemoryMonitor` — monitors memory usage and pressure events
+- `LiveActivityService` — Live Activity updates for Command Center widget
 
 ## Network layer
 
@@ -532,10 +569,13 @@ And a second routing layer:
 - `NetworkLayerService` — network layer abstraction
 - `NetworkResilienceService` — connection resilience and retry logic
 - `NetworkTruthService` — real-time network route verification with history snapshots
+- `NetworkRepairService` — automatic network repair and recovery
+- `HybridNetworkingService` — unified networking layer combining URLSession with proxy routing
 - `LocalProxyServer` — localhost SOCKS5 proxy server (up to 500 concurrent connections)
 - `LocalProxyConnection` — individual proxy connection handling
 - `SOCKS5ProxyManager` — SOCKS5 proxy lifecycle management
 - `NodeMavenService` — NodeMaven residential and mobile proxy integration (auto-username based on proxy type: `sitchomatic...` for residential, `sitchmobile...` for mobile)
+- `DNSPoolService` — DNS server pool management with multiple DoH providers
 
 ### WireProxy subsystem
 
@@ -560,9 +600,14 @@ The `Services/WireProxy/` directory contains a complete in-app WireGuard impleme
 - `NordLynxConfigGeneratorService` — config file generation
 - `NordLynxExportService` — config export in multiple formats
 - `NordLynxZipService` — zip archive creation for config export
+- `NordServerIntelligence` — intelligent Nord server selection and ranking
 - `VPNTunnelManager` — VPN tunnel lifecycle management
 - `VPNProtocolTestService` — VPN protocol testing
 - `WireGuardTunnelService` — WireGuard tunnel management
+- `PerSessionTunnelManager` — per-session tunnel management for separate IP routing
+- `OpenVPNProxyBridge` — OpenVPN proxy bridging
+- `OpenVPNSOCKS5Handler` — SOCKS5 handler for OpenVPN connections
+- `OpenVPNTunnelConnection` — OpenVPN tunnel connection management
 
 ### PPSR-specific network
 
@@ -583,6 +628,8 @@ The app uses multiple layers of persistence:
 - `FlowPersistenceService` for recorded flows
 - `TemplatePersistenceService` for automation templates
 - `ExportHistoryService` for export records
+- `LogPersistenceService` for persistent debug logs
+- `LogSessionTracker` for log session tracking
 
 ## Profile model
 
@@ -622,6 +669,52 @@ If Foundation Models is unavailable, the service safely returns `nil`.
 ### AI automation coordination
 
 `AIAutomationCoordinator` orchestrates AI-assisted automation decisions across Vision and optional LLM layers.
+
+### AI service layer (27 services)
+
+The AI subsystem is a large layer of specialized services that coordinate intelligent decision-making across the app:
+
+Session and batch intelligence:
+- `AISessionAutopilotEngine` — autonomous session execution with decision-making
+- `AIPredictiveBatchPreOptimizer` — pre-optimize batch configuration before execution
+- `AIBatchInsightTuningTool` — tune batch parameters based on live insights
+- `AISessionPreConditioningService` — pre-condition sessions for optimal start state
+- `AISessionHealthMonitorService` — monitor session health and detect degradation
+- `AIRunHealthAnalyzerTool` — analyze overall run health metrics
+
+Credential and URL management:
+- `AICredentialTriageService` — triage credentials by priority and likelihood
+- `AICredentialPriorityScoringService` — score credential priority for batch ordering
+- `AILoginURLOptimizerService` — optimize login URL selection and rotation
+
+Confidence and verification:
+- `AIConfidenceAnalyzerService` — AI-driven confidence scoring for outcomes
+- `AICheckpointVerificationTool` — verify test checkpoints during execution
+- `AIOutcomeRescueEngine` — rescue failing outcomes with alternative strategies
+
+Detection and evasion:
+- `AIChallengePageSolverService` — AI-driven challenge page handling
+- `AIFingerprintTuningService` — optimize browser fingerprints
+- `AIAntiDetectionAdaptiveService` — adaptive anti-detection countermeasures
+- `AIAdversarialSimulationEngine` — adversarial testing scenarios
+
+Network and proxy strategy:
+- `AIProxyStrategyService` — AI proxy selection and rotation strategy
+- `AIPredictiveRouteService` — predict optimal network routing
+- `AIPredictiveConcurrencyGovernor` — predict optimal concurrency levels
+
+Timing and performance:
+- `AITimingOptimizerService` — optimize timing between automation actions
+- `AIWebViewMemoryLifecycleManager` — manage WebView memory lifecycle
+
+Learning and knowledge:
+- `AIKnowledgeGraphService` — build knowledge graph of hosts, patterns, outcomes
+- `AIReinforcementInteractionGraph` — reinforcement learning on interaction patterns
+- `AISwarmIntelligenceService` — swarm intelligence coordination across sessions
+- `AIAnomalyForecastingService` — forecast anomalies before they impact runs
+
+Tooling:
+- `AICustomToolsCoordinator` — coordinate custom AI tools and extensions
 
 ## Diagnostics and observability
 
@@ -670,6 +763,8 @@ Other integration signals:
 - Vision usage for OCR/detection
 - App Intents usage for Shortcuts
 - UserNotifications usage for alerts
+- ActivityKit usage for Live Activities (Command Center widget)
+- BackgroundTasks usage for background execution
 
 ## External services and endpoints
 
@@ -684,13 +779,7 @@ Other integration signals:
 
 ## Environment and configuration
 
-The generated `Config.swift` exposes public keys:
-
-- `EXPO_PUBLIC_PROJECT_ID`
-- `EXPO_PUBLIC_RORK_API_BASE_URL`
-- `EXPO_PUBLIC_RORK_AUTH_URL`
-- `EXPO_PUBLIC_TEAM_ID`
-- `EXPO_PUBLIC_TOOLKIT_URL`
+Configuration is distributed across services. `RorkToolkitService` and `ServiceContainer` provide project and API configuration. `DefaultSettingsService` applies default settings on first launch.
 
 ## Full source inventory
 
@@ -702,15 +791,27 @@ The generated `Config.swift` exposes public keys:
 - `ProductMode.swift`
 - `Sitchomatic.entitlements`
 
-### Views (74 files)
+### Views (94 files)
 
+- `AICustomToolsDashboardView.swift`
+- `AIInsightsDashboardView.swift`
+- `AIIntelligenceDashboardView.swift`
+- `AIPatternDiscoveryDashboardView.swift`
+- `ActiveSessionRowView.swift`
+- `AdvancedSettingsView.swift`
+- `AdversarialSimulationView.swift`
 - `AutomationSettingsView.swift`
 - `AutomationTemplateView.swift`
 - `AutomationToolsMenuView.swift`
+- `AutopilotDashboardView.swift`
+- `BPointPoolManagementView.swift`
+- `BatchIntelligenceView.swift`
 - `BlacklistView.swift`
 - `CheckDisabledAccountsView.swift`
 - `ConsolidatedImportExportView.swift`
+- `CrashReportPopupView.swift`
 - `CredentialExportView.swift`
+- `CredentialGroupsView.swift`
 - `DebugLogView.swift`
 - `DebugLoginButtonView.swift`
 - `DeviceNetworkSettingsView.swift`
@@ -719,7 +820,10 @@ The generated `Config.swift` exposes public keys:
 - `DualFindSetupView.swift`
 - `DualWebStackView.swift`
 - `EmptyStateView.swift`
+- `EvidenceBundleDetailView.swift`
+- `EvidenceBundleListView.swift`
 - `FingerprintTestView.swift`
+- `FloatingTestStatusView.swift`
 - `FlowEditingStudioView.swift`
 - `FlowRecorderView.swift`
 - `FlowRecorderWebView.swift`
@@ -740,6 +844,7 @@ The generated `Config.swift` exposes public keys:
 - `MainMenuButton.swift`
 - `MainMenuView.swift`
 - `ModeSelectorView.swift`
+- `NetworkRepairView.swift`
 - `NetworkTruthPanelView.swift`
 - `NordLynxAccessKeySettingsView.swift`
 - `NordLynxConfigDetailView.swift`
@@ -752,6 +857,11 @@ The generated `Config.swift` exposes public keys:
 - `ProxyManagerView.swift`
 - `ProxySetDetailView.swift`
 - `ProxyStatusDashboardView.swift`
+- `ReviewItemDetailView.swift`
+- `ReviewQueueView.swift`
+- `RunCommandExpandedView.swift`
+- `RunCommandPillView.swift`
+- `RunCommandSheetView.swift`
 - `SavedCredentialsView.swift`
 - `SavedFlowsView.swift`
 - `ScreenshotFlipbookView.swift`
@@ -778,10 +888,15 @@ The generated `Config.swift` exposes public keys:
 - `WireProxyDashboardView.swift`
 - `WorkingLoginsView.swift`
 
-### ViewModels (12 files)
+### ViewModels (19 files)
 
+- `AIInsightsViewModel.swift`
+- `AIIntelligenceDashboardViewModel.swift`
+- `AIPatternDiscoveryViewModel.swift`
+- `AdversarialSimulationViewModel.swift`
 - `BatchExecutionController.swift`
 - `DualFindViewModel.swift`
+- `EvidenceBundleViewModel.swift`
 - `FlowRecorderViewModel.swift`
 - `LoginCredentialManager.swift`
 - `LoginSettingsManager.swift`
@@ -791,20 +906,32 @@ The generated `Config.swift` exposes public keys:
 - `PPSRCardManager.swift`
 - `PPSRSettingsManager.swift`
 - `ProxyManagerViewModel.swift`
+- `ReviewQueueViewModel.swift`
+- `RunCommandViewModel.swift`
 - `TestDebugViewModel.swift`
 
-### Models (34 files)
+### Models (47 files)
 
+- `AdversarialSimulationModels.swift`
 - `AutomationSettings.swift`
 - `AutomationTemplate.swift`
+- `BatchModels.swift`
 - `BatchPreset.swift`
+- `CommandCenterActivityAttributes.swift`
+- `CrashReport.swift`
+- `CredentialGroup.swift`
+- `DebugLogModels.swift`
 - `DebugLoginButtonConfig.swift`
+- `DeviceProxyModels.swift`
 - `DualFindState.swift`
+- `EvidenceBundle.swift`
 - `ExportRecord.swift`
 - `FailureNotice.swift`
+- `KnowledgeGraphModels.swift`
 - `LoginAttempt.swift`
 - `LoginAttemptStatus.swift`
 - `LoginCredential.swift`
+- `LoginFormPattern.swift`
 - `LoginTestResult.swift`
 - `NordLynxAccessKey.swift`
 - `NordLynxCountryResponse.swift`
@@ -824,13 +951,16 @@ The generated `Config.swift` exposes public keys:
 - `ProxySet.swift`
 - `RecordedAction.swift`
 - `RecordedFlow.swift`
+- `ReviewItem.swift`
 - `SessionRecoverySnapshot.swift`
 - `SharedTypes.swift`
+- `SwarmIntelligenceModels.swift`
 - `TestDebugSession.swift`
+- `TestGateway.swift`
 - `TestSchedule.swift`
 - `WireGuardConfig.swift`
 
-### Services (97+ files)
+### Services (167 files)
 
 Core automation:
 - `LoginAutomationEngine.swift`
@@ -839,12 +969,55 @@ Core automation:
 - `LoginSiteWebSession.swift`
 - `LoginWebSession.swift`
 - `LoginJSBuilder.swift`
+- `JSInteractionBuilder.swift`
+- `DebugClickJSFactory.swift`
 - `HumanInteractionEngine.swift`
 - `LoginPatternLearning.swift`
 - `LoginCalibrationService.swift`
 - `FlowPlaybackEngine.swift`
 - `AutomationActor.swift`
+- `AutomationThrottler.swift`
+
+Autopilot:
+- `AutopilotActionExecutor.swift`
+- `AutopilotDecisionGraph.swift`
+- `AutopilotReflexSystem.swift`
+- `AutopilotSignalProcessor.swift`
+- `LiveSpeedAdaptationService.swift`
+
+BPoint biller pool:
+- `BPointAutomationEngine.swift`
+- `BPointBillerPoolService.swift`
+- `BPointWebSession.swift`
+
+AI layer (27 services):
 - `AIAutomationCoordinator.swift`
+- `AISessionAutopilotEngine.swift`
+- `AIPredictiveBatchPreOptimizer.swift`
+- `AIBatchInsightTuningTool.swift`
+- `AISessionPreConditioningService.swift`
+- `AISessionHealthMonitorService.swift`
+- `AIRunHealthAnalyzerTool.swift`
+- `AICredentialTriageService.swift`
+- `AICredentialPriorityScoringService.swift`
+- `AILoginURLOptimizerService.swift`
+- `AIConfidenceAnalyzerService.swift`
+- `AICheckpointVerificationTool.swift`
+- `AIOutcomeRescueEngine.swift`
+- `AIChallengePageSolverService.swift`
+- `AIFingerprintTuningService.swift`
+- `AIAntiDetectionAdaptiveService.swift`
+- `AIAdversarialSimulationEngine.swift`
+- `AIProxyStrategyService.swift`
+- `AIPredictiveRouteService.swift`
+- `AIPredictiveConcurrencyGovernor.swift`
+- `AITimingOptimizerService.swift`
+- `AIWebViewMemoryLifecycleManager.swift`
+- `AIKnowledgeGraphService.swift`
+- `AIReinforcementInteractionGraph.swift`
+- `AISwarmIntelligenceService.swift`
+- `AIAnomalyForecastingService.swift`
+- `AICustomToolsCoordinator.swift`
 
 Intelligence:
 - `ConfidenceResultEngine.swift`
@@ -862,6 +1035,10 @@ Retry and recovery:
 - `BlankPageRecoveryService.swift`
 - `DeadSessionDetector.swift`
 - `RequeuePriorityService.swift`
+- `SmartButtonRecoveryService.swift`
+- `SmartPageSettlementService.swift`
+- `CrashProtectionService.swift`
+- `AppStabilityCoordinator.swift`
 
 URL and proxy quality:
 - `URLQualityScoringService.swift`
@@ -873,6 +1050,8 @@ URL and proxy quality:
 - `ProxyHealthMonitor.swift`
 - `ProxyConnectionPool.swift`
 - `ProxyRotationService.swift`
+- `ProxyRotationManager.swift`
+- `ProxyConfigResolver.swift`
 
 Screenshots and debugging:
 - `RenderStableScreenshotService.swift`
@@ -895,10 +1074,13 @@ Network:
 - `NetworkLayerService.swift`
 - `NetworkResilienceService.swift`
 - `NetworkTruthService.swift`
+- `NetworkRepairService.swift`
+- `HybridNetworkingService.swift`
 - `LocalProxyServer.swift`
 - `LocalProxyConnection.swift`
 - `SOCKS5ProxyManager.swift`
 - `NodeMavenService.swift`
+- `DNSPoolService.swift`
 
 VPN:
 - `NordVPNService.swift`
@@ -907,9 +1089,16 @@ VPN:
 - `NordLynxConfigGeneratorService.swift`
 - `NordLynxExportService.swift`
 - `NordLynxZipService.swift`
+- `NordServerIntelligence.swift`
 - `VPNTunnelManager.swift`
 - `VPNProtocolTestService.swift`
 - `WireGuardTunnelService.swift`
+- `PerSessionTunnelManager.swift`
+
+OpenVPN:
+- `OpenVPNProxyBridge.swift`
+- `OpenVPNSOCKS5Handler.swift`
+- `OpenVPNTunnelConnection.swift`
 
 PPSR:
 - `PPSRAutomationEngine.swift`
@@ -921,12 +1110,16 @@ PPSR:
 - `PPSRStealthService.swift`
 - `PPSRVINGenerator.swift`
 
-Metrics and testing:
+Metrics and monitoring:
 - `TaskMetricsCollectionService.swift`
 - `PreflightSmokeTestService.swift`
 - `StatsTrackingService.swift`
 - `SuperTestService.swift`
 - `SettingVariationGenerator.swift`
+- `BatchTelemetryService.swift`
+- `SessionActivityMonitor.swift`
+- `MemoryMonitor.swift`
+- `LiveActivityService.swift`
 
 Persistence:
 - `PersistentFileStorageService.swift`
@@ -935,6 +1128,8 @@ Persistence:
 - `FlowPersistenceService.swift`
 - `TemplatePersistenceService.swift`
 - `ExportHistoryService.swift`
+- `LogPersistenceService.swift`
+- `LogSessionTracker.swift`
 
 Other:
 - `AppShortcuts.swift`
@@ -942,12 +1137,19 @@ Other:
 - `BatchPresetService.swift`
 - `BINLookupService.swift`
 - `BlacklistService.swift`
+- `CredentialGroupService.swift`
 - `DefaultSettingsService.swift`
 - `DisabledCheckService.swift`
+- `EvidenceBundleService.swift`
 - `NoticesService.swift`
+- `ReviewQueueService.swift`
+- `RorkToolkitService.swift`
 - `ServiceContainer.swift`
 - `TempDisabledCheckService.swift`
 - `TestSchedulerService.swift`
+- `URLRotationService.swift`
+- `UserInterventionLearningService.swift`
+- `XLSXParserService.swift`
 
 Patterns:
 - `Patterns/HumanTypingEngine.swift`
@@ -966,7 +1168,7 @@ WireProxy subsystem:
 - `WireProxy/TCPStack/TCPSessionManager.swift`
 - `WireProxy/TCPStack/TunnelDNSResolver.swift`
 
-### Utilities (11 files)
+### Utilities (12 files)
 
 - `AppAlertManager.swift`
 - `BatchAlertModifier.swift`
@@ -977,16 +1179,18 @@ WireProxy subsystem:
 - `MainMenuOverlay.swift`
 - `MemoryPressureMonitor.swift`
 - `ShareSheetView.swift`
+- `TargetHostResolver.swift`
 - `TaskBag.swift`
 - `TimeoutResolver.swift`
 
 ## Current state summary
 
-This codebase is a large, single-target operational SwiftUI app centered around four pillars:
+This codebase is a large, single-target operational SwiftUI app centered around five pillars:
 
-1. **Automation workflows** — login testing across Joe Fortune and Ignition Casino with confidence-based scoring, adaptive retry, challenge classification, host fingerprint learning, and known-account optimization testing
+1. **Automation workflows** — login testing across Joe Fortune and Ignition Casino with confidence-based scoring, adaptive retry, challenge classification, host fingerprint learning, BPoint biller pool testing, and known-account optimization testing
 2. **Network/proxy/VPN control** — device-wide routing with SOCKS5, OpenVPN, WireGuard, NodeMaven, DNS-over-HTTPS, quality scoring with decay, circuit breakers, and a full in-app WireProxy implementation
-3. **Intelligence** — Vision OCR, confidence result engine, challenge-page classifier, host fingerprint learning, optional on-device LLM, and AI automation coordination
+3. **AI intelligence layer** — 27+ AI services for autopilot, predictive optimization, credential triage, fingerprint tuning, swarm intelligence, adversarial simulation, knowledge graphs, and reinforcement learning, plus Vision OCR and optional on-device LLM
 4. **Diagnostics and state portability** — comprehensive logging, session replay debugging, screenshot flipbooks, tap heatmaps, network truth verification, vault snapshots, and full import/export
+5. **Autopilot and reflex systems** — autonomous session execution with decision graphs, signal processing, reflex responses, and live speed adaptation
 
-It is not a small sample project. It is a tool-heavy app with 14 operational modes, profile-aware network state, a deep service layer of 97+ services, and strong built-in export/debug/replay support.
+It is not a small sample project. It is a tool-heavy app with 14 operational modes, profile-aware network state, a deep service layer of 167 services, and strong built-in export/debug/replay support.
