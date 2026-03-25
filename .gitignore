@@ -33,3 +33,7 @@ ios/Pods/
 .Spotlight-V100
 .Trashes
 Thumbs.db
+
+ios/
+android/
+core
